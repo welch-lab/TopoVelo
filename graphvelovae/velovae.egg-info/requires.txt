@@ -1,0 +1,12 @@
+torch>=1.8.0
+anndata>=0.7.5
+scanpy>=1.5
+scvelo>=0.2.3
+umap-learn>=0.3.10
+numba>=0.41.0
+numpy>=1.17
+scipy>=1.4.1
+pandas>=0.23
+matplotlib>=3.3.0
+loess>=2.1.2
+scikit-learn>=0.23.0
