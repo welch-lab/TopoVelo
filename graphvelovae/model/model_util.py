@@ -1226,12 +1226,25 @@ def knnx0(U, S,
     return u0, s0, t0
 
 
-def knnx0_index(U, S, t, z, t_query, z_query, dt, k, adaptive=0.0, std_t=None, forward=False):
+def knnx0_index(U,
+                S,
+                t,
+                z,
+                t_query,
+                z_query,
+                dt,
+                k,
+                adaptive=0.0,
+                std_t=None,
+                forward=False,
+                hist_eq=False):
     ############################################################
     # Same functionality as knnx0, but returns the neighbor index
     ############################################################
     Nq = len(t_query)
     neighbor_index = []
+    if hist_eq:
+        t, t_query = _hist_equal(t, t_query)
 
     n1 = 0
     len_avg = 0
@@ -1501,6 +1514,43 @@ def elbo_collapsed_categorical(logits_phi, alpha, K, N):
 def entropy(logits_phi):
     phi = torch.softmax(logits_phi, dim=1)
     return (phi * torch.log(phi + 1e-16)).sum()
+
+
+############################################################
+# Graph VAE utility functions
+############################################################
+def get_neigh_index(adj_mtx, axis=0, hard_assign=True):
+    # adj_mtx (scipy.sparse_matrix)
+    #   adjacency matrix
+    # axis (int)
+    #   axis along which to count the neighbors
+    # hard_assign (bool)
+    #   whether to assign binary or continuous edge weights
+    indices = adj_mtx.nonzero()
+    n = adj_mtx.shape[0]
+    adj_list = []
+    degree = np.zeros((n), dtype=int)
+    for i in range(n):
+        neigh_idx = np.where(indices[1-axis]==i)[0]
+        if len(neigh_idx) == 0:
+            neigh_idx = np.array([i])
+        adj_list.append(indices[axis][neigh_idx])
+        degree[i] = len(neigh_idx)
+    k_max = np.max(degree)
+    neighbor_indices = np.zeros((n, k_max), dtype=int)
+    edges = np.ones((n, k_max))*(-5)
+    for i in range(n):
+        neighbor_indices[i, :degree[i]] = adj_list[i]
+        neighbor_indices[i, degree[i]:] = i
+        if axis == 0:
+            val = adj_mtx[adj_list[i], i].A.squeeze()
+        else:
+            val = adj_mtx[i, adj_list[i]].A.squeeze()
+        if hard_assign:
+            edges[i, :degree[i]] = np.arctanh(0.99)
+        else:
+            edges[i, :degree[i]] = np.arctanh(np.clip(val, -0.99, 0.99))
+    return neighbor_indices, degree, edges
 
 ############################################################
 # Other Auxilliary Functions

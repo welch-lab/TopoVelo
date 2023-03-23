@@ -17,9 +17,10 @@ from .model_util import pred_su, ode_numpy, knnx0, knnx0_bin
 from .model_util import elbo_collapsed_categorical
 from .model_util import assign_gene_mode, find_dirichlet_param
 from .model_util import get_cell_scale, get_dispersion
+from .model_util import get_neigh_index
 
 from .transition_graph import encode_type
-from .training_data import SCData
+from .training_data import SCGraphData
 from .vanilla_vae import VanillaVAE, kl_gaussian
 from .velocity import rna_velocity_vae
 P_MAX = 1e30
@@ -30,34 +31,37 @@ GRAD_MAX = 1e7
 
 
 class encoder(nn.Module):
-    """Encoder class for the VAE model
+    """Encoder class for the graph VAE model
     """
     def __init__(self,
                  Cin,
                  dim_z,
+                 adj_mtx,
                  dim_cond=0,
                  N1=500,
                  N2=250,
-                 device=torch.device('cpu'),
                  checkpoint=None):
         super(encoder, self).__init__()
-        self.fc1 = nn.Linear(Cin, N1).to(device)
-        self.bn1 = nn.BatchNorm1d(num_features=N1).to(device)
-        self.dpt1 = nn.Dropout(p=0.2).to(device)
-        self.fc2 = nn.Linear(N1, N2).to(device)
-        self.bn2 = nn.BatchNorm1d(num_features=N2).to(device)
-        self.dpt2 = nn.Dropout(p=0.2).to(device)
+        self.lin_1 = nn.Linear(Cin, N1, bias=False)
+        self.bias_1 = nn.Parameter(torch.zeros(N1, requires_grad=True))
 
-        self.net = nn.Sequential(self.fc1, self.bn1, nn.LeakyReLU(), self.dpt1,
-                                 self.fc2, self.bn2, nn.LeakyReLU(), self.dpt2,
-                                 )
-
-        self.fc_mu_t = nn.Linear(N2+dim_cond, 1).to(device)
+        self.lin_mu_t = nn.Linear(N1+dim_cond, N2, bias=False)
+        self.bias_mu_t = nn.Parameter(torch.zeros(N2, requires_grad=True))
+        self.fc_mu_t = nn.Linear(N2, 1)
         self.spt1 = nn.Softplus()
-        self.fc_std_t = nn.Linear(N2+dim_cond, 1).to(device)
+
+        self.lin_std_t = nn.Linear(N1+dim_cond, N2, bias=False)
+        self.bias_std_t = nn.Parameter(torch.zeros(N2, requires_grad=True))
+        self.fc_std_t = nn.Linear(N2, 1)
         self.spt2 = nn.Softplus()
-        self.fc_mu_z = nn.Linear(N2+dim_cond, dim_z).to(device)
-        self.fc_std_z = nn.Linear(N2+dim_cond, dim_z).to(device)
+
+        self.lin_mu_z = nn.Linear(N1+dim_cond, N2, bias=False)
+        self.bias_mu_z = nn.Parameter(torch.zeros(N2, requires_grad=True))
+        self.fc_mu_z = nn.Linear(N2, dim_z)
+
+        self.lin_std_z = nn.Linear(N1+dim_cond, N2, bias=False)
+        self.bias_std_z = nn.Parameter(torch.zeros(N2, requires_grad=True))
+        self.fc_std_z = nn.Linear(N2, dim_z)
         self.spt3 = nn.Softplus()
 
         if checkpoint is not None:
@@ -66,23 +70,31 @@ class encoder(nn.Module):
             self.init_weights()
 
     def init_weights(self):
-        for m in self.net.modules():
-            if isinstance(m, nn.Linear):
-                nn.init.xavier_uniform_(m.weight)
-                nn.init.constant_(m.bias, 0.0)
-            elif isinstance(m, nn.BatchNorm1d):
-                nn.init.constant_(m.weight, 1)
-                nn.init.constant_(m.bias, 0)
-        for m in [self.fc_mu_t, self.fc_std_t, self.fc_mu_z, self.fc_std_z]:
+        for m in [self.lin_1,
+                  self.lin_mu_t,
+                  self.lin_mu_z,
+                  self.lin_std_t,
+                  self.lin_std_z]:
             nn.init.xavier_uniform_(m.weight)
-            nn.init.constant_(m.bias, 0.0)
+        for m in [self.fc_mu_t,
+                  self.fc_std_t,
+                  self.fc_mu_z,
+                  self.fc_std_z]:
+            nn.init.xavier_uniform_(m.weight)
+            nn.init.constant_(m.bias, 0)
 
-    def forward(self, data_in, condition=None):
-        h = self.net(data_in)
+    def forward(self, data_in, sample_idx, condition=None):
+        w_neighbor = torch.tanh(self.edge_weight[sample_idx])
+        # x_neighbors: N x N neighbors x G
+        h = (self.lin_1(data_in)*w_neighbor).mean(1) + self.bias_1
         if condition is not None:
             h = torch.cat((h, condition), 1)
-        mu_tx, std_tx = self.spt1(self.fc_mu_t(h)), self.spt2(self.fc_std_t(h))
-        mu_zx, std_zx = self.fc_mu_z(h), self.spt3(self.fc_std_z(h))
+        h_mu_t = (self.lin_mu_t(h)*w_neighbor).mean(1) + self.bias_mu_t
+        h_std_t = (self.lin_std_t(h)*w_neighbor).mean(1) + self.bias_std_t
+        h_mu_z = (self.lin_mu_z(h)*w_neighbor).mean(1) + self.bias_mu_z
+        h_std_z = (self.lin_std_z(h)*w_neighbor).mean(1) + self.bias_std_z
+        mu_tx, std_tx = self.spt1(self.fc_mu_t(h_mu_t)), self.spt2(self.fc_std_t(h_std_t))
+        mu_zx, std_zx = self.fc_mu_z(h_mu_z), self.spt3(self.fc_std_z(h_std_z))
         return mu_tx, std_tx, mu_zx, std_zx
 
 
@@ -695,7 +707,7 @@ class VAE(VanillaVAE):
         else:
             self.vae_risk = self.vae_risk_gaussian
 
-    def forward(self, data_in, lu_scale, ls_scale, u0=None, s0=None, t0=None, t1=None, condition=None):
+    def forward(self, data_in, sample_idx, lu_scale, ls_scale, u0=None, s0=None, t0=None, t1=None, condition=None):
         """Standard forward pass.
 
         Arguments
@@ -754,7 +766,7 @@ class VAE(VanillaVAE):
                                        data_in_scale[:, data_in_scale.shape[1]//2:]/ls_scale), 1)
         if self.config["log1p"]:
             data_in_scale = torch.log1p(data_in_scale)
-        mu_t, std_t, mu_z, std_z = self.encoder.forward(data_in_scale, condition)
+        mu_t, std_t, mu_z, std_z = self.encoder.forward(data_in_scale, sample_idx, condition)
         t = self.sample(mu_t, std_t)
         z = self.sample(mu_z, std_z)
 
@@ -773,7 +785,7 @@ class VAE(VanillaVAE):
 
         return mu_t, std_t, mu_z, std_z, t, z, uhat, shat, uhat_fw, shat_fw, vu, vs, vu_fw, vs_fw
 
-    def eval_model(self, data_in, lu_scale, ls_scale, u0=None, s0=None, t0=None, t1=None, condition=None):
+    def eval_model(self, data_in, sample_idx, lu_scale, ls_scale, u0=None, s0=None, t0=None, t1=None, condition=None):
         """Evaluate the model on the validation dataset.
         The major difference from forward pass is that we use the mean time and
         cell state instead of random sampling. The input arguments are the same as 'forward'.
@@ -788,7 +800,7 @@ class VAE(VanillaVAE):
                                        data_in_scale[:, data_in_scale.shape[1]//2:]/ls_scale), 1)
         if self.config["log1p"]:
             data_in_scale = torch.log1p(data_in_scale)
-        mu_t, std_t, mu_z, std_z = self.encoder.forward(data_in_scale, condition)
+        mu_t, std_t, mu_z, std_z = self.encoder.forward(data_in_scale, sample_idx, condition)
 
         uhat, shat, vu, vs = self.decoder.forward(mu_t,
                                                   mu_z,
@@ -993,7 +1005,7 @@ class VAE(VanillaVAE):
 
         return - err_rec + kl_term
 
-    def train_epoch(self, train_loader, test_set, optimizer, optimizer2=None, K=1):
+    def train_epoch(self, graph_dataset, optimizer, optimizer2=None, K=1):
         ##########################################################################
         # Training in each epoch.
         # Early stopping if enforced by default.
@@ -1020,13 +1032,16 @@ class VAE(VanillaVAE):
         #     Whether to stop training based on the early stopping criterium.
         ##########################################################################
 
-        B = len(train_loader)
         self.set_mode('train')
         stop_training = False
-
+        train_loader = DataLoader(graph_dataset,
+                                  batch_size=self.config['batch_size'],
+                                  shuffle=True,
+                                  pin_memory=True)
+        B = len(train_loader)
         for i, batch in enumerate(train_loader):
             if self.counter == 1 or self.counter % self.config["test_iter"] == 0:
-                elbo_test = self.test(test_set,
+                elbo_test = self.test(graph_dataset.data[graph_dataset.test_idx],
                                       None,
                                       self.counter,
                                       True)
@@ -1047,7 +1062,7 @@ class VAE(VanillaVAE):
             if optimizer2 is not None:
                 optimizer2.zero_grad()
 
-            xbatch, idx = batch[0].float().to(self.device), batch[3]
+            xbatch, xbatch_knn, idx = batch[0].float().to(self.device), batch[1].float().to(self.device), batch[4]
             u = xbatch[:, :xbatch.shape[1]//2]
             s = xbatch[:, xbatch.shape[1]//2:]
 
@@ -1073,7 +1088,7 @@ class VAE(VanillaVAE):
              uhat, shat,
              uhat_fw, shat_fw,
              vu, vs,
-             vu_fw, vs_fw) = self.forward(xbatch, lu_scale, ls_scale, u0, s0, t0, t1, condition)
+             vu_fw, vs_fw) = self.forward(xbatch, idx, lu_scale, ls_scale, u0, s0, t0, t1, condition)
             if uhat.ndim == 3:
                 lu_scale = lu_scale.unsqueeze(-1)
                 ls_scale = ls_scale.unsqueeze(-1)
@@ -1207,6 +1222,7 @@ class VAE(VanillaVAE):
 
     def train(self,
               adata,
+              graph,
               config={},
               plot=False,
               gene_plot=[],
@@ -1272,14 +1288,11 @@ class VAE(VanillaVAE):
         self.cell_types = np.array([self.label_dic[cell_types_raw[i]] for i in range(self.n_type)])
 
         print("*********        Creating Training/Validation Datasets        *********")
-        train_set = SCData(X[self.train_idx], self.cell_labels[self.train_idx])
-        test_set = None
-        if len(self.test_idx) > 0:
-            test_set = SCData(X[self.test_idx], self.cell_labels[self.test_idx])
-        data_loader = DataLoader(train_set,
-                                 batch_size=self.config["batch_size"],
-                                 shuffle=True,
-                                 pin_memory=True)
+        n_train = int(adata.n_obs * self.config['train_test_split'])
+        graph_dataset = SCGraphData(X, self.cell_labels, graph, n_train)
+        self.train_idx = graph_dataset.train_idx
+        self.test_idx = graph_dataset.test_idx
+        self.encoder.edge_weight = nn.Parameter(torch.tensor(graph_dataset.edge_weights, device=self.device))
         # Automatically set test iteration if not given
         if self.config["test_iter"] is None:
             self.config["test_iter"] = len(self.train_idx)//self.config["batch_size"]*2
@@ -1292,7 +1305,8 @@ class VAE(VanillaVAE):
         print("*********                 Creating optimizers                 *********")
         param_nn = list(self.encoder.parameters())\
             + list(self.decoder.net_rho.parameters())\
-            + list(self.decoder.fc_out1.parameters())
+            + list(self.decoder.fc_out1.parameters())\
+            + [self.encoder.edge_weight]
         param_ode = [self.decoder.alpha,
                      self.decoder.beta,
                      self.decoder.gamma,
@@ -1338,7 +1352,8 @@ class VAE(VanillaVAE):
         # Main Training Process
         print("*********                    Start training                   *********")
         print("*********                      Stage  1                       *********")
-        print(f"Total Number of Iterations Per Epoch: {len(data_loader)}, test iteration: {self.config['test_iter']}")
+        print(f"Total Number of Iterations Per Epoch: {len(self.train_idx)//self.config['batch_size']+1},"
+              f"test iteration: {self.config['test_iter']}")
 
         n_epochs = self.config["n_epochs"]
 
@@ -1346,17 +1361,16 @@ class VAE(VanillaVAE):
         for epoch in range(n_epochs):
             # Train the encoder
             if self.config["k_alt"] is None:
-                stop_training = self.train_epoch(data_loader, test_set, optimizer)
+                stop_training = self.train_epoch(graph_dataset, optimizer)
 
                 if epoch >= self.config["n_warmup"]:
-                    stop_training_ode = self.train_epoch(data_loader, test_set, optimizer_ode)
+                    stop_training_ode = self.train_epoch(graph_dataset, optimizer_ode)
                     if stop_training_ode:
                         print(f"*********       Stage 1: Early Stop Triggered at epoch {epoch+1}.       *********")
                         break
             else:
                 if epoch >= self.config["n_warmup"]:
-                    stop_training = self.train_epoch(data_loader,
-                                                     test_set,
+                    stop_training = self.train_epoch(graph_dataset,
                                                      optimizer_ode,
                                                      optimizer,
                                                      self.config["k_alt"])
@@ -1368,15 +1382,14 @@ class VAE(VanillaVAE):
                                  profile_memory=True,
                                  use_cuda=False) as prof:
                     """
-                    stop_training = self.train_epoch(data_loader,
-                                                     test_set,
+                    stop_training = self.train_epoch(graph_dataset,
                                                      optimizer,
                                                      None,
                                                      self.config["k_alt"])
                     # print(prof.key_averages().table(sort_by="cpu_time_total", row_limit=10))
 
             if plot and (epoch == 0 or (epoch+1) % self.config["save_epoch"] == 0):
-                elbo_train = self.test(train_set,
+                elbo_train = self.test(graph_dataset.data[self.train_idx],
                                        Xembed[self.train_idx],
                                        f"train{epoch+1}",
                                        False,
@@ -1418,17 +1431,17 @@ class VAE(VanillaVAE):
                 print(f"Stage 2: Early Stop Triggered at round {r}.")
                 break
             if (not self.is_discrete) and (noise_change > 0.001) and (r < self.config['n_refine']-1):
-                self.update_std_noise(train_set.data)
+                self.update_std_noise(graph_dataset.data[self.train_idx])
             self.update_x0(X[:, :X.shape[1]//2], X[:, X.shape[1]//2:], self.config["n_bin"])
             # self.decoder.init_weights(2)
             self.n_drop = 0
 
             for epoch in range(self.config["n_epochs_post"]):
                 if self.config["k_alt"] is None:
-                    stop_training = self.train_epoch(data_loader, test_set, optimizer_post)
+                    stop_training = self.train_epoch(graph_dataset, optimizer_post)
 
                     if epoch >= self.config["n_warmup"]:
-                        stop_training_ode = self.train_epoch(data_loader, test_set, optimizer_ode)
+                        stop_training_ode = self.train_epoch(graph_dataset, optimizer_ode)
                         if stop_training_ode:
                             print(f"*********       "
                                   f"Stage 2: Early Stop Triggered at epoch {epoch+count_epoch+1}."
@@ -1436,20 +1449,18 @@ class VAE(VanillaVAE):
                             break
                 else:
                     if epoch >= self.config["n_warmup"]:
-                        stop_training = self.train_epoch(data_loader,
-                                                         test_set,
+                        stop_training = self.train_epoch(graph_dataset,
                                                          optimizer_post,
                                                          optimizer_ode,
                                                          self.config["k_alt"])
                     else:
-                        stop_training = self.train_epoch(data_loader,
-                                                         test_set,
+                        stop_training = self.train_epoch(graph_dataset,
                                                          optimizer_post,
                                                          None,
                                                          self.config["k_alt"])
 
                 if plot and (epoch == 0 or (epoch+count_epoch+1) % self.config["save_epoch"] == 0):
-                    elbo_train = self.test(train_set,
+                    elbo_train = self.test(graph_dataset.data[self.train_idx],
                                            Xembed[self.train_idx],
                                            f"train{epoch+count_epoch+1}",
                                            False,
@@ -1487,7 +1498,7 @@ class VAE(VanillaVAE):
             u0_prev = self.u0
             s0_prev = self.s0
 
-        elbo_train = self.test(train_set,
+        elbo_train = self.test(graph_dataset.data[self.train_idx],
                                Xembed[self.train_idx],
                                "final-train",
                                False,
@@ -1495,7 +1506,7 @@ class VAE(VanillaVAE):
                                gene_plot,
                                plot,
                                figure_path)
-        elbo_test = self.test(test_set,
+        elbo_test = self.test(graph_dataset.data[self.test_idx],
                               Xembed[self.test_idx],
                               "final-test",
                               True,
@@ -1740,7 +1751,7 @@ class VAE(VanillaVAE):
         return out, elbo.detach().cpu().item()
 
     def test(self,
-             dataset,
+             data,
              Xembed,
              testid=0,
              test_mode=True,
@@ -1753,7 +1764,7 @@ class VAE(VanillaVAE):
 
         Arguments
         ---------
-        dataset : `torch.utils.data.Dataset`
+        data : `numpy.array`
             Training or validation dataset
         Xembed : `numpy array`
             Low-dimensional embedding for plotting
@@ -1780,22 +1791,23 @@ class VAE(VanillaVAE):
         out_type = ["uhat", "shat", "uhat_fw", "shat_fw", "t"]
         if self.train_stage == 2:
             out_type.append("v")
-        out, elbo = self.pred_all(dataset.data, self.cell_labels, mode, out_type, gind)
+        out, elbo = self.pred_all(data, self.cell_labels, mode, out_type, gind)
         Uhat, Shat, t = out["uhat"], out["shat"], out["t"]
 
-        G = dataset.data.shape[1]//2
+        G = data.shape[1]//2
 
         if plot:
             # Plot Time
             plot_time(t, Xembed, save=f"{path}/time-{testid}-velovae.png")
-
+            cell_labels = np.array([self.label_dic_rev[x] for x in self.cell_labels])
+            cell_labels = cell_labels[self.test_idx] if test_mode else cell_labels[self.train_idx]
             # Plot u/s-t and phase portrait for each gene
             for i in range(len(gind)):
                 idx = gind[i]
                 plot_sig(t.squeeze(),
-                         dataset.data[:, idx], dataset.data[:, idx+G],
+                         data[:, idx], data[:, idx+G],
                          Uhat[:, i], Shat[:, i],
-                         np.array([self.label_dic_rev[x] for x in dataset.labels]),
+                         cell_labels,
                          gene_plot[i],
                          save=f"{path}/sig-{gene_plot[i]}-{testid}.png",
                          sparsify=self.config['sparsify'])
@@ -1811,9 +1823,9 @@ class VAE(VanillaVAE):
                              save=f"{path}/vel-{gene_plot[i]}-{testid}.png")
                 if self.config['vel_continuity_loss'] and self.train_stage == 2:
                     plot_sig(t.squeeze(),
-                             dataset.data[:, idx], dataset.data[:, idx+G],
+                             data[:, idx], data[:, idx+G],
                              out["uhat_fw"][:, i], out["shat_fw"][:, i],
-                             np.array([self.label_dic_rev[x] for x in dataset.labels]),
+                             cell_labels,
                              gene_plot[i],
                              save=f"{path}/sig-{gene_plot[i]}-{testid}-bw.png",
                              sparsify=self.config['sparsify'])

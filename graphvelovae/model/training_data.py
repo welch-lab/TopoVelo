@@ -1,6 +1,6 @@
 import numpy as np
 from torch.utils.data import Dataset
-
+from .model_util import get_neigh_index
 
 class SCData(Dataset):
     """This is a simple pytorch dataset class for batch training.
@@ -103,3 +103,49 @@ class SCTimedData(Dataset):
                 self.time[idx],
                 self.weight[idx],
                 idx)
+
+
+class SCGraphData(Dataset):
+    """
+    This class wraps around SCData to include graph structured datasets.
+    In particular, it contains a train-test split of nodes (cells), while
+    keeping all the edges.
+    """
+    def __init__(self, data, labels, graph, n_train, u0=None, s0=None, t0=None, weight=None, seed=2022):
+        self.N, self.G = data.shape[0], data.shape[1]//2
+        np.random.seed(seed)
+        n = data.shape[0]
+        self.node_features = data
+        rand_perm = np.random.permutation(n)
+        self.train_idx = rand_perm[:n_train]
+        self.test_idx = rand_perm[n_train:]
+
+        self.neighbor_indices, self.degrees, self.edge_weights = get_neigh_index(graph)
+        self.k = self.neighbor_indices.shape[1]
+        self.u0 = u0
+        self.s0 = s0
+        self.t0 = t0
+        self.weight = np.ones((n_train, self.G)) if weight is None else weight
+        return
+
+    def __len__(self):
+        return len(self.node_features)
+
+    def __getitem__(self, idx):
+        sample_idx = self.train_idx[idx]
+        neigh_idx = self.neighbor_indices[sample_idx]
+        if self.u0 is not None and self.s0 is not None and self.t0 is not None:
+            return (self.data[sample_idx],
+                    self.data[neigh_idx, :],
+                    self.labels[sample_idx],
+                    self.weight[sample_idx],
+                    sample_idx,
+                    self.u0[sample_idx],
+                    self.s0[sample_idx],
+                    self.t0[sample_idx])
+
+        return (self.data[sample_idx],
+                self.data[neigh_idx, :],
+                self.labels[sample_idx],
+                self.weight[sample_idx],
+                sample_idx)
