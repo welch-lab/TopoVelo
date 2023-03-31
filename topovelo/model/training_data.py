@@ -111,14 +111,18 @@ class SCGraphData(Dataset):
     In particular, it contains a train-test split of nodes (cells), while
     keeping all the edges.
     """
-    def __init__(self, data, labels, graph, n_train, u0=None, s0=None, t0=None, weight=None, seed=2022):
+    def __init__(self, data, labels, graph, n_train, step=1,  u0=None, s0=None, t0=None, weight=None, seed=2022):
         self.N, self.G = data.shape[0], data.shape[1]//2
+        self.step = 1
+        self.labels = labels
         np.random.seed(seed)
         n = data.shape[0]
         self.node_features = data
         rand_perm = np.random.permutation(n)
         self.train_idx = rand_perm[:n_train]
         self.test_idx = rand_perm[n_train:]
+        self.n_train = n_train
+        self.n_test = self.N - self.n_train
 
         self.neighbor_indices, self.degrees, self.edge_weights = get_neigh_index(graph)
         self.k = self.neighbor_indices.shape[1]
@@ -129,23 +133,23 @@ class SCGraphData(Dataset):
         return
 
     def __len__(self):
-        return len(self.node_features)
+        return len(self.train_idx)
 
     def __getitem__(self, idx):
         sample_idx = self.train_idx[idx]
         neigh_idx = self.neighbor_indices[sample_idx]
         if self.u0 is not None and self.s0 is not None and self.t0 is not None:
-            return (self.data[sample_idx],
-                    self.data[neigh_idx, :],
+            return (self.node_features[sample_idx],
+                    self.node_features[neigh_idx, :],
                     self.labels[sample_idx],
-                    self.weight[sample_idx],
+                    self.weight[idx],
                     sample_idx,
                     self.u0[sample_idx],
                     self.s0[sample_idx],
                     self.t0[sample_idx])
 
-        return (self.data[sample_idx],
-                self.data[neigh_idx, :],
+        return (self.node_features[sample_idx],
+                self.node_features[neigh_idx, :],
                 self.labels[sample_idx],
-                self.weight[sample_idx],
+                self.weight[idx],
                 sample_idx)

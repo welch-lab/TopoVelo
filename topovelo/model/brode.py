@@ -4,7 +4,7 @@ import torch.nn as nn
 import pandas as pd
 import os
 import time
-from velovae.plotting import plot_sig, plot_train_loss, plot_test_loss
+from ..plotting import plot_sig, plot_train_loss, plot_test_loss
 from .model_util import init_params, reinit_type_params
 from .model_util import convert_time, get_gene_index
 from .model_util import ode_br, encode_type, str2int, int2str

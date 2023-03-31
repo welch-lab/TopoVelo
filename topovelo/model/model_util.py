@@ -1531,7 +1531,7 @@ def get_neigh_index(adj_mtx, axis=0, hard_assign=True):
     adj_list = []
     degree = np.zeros((n), dtype=int)
     for i in range(n):
-        neigh_idx = np.where(indices[1-axis]==i)[0]
+        neigh_idx = np.where(indices[1-axis] == i)[0]
         if len(neigh_idx) == 0:
             neigh_idx = np.array([i])
         adj_list.append(indices[axis][neigh_idx])

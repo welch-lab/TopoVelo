@@ -5,11 +5,11 @@ import torch.nn.functional as F
 from torch.utils.data import DataLoader
 import os
 import time
-from velovae.plotting import (plot_phase,
-                              plot_sig,
-                              plot_time,
-                              plot_train_loss,
-                              plot_test_loss)
+from ..plotting import (plot_phase,
+                        plot_sig,
+                        plot_time,
+                        plot_train_loss,
+                        plot_test_loss)
 
 from .model_util import hist_equal, init_params, get_ts_global, reinit_params, ode
 from .model_util import convert_time, get_gene_index

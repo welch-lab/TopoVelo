@@ -2,7 +2,7 @@ import numpy as np
 import pandas as pd
 from ..model.model_util import make_dir
 from .evaluation_util import *
-from velovae.plotting import get_colors, plot_cluster, plot_phase_grid, plot_sig_grid, plot_time_grid
+from ..plotting import get_colors, plot_cluster, plot_phase_grid, plot_sig_grid, plot_time_grid
 from multiprocessing import cpu_count
 from scipy.stats import spearmanr
 
