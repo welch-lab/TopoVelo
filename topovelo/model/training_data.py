@@ -1,6 +1,9 @@
 import numpy as np
+import torch
 from torch.utils.data import Dataset
-from .model_util import get_neigh_index
+from torch_geometric.data import Data
+# from torch_geometric.loader import NeighborLoader
+
 
 class SCData(Dataset):
     """This is a simple pytorch dataset class for batch training.
@@ -105,51 +108,28 @@ class SCTimedData(Dataset):
                 idx)
 
 
-class SCGraphData(Dataset):
+class SCGraphData():
     """
-    This class wraps around SCData to include graph structured datasets.
-    In particular, it contains a train-test split of nodes (cells), while
-    keeping all the edges.
+    This class wraps around torch_geometric.data to include graph structured datasets.
     """
-    def __init__(self, data, labels, graph, n_train, step=1,  u0=None, s0=None, t0=None, weight=None, seed=2022):
+    def __init__(self, data, labels, graph, n_train, device, seed=2022):
         self.N, self.G = data.shape[0], data.shape[1]//2
-        self.step = 1
-        self.labels = labels
+        self.data = Data(x=torch.tensor(data, dtype=torch.float32),
+                         edge_index=torch.tensor(np.stack(graph.nonzero()), dtype=torch.long),
+                         y=torch.tensor(labels, dtype=torch.long)).to(device)
+        self.edge_weight=torch.tensor(graph.data, dtype=torch.float32)
         np.random.seed(seed)
-        n = data.shape[0]
-        self.node_features = data
-        rand_perm = np.random.permutation(n)
-        self.train_idx = rand_perm[:n_train]
-        self.test_idx = rand_perm[n_train:]
+        rand_perm = np.random.permutation(self.N)
+        self.train_idx = torch.tensor(rand_perm[:n_train], dtype=torch.long).to(device)
+        self.test_idx = torch.tensor(rand_perm[n_train:], dtype=torch.long).to(device)
         self.n_train = n_train
         self.n_test = self.N - self.n_train
 
-        self.neighbor_indices, self.degrees, self.edge_weights = get_neigh_index(graph)
-        self.k = self.neighbor_indices.shape[1]
-        self.u0 = u0
-        self.s0 = s0
-        self.t0 = t0
-        self.weight = np.ones((n_train, self.G)) if weight is None else weight
+        self.u0 = None
+        self.s0 = None
+        self.t0 = None
+        self.u1 = None
+        self.s1 = None
+        self.t1 = None
+
         return
-
-    def __len__(self):
-        return len(self.train_idx)
-
-    def __getitem__(self, idx):
-        sample_idx = self.train_idx[idx]
-        neigh_idx = self.neighbor_indices[sample_idx]
-        if self.u0 is not None and self.s0 is not None and self.t0 is not None:
-            return (self.node_features[sample_idx],
-                    self.node_features[neigh_idx, :],
-                    self.labels[sample_idx],
-                    self.weight[idx],
-                    sample_idx,
-                    self.u0[sample_idx],
-                    self.s0[sample_idx],
-                    self.t0[sample_idx])
-
-        return (self.node_features[sample_idx],
-                self.node_features[neigh_idx, :],
-                self.labels[sample_idx],
-                self.weight[idx],
-                sample_idx)
