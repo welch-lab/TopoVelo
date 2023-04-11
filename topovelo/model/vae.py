@@ -8,7 +8,7 @@ from torch.utils.data import DataLoader
 from torch.distributions.negative_binomial import NegativeBinomial
 from torch.distributions.poisson import Poisson
 
-from torch_geometric.nn import GCNConv
+from torch_geometric.nn import GCNConv, GATConv
 
 import time
 from ..plotting import plot_sig, plot_sig_, plot_time, plot_vel
@@ -42,19 +42,33 @@ class encoder(nn.Module):
                  dim_cond=0,
                  N1=500,
                  N2=250,
+                 attention=True,
                  checkpoint=None):
         super(encoder, self).__init__()
-        self.conv1 = GCNConv(Cin, N1)
-        self.conv2 = GCNConv(N1, N2)
+        if attention:
+            self.conv1 = GATConv(Cin, N1, 5)
+            self.conv2 = GATConv(5*N1, N2, 5)
 
-        self.fc_mu_t = nn.Linear(N2+dim_cond, 1).float()
-        self.spt1 = nn.Softplus().float()
-        self.fc_std_t = nn.Linear(N2+dim_cond, 1).float()
-        self.spt2 = nn.Softplus().float()
+            self.fc_mu_t = nn.Linear(5*N2+dim_cond, 1).float()
+            self.spt1 = nn.Softplus().float()
+            self.fc_std_t = nn.Linear(5*N2+dim_cond, 1).float()
+            self.spt2 = nn.Softplus().float()
 
-        self.fc_mu_z = nn.Linear(N2+dim_cond, dim_z).float()
-        self.fc_std_z = nn.Linear(N2+dim_cond, dim_z).float()
-        self.spt3 = nn.Softplus().float()
+            self.fc_mu_z = nn.Linear(5*N2+dim_cond, dim_z).float()
+            self.fc_std_z = nn.Linear(5*N2+dim_cond, dim_z).float()
+            self.spt3 = nn.Softplus().float()
+        else:
+            self.conv1 = GCNConv(Cin, N1)
+            self.conv2 = GCNConv(N1, N2)
+
+            self.fc_mu_t = nn.Linear(N2+dim_cond, 1).float()
+            self.spt1 = nn.Softplus().float()
+            self.fc_std_t = nn.Linear(N2+dim_cond, 1).float()
+            self.spt2 = nn.Softplus().float()
+
+            self.fc_mu_z = nn.Linear(N2+dim_cond, dim_z).float()
+            self.fc_std_z = nn.Linear(N2+dim_cond, dim_z).float()
+            self.spt3 = nn.Softplus().float()
 
         if checkpoint is not None:
             self.load_state_dict(torch.load(checkpoint, map_location=device))
@@ -62,10 +76,18 @@ class encoder(nn.Module):
             self.init_weights()
 
     def init_weights(self):
-        nn.init.xavier_uniform_(self.conv1.lin.weight)
-        nn.init.constant_(self.conv1.bias, 0)
-        nn.init.xavier_uniform_(self.conv2.lin.weight)
-        nn.init.constant_(self.conv2.bias, 0)
+        if isinstance(self.conv1, GCNConv):
+            nn.init.xavier_uniform_(self.conv1.lin.weight, 0.05)
+            nn.init.constant_(self.conv1.bias, 0)
+            nn.init.xavier_uniform_(self.conv2.lin.weight, 0.05)
+            nn.init.constant_(self.conv2.bias, 0)
+        else:
+            nn.init.xavier_uniform_(self.conv1.att_src, 0.05)
+            nn.init.xavier_uniform_(self.conv1.att_dst, 0.05)
+            nn.init.constant_(self.conv1.bias, 0)
+            nn.init.xavier_uniform_(self.conv2.att_src, 0.05)
+            nn.init.xavier_uniform_(self.conv2.att_dst, 0.05)
+            nn.init.constant_(self.conv2.bias, 0)
         for m in [self.fc_mu_t,
                   self.fc_std_t,
                   self.fc_mu_z,
@@ -74,9 +96,12 @@ class encoder(nn.Module):
             nn.init.constant_(m.bias, 0)
 
     def forward(self, data_in, edge_index, edge_weight=None, condition=None):
-
-        h = self.conv1(data_in, edge_index, edge_weight)
-        h = self.conv2(h, edge_index, edge_weight)
+        if isinstance(self.conv1, GCNConv):
+            h = self.conv1(data_in, edge_index, edge_weight)
+            h = self.conv2(h, edge_index, edge_weight)
+        else:
+            h = self.conv1(data_in, edge_index)
+            h = self.conv2(h, edge_index)
         if condition is not None:
             h = torch.cat((h, condition), 1)
         mu_tx, std_tx = self.spt1(self.fc_mu_t(h)), self.spt2(self.fc_std_t(h))
@@ -402,6 +427,7 @@ class VAE(VanillaVAE):
                  hidden_size=(500, 250, 250, 500),
                  full_vb=False,
                  discrete=False,
+                 attention=True,
                  init_method="steady",
                  init_key=None,
                  tprior=None,
@@ -568,6 +594,7 @@ class VAE(VanillaVAE):
                                    dim_cond,
                                    hidden_size[0],
                                    hidden_size[1],
+                                   attention=attention,
                                    checkpoint=checkpoints[0]).to(device)
         except IndexError:
             print('Please provide two dimensions!')
@@ -638,7 +665,7 @@ class VAE(VanillaVAE):
             self.eta_u = torch.tensor(np.log(dispersion_u-1)-np.log(mean_u), device=self.device).float()
             self.eta_s = torch.tensor(np.log(dispersion_s-1)-np.log(mean_s), device=self.device).float()
         else:
-            self.vae_risk = self.vae_risk_gaussian
+            self.vae_risk = self.vae_risk_mse
 
     def forward(self,
                 data_in,
@@ -827,6 +854,43 @@ class VAE(VanillaVAE):
                 + self.config["kl_z"]*kldz
                 + self.config["kl_param"]*kld_param
                 + self.config["kl_w"]*kldw)
+
+    def vae_risk_mse(self,
+                     q_tx, p_t,
+                     q_zx, p_z,
+                     u, s, uhat, shat,
+                     uhat_fw=None, shat_fw=None,
+                     u1=None, s1=None,
+                     weight=None):
+        kl_term = self._compute_kl_term(q_tx, p_t, q_zx, p_z)
+
+        sigma_u = self.decoder.sigma_u.exp()
+        sigma_s = self.decoder.sigma_s.exp()
+
+        # u and sigma_u has the original scale
+        clip_fn = nn.Hardtanh(-P_MAX, P_MAX)
+        if uhat.ndim == 3:  # stage 1
+            logp = - 0.5*(u.unsqueeze(1)-uhat).pow(2)\
+                   - 0.5*(s.unsqueeze(1)-shat).pow(2)\
+                   - torch.log(sigma_u)-torch.log(sigma_s*2*np.pi)
+            logp = clip_fn(logp)
+            pw = F.softmax(self.decoder.logit_pw, dim=1).T
+            logp = torch.sum(pw*logp, 1)
+        else:
+            logp = - 0.5*(u-uhat).pow(2)\
+                   - 0.5*(s-shat).pow(2)\
+                   - torch.log(sigma_u)-torch.log(sigma_s*2*np.pi)
+            logp = clip_fn(logp)
+
+        if uhat_fw is not None and shat_fw is not None:
+            logp = logp - 0.5*(u1-uhat_fw).pow(2) - 0.5*(s1-shat_fw).pow(2)
+
+        if weight is not None:
+            logp = logp*weight
+
+        err_rec = torch.mean(torch.sum(logp, 1))
+
+        return - err_rec + kl_term
 
     def vae_risk_gaussian(self,
                           q_tx, p_t,
@@ -1274,7 +1338,8 @@ class VAE(VanillaVAE):
         print("*********                 Creating optimizers                 *********")
         param_nn = list(self.encoder.parameters())\
             + list(self.decoder.net_rho.parameters())\
-            + list(self.decoder.fc_out1.parameters())
+            + list(self.decoder.fc_out1.parameters())\
+            + [self.graph_data.edge_weight]
         param_ode = [self.decoder.alpha,
                      self.decoder.beta,
                      self.decoder.gamma,

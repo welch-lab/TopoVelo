@@ -117,7 +117,7 @@ class SCGraphData():
         self.data = Data(x=torch.tensor(data, dtype=torch.float32),
                          edge_index=torch.tensor(np.stack(graph.nonzero()), dtype=torch.long),
                          y=torch.tensor(labels, dtype=torch.long)).to(device)
-        self.edge_weight=torch.tensor(graph.data, dtype=torch.float32)
+        self.edge_weight=torch.tensor(graph.data, dtype=torch.float32).to(device)
         np.random.seed(seed)
         rand_perm = np.random.permutation(self.N)
         self.train_idx = torch.tensor(rand_perm[:n_train], dtype=torch.long).to(device)
