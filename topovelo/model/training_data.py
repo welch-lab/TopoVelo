@@ -117,7 +117,10 @@ class SCGraphData():
         self.data = Data(x=torch.tensor(data, dtype=torch.float32),
                          edge_index=torch.tensor(np.stack(graph.nonzero()), dtype=torch.long),
                          y=torch.tensor(labels, dtype=torch.long)).to(device)
-        self.edge_weight=torch.tensor(graph.data, dtype=torch.float32).to(device)
+        self.edge_weight=torch.tensor(graph.data,
+                                      dtype=torch.float32,
+                                      device=device,
+                                      requires_grad=False)
         np.random.seed(seed)
         rand_perm = np.random.permutation(self.N)
         self.train_idx = torch.tensor(rand_perm[:n_train], dtype=torch.long).to(device)
@@ -133,3 +136,17 @@ class SCGraphData():
         self.t1 = None
 
         return
+
+
+class Index(Dataset):
+    """This dataset contains only indices. Used for generating
+    batch indices.
+    """
+    def __init__(self, n_samples):
+        self.index = np.array(range(n_samples))
+
+    def __len__(self):
+        return len(self.index)
+
+    def __getitem__(self, idx):
+        return self.index[idx]

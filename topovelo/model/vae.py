@@ -16,14 +16,14 @@ from ..plotting import plot_train_loss, plot_test_loss
 
 from .model_util import hist_equal, init_params, get_ts_global, reinit_params
 from .model_util import convert_time, get_gene_index
-from .model_util import pred_su, ode_numpy, knnx0, knnx0_bin
+from .model_util import pred_su, ode_numpy, knnx0_index, get_x0
 from .model_util import elbo_collapsed_categorical
 from .model_util import assign_gene_mode, find_dirichlet_param
 from .model_util import get_cell_scale, get_dispersion
 from .model_util import get_neigh_index
 
 from .transition_graph import encode_type
-from .training_data import SCGraphData
+from .training_data import SCGraphData, Index
 from .vanilla_vae import VanillaVAE, kl_gaussian
 from .velocity import rna_velocity_vae
 P_MAX = 1e30
@@ -40,68 +40,55 @@ class encoder(nn.Module):
                  Cin,
                  dim_z,
                  dim_cond=0,
-                 N1=500,
-                 N2=250,
+                 n_hidden=500,
                  attention=True,
                  checkpoint=None):
         super(encoder, self).__init__()
         if attention:
-            self.conv1 = GATConv(Cin, N1, 5)
-            self.conv2 = GATConv(5*N1, N2, 5)
+            self.conv1 = GATConv(Cin, n_hidden, 5)
 
-            self.fc_mu_t = nn.Linear(5*N2+dim_cond, 1).float()
+            self.fc_mu_t = nn.Linear(5*n_hidden+dim_cond, 1).float()
             self.spt1 = nn.Softplus().float()
-            self.fc_std_t = nn.Linear(5*N2+dim_cond, 1).float()
+            self.fc_std_t = nn.Linear(5*n_hidden+dim_cond, 1).float()
             self.spt2 = nn.Softplus().float()
 
-            self.fc_mu_z = nn.Linear(5*N2+dim_cond, dim_z).float()
-            self.fc_std_z = nn.Linear(5*N2+dim_cond, dim_z).float()
+            self.fc_mu_z = nn.Linear(5*n_hidden+dim_cond, dim_z).float()
+            self.fc_std_z = nn.Linear(5*n_hidden+dim_cond, dim_z).float()
             self.spt3 = nn.Softplus().float()
         else:
-            self.conv1 = GCNConv(Cin, N1)
-            self.conv2 = GCNConv(N1, N2)
+            self.conv1 = GCNConv(Cin, n_hidden)
 
-            self.fc_mu_t = nn.Linear(N2+dim_cond, 1).float()
+            self.fc_mu_t = nn.Linear(n_hidden+dim_cond, 1).float()
             self.spt1 = nn.Softplus().float()
-            self.fc_std_t = nn.Linear(N2+dim_cond, 1).float()
+            self.fc_std_t = nn.Linear(n_hidden+dim_cond, 1).float()
             self.spt2 = nn.Softplus().float()
 
-            self.fc_mu_z = nn.Linear(N2+dim_cond, dim_z).float()
-            self.fc_std_z = nn.Linear(N2+dim_cond, dim_z).float()
+            self.fc_mu_z = nn.Linear(n_hidden+dim_cond, dim_z).float()
+            self.fc_std_z = nn.Linear(n_hidden+dim_cond, dim_z).float()
             self.spt3 = nn.Softplus().float()
 
-        if checkpoint is not None:
-            self.load_state_dict(torch.load(checkpoint, map_location=device))
-        else:
-            self.init_weights()
+        self.init_weights()
 
     def init_weights(self):
         if isinstance(self.conv1, GCNConv):
             nn.init.xavier_uniform_(self.conv1.lin.weight, 0.05)
             nn.init.constant_(self.conv1.bias, 0)
-            nn.init.xavier_uniform_(self.conv2.lin.weight, 0.05)
-            nn.init.constant_(self.conv2.bias, 0)
         else:
             nn.init.xavier_uniform_(self.conv1.att_src, 0.05)
             nn.init.xavier_uniform_(self.conv1.att_dst, 0.05)
             nn.init.constant_(self.conv1.bias, 0)
-            nn.init.xavier_uniform_(self.conv2.att_src, 0.05)
-            nn.init.xavier_uniform_(self.conv2.att_dst, 0.05)
-            nn.init.constant_(self.conv2.bias, 0)
         for m in [self.fc_mu_t,
                   self.fc_std_t,
                   self.fc_mu_z,
                   self.fc_std_z]:
-            nn.init.xavier_uniform_(m.weight)
+            nn.init.xavier_uniform_(m.weight, 0.05)
             nn.init.constant_(m.bias, 0)
 
     def forward(self, data_in, edge_index, edge_weight=None, condition=None):
         if isinstance(self.conv1, GCNConv):
             h = self.conv1(data_in, edge_index, edge_weight)
-            h = self.conv2(h, edge_index, edge_weight)
         else:
             h = self.conv1(data_in, edge_index)
-            h = self.conv2(h, edge_index)
         if condition is not None:
             h = torch.cat((h, condition), 1)
         mu_tx, std_tx = self.spt1(self.fc_mu_t(h)), self.spt2(self.fc_std_t(h))
@@ -424,7 +411,7 @@ class VAE(VanillaVAE):
                  dim_z,
                  dim_cond=0,
                  device='cpu',
-                 hidden_size=(500, 250, 250, 500),
+                 hidden_size=(500, 250, 500),
                  full_vb=False,
                  discrete=False,
                  attention=True,
@@ -528,8 +515,9 @@ class VAE(VanillaVAE):
             "n_bin": None,
 
             # Training Parameters
+            "batch_size": 128,
             "n_epochs": 1000,
-            "n_epochs_post": 1000,
+            "n_epochs_post": 500,
             "n_refine": 20,
             "learning_rate": None,
             "learning_rate_ode": None,
@@ -541,10 +529,10 @@ class VAE(VanillaVAE):
             "kl_w": 0.01,
             "reg_v": 0.0,
             "max_rate": 1e4,
-            "test_epoch": 10,
+            "test_iter": None,
             "save_epoch": 100,
             "n_warmup": 5,
-            "early_stop": 3,
+            "early_stop": 5,
             "early_stop_thred": adata.n_vars*1e-3,
             "train_test_split": 0.7,
             "neg_slope": 0.0,
@@ -575,8 +563,8 @@ class VAE(VanillaVAE):
                                tmax,
                                self.train_idx,
                                dim_z,
-                               N1=hidden_size[2],
-                               N2=hidden_size[3],
+                               N1=hidden_size[1],
+                               N2=hidden_size[2],
                                full_vb=full_vb,
                                discrete=discrete,
                                init_ton_zero=init_ton_zero,
@@ -593,7 +581,6 @@ class VAE(VanillaVAE):
                                    dim_z,
                                    dim_cond,
                                    hidden_size[0],
-                                   hidden_size[1],
                                    attention=attention,
                                    checkpoint=checkpoints[0]).to(device)
         except IndexError:
@@ -618,6 +605,12 @@ class VAE(VanillaVAE):
         self.u0 = None
         self.s0 = None
         self.t0 = None
+        self.x0_index = None
+        self.u1 = None
+        self.s1 = None
+        self.t1 = None
+        self.x1_index = None
+
         self.lu_scale = (
             torch.tensor(np.log(adata.obs['library_scale_u'].to_numpy()), device=self.device).unsqueeze(-1).float()
             if self.is_discrete else torch.zeros(adata.n_obs, 1, device=self.device).float()
@@ -950,7 +943,6 @@ class VAE(VanillaVAE):
             logp = logp*weight
 
         err_rec = torch.mean(torch.sum(logp, 1))
-
         return - err_rec + kl_term
 
     def _kl_poisson(self, lamb_1, lamb_2):
@@ -1026,7 +1018,7 @@ class VAE(VanillaVAE):
 
         return - err_rec + kl_term
 
-    def train_epoch(self, optimizer, optimizer2=None, validation=False):
+    def train_epoch(self, optimizer, optimizer2=None):
         ##########################################################################
         # Training in each epoch.
         # Early stopping if enforced by default.
@@ -1054,111 +1046,97 @@ class VAE(VanillaVAE):
         ##########################################################################
         G = self.graph_data.G
         self.set_mode('train')
-        if validation:
-            elbo_test = self.test(None,
-                                  self.counter,
-                                  True)
+        index_loader = DataLoader(Index(len(self.train_idx)),
+                                  batch_size=self.config["batch_size"],
+                                  shuffle=True,
+                                  pin_memory=True)
+        for i, index_batch in enumerate(index_loader):
+            batch_sample = self.train_idx[index_batch]
+            if self.counter == 1 or self.counter % self.config["test_iter"] == 0:
+                elbo_test = self.test(None,
+                                      self.counter,
+                                      True)
 
-            if len(self.loss_test) > 0:  # update the number of epochs with dropping/converging ELBO
-                if elbo_test - self.loss_test[-1] <= self.config["early_stop_thred"]:
-                    self.n_drop = self.n_drop+1
-                else:
-                    self.n_drop = 0
-            self.loss_test.append(elbo_test)
-            self.set_mode('train')
+                if len(self.loss_test) > 0:  # update the number of epochs with dropping/converging ELBO
+                    if elbo_test - self.loss_test[-1] <= self.config["early_stop_thred"]:
+                        self.n_drop = self.n_drop+1
+                    else:
+                        self.n_drop = 0
+                self.loss_test.append(elbo_test)
+                self.set_mode('train')
 
-            if self.n_drop >= self.config["early_stop"] and self.config["early_stop"] > 0:
-                return True
+                if self.n_drop >= self.config["early_stop"] and self.config["early_stop"] > 0:
+                    return True
 
-        optimizer.zero_grad()
-        if optimizer2 is not None:
-            optimizer2.zero_grad()
-        u0 = self.graph_data.u0
-        s0 = self.graph_data.s0
-        t0 = self.graph_data.t0
-        u1 = self.graph_data.u1
-        s1 = self.graph_data.s1
-        t1 = self.graph_data.t1
-        lu_scale = self.lu_scale.exp()
-        ls_scale = self.ls_scale.exp()
+            optimizer.zero_grad()
+            if optimizer2 is not None:
+                optimizer2.zero_grad()
+            u0 = self.graph_data.u0
+            s0 = self.graph_data.s0
+            t0 = self.graph_data.t0
+            u1 = self.graph_data.u1
+            s1 = self.graph_data.s1
+            t1 = self.graph_data.t1
+            lu_scale = self.lu_scale.exp()
+            ls_scale = self.ls_scale.exp()
 
-        condition = F.one_hot(self.graph_data.data.y, self.n_type).float() if self.enable_cvae else None
-        (mu_tx, std_tx,
-         mu_zx, std_zx,
-         t, z,
-         uhat, shat,
-         uhat_fw, shat_fw,
-         vu, vs,
-         vu_fw, vs_fw) = self.forward(self.graph_data.data.x,
-                                      self.graph_data.data.edge_index,
-                                      lu_scale, ls_scale,
-                                      self.graph_data.edge_weight,
-                                      u0, s0,
-                                      t0, t1,
-                                      condition)
-        if uhat.ndim == 3:
-            lu_scale = lu_scale.unsqueeze(-1)
-            ls_scale = ls_scale.unsqueeze(-1)
-        if uhat_fw is not None and shat_fw is not None:
-            uhat_fw = uhat_fw[self.train_idx]
-            shat_fw = shat_fw[self.train_idx]
-            u1 = u1[self.train_idx]
-            s1 = s1[self.train_idx]
-        loss = self.vae_risk((mu_tx[self.train_idx], std_tx[self.train_idx]),
-                             self.p_t[:, self.train_idx, :],
-                             (mu_zx[self.train_idx], std_zx[self.train_idx]),
-                             self.p_z[:, self.train_idx, :],
-                             self.graph_data.data.x[self.train_idx][:, :G],
-                             self.graph_data.data.x[self.train_idx][:, G:],
-                             uhat[self.train_idx]*lu_scale[self.train_idx],
-                             shat[self.train_idx]*ls_scale[self.train_idx],
-                             uhat_fw, shat_fw,
-                             u1, s1,
-                             None)
+            condition = F.one_hot(self.graph_data.data.y, self.n_type).float() if self.enable_cvae else None
+            (mu_tx, std_tx,
+             mu_zx, std_zx,
+             t, z,
+             uhat, shat,
+             uhat_fw, shat_fw,
+             vu, vs,
+             vu_fw, vs_fw) = self.forward(self.graph_data.data.x,
+                                          self.graph_data.data.edge_index,
+                                          lu_scale, ls_scale,
+                                          self.graph_data.edge_weight,
+                                          u0, s0,
+                                          t0, t1,
+                                          condition)
+            if uhat.ndim == 3:
+                lu_scale = lu_scale.unsqueeze(-1)
+                ls_scale = ls_scale.unsqueeze(-1)
+            if uhat_fw is not None and shat_fw is not None:
+                uhat_fw = uhat_fw[[batch_sample]]
+                shat_fw = shat_fw[[batch_sample]]
+                u1 = u1[[batch_sample]]
+                s1 = s1[[batch_sample]]
+            
+            loss = self.vae_risk((mu_tx[batch_sample], std_tx[batch_sample]),
+                                 self.p_t[:, batch_sample, :],
+                                 (mu_zx[batch_sample], std_zx[batch_sample]),
+                                 self.p_z[:, batch_sample, :],
+                                 self.graph_data.data.x[batch_sample][:, :G],
+                                 self.graph_data.data.x[batch_sample][:, G:],
+                                 uhat[batch_sample]*lu_scale[batch_sample],
+                                 shat[batch_sample]*ls_scale[batch_sample],
+                                 uhat_fw, shat_fw,
+                                 u1, s1,
+                                 None)
 
-        # Add velocity regularization
-        if self.use_knn and self.config["reg_v"] > 0:
-                scaling = self.decoder.scaling.exp()
-                loss = loss - self.config["reg_v"] *\
-                    (self.loss_vel(u0/scaling, uhat/scaling*lu_scale, vu) + self.loss_vel(s0, shat*ls_scale, vs))
-                if vu_fw is not None and vs_fw is not None:
-                    loss = loss - self.config["reg_v"]\
-                        * (self.loss_vel(uhat/scaling, uhat_fw/scaling, vu_fw) + self.loss_vel(shat, shat_fw, vs_fw))
-        loss.backward()
-        # gradient clipping
-        torch.nn.utils.clip_grad_value_(self.encoder.parameters(), GRAD_MAX)
-        torch.nn.utils.clip_grad_value_(self.decoder.parameters(), GRAD_MAX)
-        optimizer.step()
-        if optimizer2 is not None:
-            optimizer2.step()
+            # Add velocity regularization
+            if self.use_knn and self.config["reg_v"] > 0:
+                    scaling = self.decoder.scaling.exp()
+                    loss = loss - self.config["reg_v"] *\
+                        (self.loss_vel(u0/scaling, uhat/scaling*lu_scale, vu) + self.loss_vel(s0, shat*ls_scale, vs))
+                    if vu_fw is not None and vs_fw is not None:
+                        loss = loss - self.config["reg_v"]\
+                            * (self.loss_vel(uhat/scaling, uhat_fw/scaling, vu_fw) + self.loss_vel(shat, shat_fw, vs_fw))
+            loss.backward()
+            # gradient clipping
+            torch.nn.utils.clip_grad_value_(self.encoder.parameters(), GRAD_MAX)
+            torch.nn.utils.clip_grad_value_(self.decoder.parameters(), GRAD_MAX)
+            optimizer.step()
+            if optimizer2 is not None:
+                optimizer2.step()
 
-        self.loss_train.append(loss.detach().cpu().item())
-        self.counter = self.counter + 1
+            self.loss_train.append(loss.detach().cpu().item())
+            self.counter = self.counter + 1
 
-        if validation:
-            with torch.no_grad():
-                loss_val = self.vae_risk((mu_tx[self.test_idx], std_tx[self.test_idx]),
-                                        self.p_t[:, self.test_idx, :],
-                                        (mu_zx[self.test_idx], std_zx[self.test_idx]),
-                                        self.p_z[:, self.test_idx, :],
-                                        self.graph_data.data.x[self.test_idx][:, :G],
-                                        self.graph_data.data.x[self.test_idx][:, G:],
-                                        uhat[self.test_idx]*lu_scale[self.test_idx],
-                                        shat[self.test_idx]*ls_scale[self.test_idx],
-                                        uhat_fw, shat_fw,
-                                        u1, s1,
-                                        None)
-            if len(self.loss_test) > 0:  # update the number of epochs with dropping/converging ELBO
-                if loss_val - self.loss_test[-1] <= self.config["early_stop_thred"]:
-                    self.n_drop = self.n_drop+1
-                else:
-                    self.n_drop = 0
-            self.loss_test.append(loss_val)
-            if self.n_drop >= self.config["early_stop"] and self.config["early_stop"] > 0:
-                return True
         return False
 
-    def update_x0(self, n_bin=None):
+    def update_x0(self):
         ##########################################################################
         # Estimate the initial conditions using KNN
         # < Input Arguments >
@@ -1176,7 +1154,6 @@ class VAE(VanillaVAE):
         # 3. t0 [tensor (N,1)]
         #    Initial time
         ##########################################################################
-        start = time.time()
         self.set_mode('eval')
         G = self.graph_data.G
         out, elbo = self.pred_all(self.cell_labels,
@@ -1191,64 +1168,54 @@ class VAE(VanillaVAE):
         # Compute initial conditions of cells without a valid pool of neighbors
         with torch.no_grad():
             init_mask = (t <= np.quantile(t, 0.01))
-            u0_init = np.mean(self.graph_data.data.x[init_mask, :G].detach().cpu().numpy(), 0)
-            s0_init = np.mean(self.graph_data.data.x[init_mask, G:].detach().cpu().numpy(), 0)
-        if n_bin is None:
-            print("Cell-wise KNN Estimation.")
-            u0, s0, t0 = knnx0(out["uhat"][self.train_idx],
-                               out["shat"][self.train_idx],
-                               t[self.train_idx],
-                               z[self.train_idx],
-                               t,
-                               z,
-                               dt,
-                               self.config["n_neighbors"],
-                               u0_init,
-                               s0_init,
-                               hist_eq=True)
-            if self.config["vel_continuity_loss"]:
-                u1, s1, t1 = knnx0(out["uhat"][self.train_idx],
-                                   out["shat"][self.train_idx],
-                                   t[self.train_idx],
-                                   z[self.train_idx],
-                                   t,
-                                   z,
-                                   dt,
-                                   self.config["n_neighbors"],
-                                   u0_init,
-                                   s0_init,
-                                   forward=True,
-                                   hist_eq=True)
-                t1 = t1.reshape(-1, 1)
-        else:
-            print(f"Fast KNN Estimation with {n_bin} time bins.")
-            u0, s0, t0 = knnx0_bin(out["uhat"][self.train_idx],
-                                   out["shat"][self.train_idx],
-                                   t[self.train_idx],
-                                   z[self.train_idx],
-                                   t,
-                                   z,
-                                   dt,
-                                   self.config["n_neighbors"])
-            if self.config["vel_continuity_loss"]:
-                u1, s1, t1 = knnx0_bin(out["uhat"][self.train_idx],
-                                       out["shat"][self.train_idx],
-                                       t[self.train_idx],
-                                       z[self.train_idx],
-                                       t,
-                                       z,
-                                       dt,
-                                       self.config["n_neighbors"],
-                                       forward=True)
-        print(f"Finished. Actual Time: {convert_time(time.time()-start)}")
-        # return u0, s0, t0.reshape(-1,1), u1, s1, t1
+            u0_init = np.mean(self.graph_data.data.x[init_mask][:, :G].detach().cpu().numpy(), 0)
+            s0_init = np.mean(self.graph_data.data.x[init_mask][:, G:].detach().cpu().numpy(), 0)
+        if self.x0_index is None:
+            self.x0_index = knnx0_index(t[self.train_idx],
+                                        z[self.train_idx],
+                                        t,
+                                        z,
+                                        dt,
+                                        self.config["n_neighbors"],
+                                        hist_eq=True)
+        u0, s0, t0 = get_x0(out["uhat"][self.train_idx],
+                            out["shat"][self.train_idx],
+                            t[self.train_idx],
+                            dt,
+                            self.x0_index,
+                            u0_init,
+                            s0_init)
+        if self.config["vel_continuity_loss"]:
+            if self.x1_index is None:
+                self.x1_index = knnx0_index(t[self.train_idx],
+                                            z[self.train_idx],
+                                            t,
+                                            z,
+                                            dt,
+                                            self.config["n_neighbors"],
+                                            forward=True,
+                                            hist_eq=True)
+            u1, s1, t1 = get_x0(out["uhat"][self.train_idx],
+                                out["shat"][self.train_idx],
+                                t[self.train_idx],
+                                dt,
+                                self.x1_index,
+                                None,
+                                None,
+                                forward=True)
         self.graph_data.u0 = torch.tensor(u0, dtype=torch.float32, device=self.device)
         self.graph_data.s0 = torch.tensor(s0, dtype=torch.float32, device=self.device)
         self.graph_data.t0 = torch.tensor(t0.reshape(-1, 1), dtype=torch.float32, device=self.device)
+        self.u0 = u0
+        self.s0 = s0
+        self.t0 = t0.reshape(-1, 1)
         if self.config['vel_continuity_loss']:
-            self.u1 = torch.tensor(u1, dtype=torch.float32, device=self.device)
-            self.s1 = torch.tensor(s1, dtype=torch.float32, device=self.device)
-            self.t1 = torch.tensor(t1.reshape(-1, 1), dtype=torch.float32, device=self.device)
+            self.graph_data.u1 = torch.tensor(u1, dtype=torch.float32, device=self.device)
+            self.graph_data.s1 = torch.tensor(s1, dtype=torch.float32, device=self.device)
+            self.graph_data.t1 = torch.tensor(t1.reshape(-1, 1), dtype=torch.float32, device=self.device)
+            self.u1 = u1
+            self.s1 = s1
+            self.t1 = t1.reshape(-1, 1)
 
     def _set_lr(self, p):
         if self.is_discrete:
@@ -1327,8 +1294,11 @@ class VAE(VanillaVAE):
                                       n_train,
                                       self.device,
                                       random_state)
-        self.train_idx = self.graph_data.train_idx
-        self.test_idx = self.graph_data.test_idx
+        self.train_idx = self.graph_data.train_idx.cpu().numpy()
+        self.test_idx = self.graph_data.test_idx.cpu().numpy()
+        # Automatically set test iteration if not given
+        if self.config["test_iter"] is None:
+            self.config["test_iter"] = len(self.train_idx)//self.config["batch_size"]*2
         print("*********                      Finished.                      *********")
 
         gind, gene_plot = get_gene_index(adata.var_names, gene_plot)
@@ -1338,8 +1308,7 @@ class VAE(VanillaVAE):
         print("*********                 Creating optimizers                 *********")
         param_nn = list(self.encoder.parameters())\
             + list(self.decoder.net_rho.parameters())\
-            + list(self.decoder.fc_out1.parameters())\
-            + [self.graph_data.edge_weight]
+            + list(self.decoder.fc_out1.parameters())
         param_ode = [self.decoder.alpha,
                      self.decoder.beta,
                      self.decoder.gamma,
@@ -1363,12 +1332,11 @@ class VAE(VanillaVAE):
         n_epochs = self.config["n_epochs"]
         start = time.time()
         for epoch in range(n_epochs):
-            validation = self.counter == 1 or self.counter % self.config["test_epoch"] == 0
             # Train the encoder
             if epoch >= self.config["n_warmup"]:
-                stop_training = self.train_epoch(optimizer_ode, optimizer, validation)
+                stop_training = self.train_epoch(optimizer_ode, optimizer)
             else:
-                stop_training = self.train_epoch(optimizer, None, validation)
+                stop_training = self.train_epoch(optimizer, None)
 
             if plot and (epoch == 0 or (epoch+1) % self.config["save_epoch"] == 0):
                 elbo_train = self.test(Xembed[self.train_idx],
@@ -1409,7 +1377,6 @@ class VAE(VanillaVAE):
                                           weight_decay=self.config["lambda_rho"])
         for r in range(self.config['n_refine']):
             print(f"*********             Velocity Refinement Round {r+1}              *********")
-            validation = self.counter == 1 or self.counter % self.config["test_epoch"] == 0
             self.config['early_stop_thred'] *= 0.95
             stop_training = (x0_change - x0_change_prev >= -0.01 and r > 1) or (x0_change < 0.01)
             if (not self.is_discrete) and (noise_change > 0.001) and (r < self.config['n_refine']-1):
@@ -1423,9 +1390,9 @@ class VAE(VanillaVAE):
 
             for epoch in range(self.config["n_epochs_post"]):
                 if epoch >= self.config["n_warmup"]:
-                    stop_training = self.train_epoch(optimizer_post, optimizer_ode, validation)
+                    stop_training = self.train_epoch(optimizer_post, optimizer_ode)
                 else:
-                    stop_training = self.train_epoch(optimizer_post, None, validation)
+                    stop_training = self.train_epoch(optimizer_post, None)
 
                 if plot and (epoch == 0 or (epoch+count_epoch+1) % self.config["save_epoch"] == 0):
                     elbo_train = self.test(Xembed[self.train_idx],
@@ -1455,17 +1422,16 @@ class VAE(VanillaVAE):
                 sigma_u_prev = self.decoder.sigma_u.detach().cpu().numpy()
                 sigma_s_prev = self.decoder.sigma_s.detach().cpu().numpy()
                 noise_change = norm_delta_sigma/norm_sigma
-                print(f"Change in noise variance: {noise_change}")
+                print(f"Change in noise variance: {noise_change:.4f}")
             with torch.no_grad():
                 if r > 0:
                     x0_change_prev = x0_change
-                    norm_delta_x0 = torch.sqrt(((self.graph_data.u0 - u0_prev).pow(2)
-                                                + (self.graph_data.s0 - s0_prev).pow(2)).sum(1).mean())
-                    std_x = torch.sqrt((torch.var(u0, 0) + torch.var(s0, 0)).sum())
-                    x0_change = (norm_delta_x0/std_x).cpu().item()
-                    print(f"Change in x0: {x0_change}")
-                u0_prev = self.graph_data.u0
-                s0_prev = self.graph_data.s0
+                    norm_delta_x0 = np.sqrt(((self.u0 - u0_prev)**2 + (self.s0 - s0_prev)**2).sum(1).mean())
+                    std_x = np.sqrt((self.u0.var(0) + self.s0.var(0)).sum())
+                    x0_change = norm_delta_x0/std_x
+                    print(f"Change in x0: {x0_change:.4f}")
+                u0_prev = self.u0
+                s0_prev = self.s0
 
         elbo_train = self.test(Xembed[self.train_idx],
                                "final-train",
@@ -1513,7 +1479,7 @@ class VAE(VanillaVAE):
             elif mode == "train":
                 sample_idx = self.train_idx
             else:
-                sample_idx = np.array(range(self.graph_data.G))
+                sample_idx = np.array(range(self.graph_data.N))
             u0 = self.graph_data.u0
             s0 = self.graph_data.s0
             t0 = self.graph_data.t0
@@ -1583,8 +1549,7 @@ class VAE(VanillaVAE):
         if "v" in output:
             out["vu"] = vu[sample_idx].detach().cpu().numpy()
             out["vs"] = vs[sample_idx].detach().cpu().numpy()
-
-        return out, loss.detach().cpu().item()
+        return out, -loss.detach().cpu().item()
 
     def test(self,
              Xembed,
@@ -1658,7 +1623,8 @@ class VAE(VanillaVAE):
                              Uhat[:, i]/scaling, Shat[:, i],
                              out["vu"][:, i], out["vs"][:, i],
                              self.t0[cell_idx].squeeze(),
-                             self.u0[cell_idx, idx]/scaling, self.s0[cell_idx, idx],
+                             self.u0[cell_idx, idx]/scaling,
+                             self.s0[cell_idx, idx],
                              title=gene_plot[i],
                              save=f"{path}/vel-{gene_plot[i]}-{testid}.png")
                 if self.config['vel_continuity_loss'] and self.train_stage == 2:
@@ -1682,8 +1648,8 @@ class VAE(VanillaVAE):
                                   mode='train',
                                   output=["uhat", "shat"],
                                   gene_idx=np.array(range(G)))
-        std_u = (out["uhat"]-self.graph_data.data.x[:, :G].detach().cpu().numpy()).std(0)
-        std_s = (out["shat"]-self.train_data.data.x[:, G:].detach().cpu().numpy()).std(0)
+        std_u = (out["uhat"]-self.graph_data.data.x[:, :G].detach().cpu().numpy()[self.train_idx]).std(0)
+        std_s = (out["shat"]-self.graph_data.data.x[:, G:].detach().cpu().numpy()[self.train_idx]).std(0)
         self.decoder.sigma_u = nn.Parameter(torch.tensor(np.log(std_u),
                                             dtype=torch.float,
                                             device=self.device))
