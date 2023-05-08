@@ -2,6 +2,7 @@ import numpy as np
 import torch
 from torch.utils.data import Dataset
 from torch_geometric.data import Data
+import torch_geometric.transforms as T
 # from torch_geometric.loader import NeighborLoader
 
 
@@ -114,17 +115,29 @@ class SCGraphData():
     """
     def __init__(self, data, labels, graph, n_train, device, seed=2022):
         self.N, self.G = data.shape[0], data.shape[1]//2
-        self.data = Data(x=torch.tensor(data, dtype=torch.float32),
-                         edge_index=torch.tensor(np.stack(graph.nonzero()), dtype=torch.long),
-                         y=torch.tensor(labels, dtype=torch.long)).to(device)
-        self.edge_weight=torch.tensor(graph.data,
-                                      dtype=torch.float32,
-                                      device=device,
-                                      requires_grad=False)
+        self.data = T.ToSparseTensor()(Data(x=torch.tensor(data,
+                                                           dtype=torch.float32,
+                                                           requires_grad=False),
+                                            edge_index=torch.tensor(np.stack(graph.nonzero()),
+                                                                    dtype=torch.long,
+                                                                    requires_grad=False),
+                                            y=torch.tensor(labels,
+                                                           dtype=torch.int8,
+                                                           requires_grad=False))).to(device)
+        self.edge_weight = torch.tensor(graph.data,
+                                        dtype=torch.float32,
+                                        device=device,
+                                        requires_grad=False)
         np.random.seed(seed)
         rand_perm = np.random.permutation(self.N)
-        self.train_idx = torch.tensor(rand_perm[:n_train], dtype=torch.long).to(device)
-        self.test_idx = torch.tensor(rand_perm[n_train:], dtype=torch.long).to(device)
+        self.train_idx = torch.tensor(rand_perm[:n_train],
+                                      dtype=torch.int32,
+                                      requires_grad=False,
+                                      device=device)
+        self.test_idx = torch.tensor(rand_perm[n_train:],
+                                     dtype=torch.int32,
+                                     requires_grad=False,
+                                     device=device)
         self.n_train = n_train
         self.n_test = self.N - self.n_train
 

@@ -4,7 +4,6 @@ import matplotlib.pyplot as plt
 import igraph as ig
 import pynndescent
 import umap
-from loess import loess_1d
 from mpl_toolkits.axes_grid1 import make_axes_locatable
 from sklearn.neighbors import NearestNeighbors
 from scipy.stats import norm
@@ -60,7 +59,7 @@ def save_fig(fig, save, bbox_extra_artists=None):
             fig.savefig(save, bbox_extra_artists=bbox_extra_artists, format=save[idx+1:], bbox_inches='tight')
         except FileNotFoundError:
             print("Saving failed. File path doesn't exist!")
-        plt.close(fig)
+        # plt.close(fig)
 
 
 ############################################################
@@ -1235,7 +1234,7 @@ def plot_phase_grid(Nr,
         fig_phase.subplots_adjust(hspace=0.3, wspace=0.12)
         fig_phase.tight_layout()
 
-        save = None if figname is None else f'{path}/{figname}_phase_{i_fig+1}.{format}'
+        save = None if (path is None or figname is None) else f'{path}/{figname}_phase_{i_fig+1}.{format}'
         save_fig(fig_phase, save, (lgd,))
 
 
@@ -1351,6 +1350,7 @@ def plot_sig_loess_axis(ax,
                         D=1,
                         show_legend=False,
                         title=None,):
+    from loess import loess_1d
     for i in range(len(legends)):
         mask = labels == i
         if np.any(mask):
@@ -1378,7 +1378,7 @@ def plot_sig_loess_axis(ax,
 
 
 def sample_quiver_plot(t, dt, x=None, n_bins=3):
-    tmax, tmin = t.max()+1e-3, t.min()
+    tmax, tmin = t.max()+1e-3, np.quantile(t, 0.01)
     Nbin = int(np.clip((tmax-tmin)/dt, 1, len(t)//2))
     indices = []
     for i in range(Nbin):
@@ -1410,9 +1410,13 @@ def plot_vel_axis(ax,
     if labels is None or legends is None:
         dt_sample = (t.max()-t.min())/50
         torder = np.argsort(t)
-        indices = (sample_quiver_plot(t[torder], dt_sample, x[torder])
-                   if sparsity_correction else
-                   sample_quiver_plot(t[torder], dt_sample))
+        try:
+            indices = (sample_quiver_plot(t[torder], dt_sample, x[torder])
+                       if sparsity_correction else
+                       sample_quiver_plot(t[torder], dt_sample))
+        except ValueError:
+            np.random.seed(42)
+            indices = np.random.choice(len(t), len(t)//30, replace=False)
         if len(indices) > 0:
             ax.quiver(t[torder][indices],
                       x[torder][indices],
@@ -1432,9 +1436,13 @@ def plot_vel_axis(ax,
             if np.any(mask):
                 dt_sample = (t_type.max()-t_type.min()) / 30
                 torder = np.argsort(t_type)
-                indices = (sample_quiver_plot(t_type[torder], dt_sample, x[mask][torder])
-                           if sparsity_correction else
-                           sample_quiver_plot(t_type[torder], dt_sample))
+                try:
+                    indices = (sample_quiver_plot(t_type[torder], dt_sample, x[mask][torder])
+                               if sparsity_correction else
+                               sample_quiver_plot(t_type[torder], dt_sample))
+                except ValueError:
+                    np.random.seed(42)
+                    indices = np.random.choice(len(t_type), len(t_type)//30+1, replace=False)
                 if len(indices) == 0:  # edge case handling
                     continue
                 v_type = v[mask][torder][indices]
@@ -1598,7 +1606,7 @@ def plot_sig_grid(Nr,
                 try:
                     if ('VeloVAE' in methods[0])\
                         or ('FullVB' in methods[0])\
-                            or (methods[0] in ['DeepVelo', 'Discrete PyroVelocity', 'PyroVelocity', 'VeloVI']):
+                            or (methods[0] in ['DeepVelo', 'Discrete PyroVelocity', 'PyroVelocity', 'VeloVI', 'cellDancer']):
                         K = min(10, max(len(that)//5000, 1))
                         
                         if frac > 0 and frac < 1:
@@ -1619,7 +1627,7 @@ def plot_sig_grid(Nr,
                             plot_sig_pred_axis(ax_sig[3*i+1], that[::K], Shat[methods[0]][:, idx][::K])
                         plot_vel_axis(ax_sig[3 * i + 2],
                                       t,
-                                      Shat[methods[0]][:, idx],
+                                      S[:, idx],
                                       V[methods[0]][:, idx],
                                       Labels[methods[0]],
                                       Legends[methods[0]],
@@ -1643,10 +1651,10 @@ def plot_sig_grid(Nr,
                                            1.0,
                                            1)
                         plot_vel_axis(ax_sig[3*i+2],
-                                      that,
-                                      Shat[methods[0]][:, idx],
+                                      t,
+                                      S[:, idx],
                                       V[methods[0]][:, idx],
-                                      Labels_demo[methods[0]],
+                                      Labels[methods[0]],
                                       Legends[methods[0]],
                                       sparsity_correction=sparsity_correction,
                                       color_map=color_map)
@@ -1654,9 +1662,10 @@ def plot_sig_grid(Nr,
                     print("[** Warning **]: "
                           "Skip plotting the prediction because of key value error or invalid data type.")
                     return
-                ax_sig[3*i].set_xlim(t.min(), np.quantile(t, 0.999))
-                ax_sig[3*i+1].set_xlim(t.min(), np.quantile(t, 0.999))
-                ax_sig[3*i+2].set_xlim(t.min(), np.quantile(t, 0.999))
+                if np.all(~np.isnan(t)):
+                    ax_sig[3*i].set_xlim(t.min(), np.quantile(t, 0.999))
+                    ax_sig[3*i+1].set_xlim(t.min(), np.quantile(t, 0.999))
+                    ax_sig[3*i+2].set_xlim(t.min(), np.quantile(t, 0.999))
 
                 ax_sig[3*i].set_ylabel("U", fontsize=30, rotation=0)
                 ax_sig[3*i].yaxis.set_label_coords(-0.03, 0.5)
@@ -1717,16 +1726,17 @@ def plot_sig_grid(Nr,
                         try:
                             if ('VeloVAE' in method)\
                                 or ('FullVB' in method)\
-                                    or (methods[0] in ['DeepVelo', 'Discrete PyroVelocity', 'PyroVelocity', 'VeloVI']):
+                                    or (methods[0] in ['DeepVelo', 'Discrete PyroVelocity', 'PyroVelocity', 'VeloVI', 'cellDancer']):
+                                # These methods don't have line prediction
                                 K = min(10, max(len(that)//5000, 1))
                                 if frac > 0 and frac < 1:
-                                    plot_sig_loess_axis(ax_sig[3 * i, M * j + k],
+                                    plot_sig_loess_axis(ax_sig[3*i, M*j+k],
                                                         that[::K],
                                                         Uhat[method][:, idx][::K],
                                                         Labels_demo[method][::K],
                                                         Legends[method],
                                                         frac=frac)
-                                    plot_sig_loess_axis(ax_sig[3 * i + 1, M * j + k],
+                                    plot_sig_loess_axis(ax_sig[3*i+1, M*j+k],
                                                         that[::K],
                                                         Shat[method][:, idx][::K],
                                                         Labels_demo[method][::K],
@@ -1734,15 +1744,15 @@ def plot_sig_grid(Nr,
                                 elif 'Discrete' in method:
                                     plot_sig_pred_axis(ax_sig[3*i, M*j+k], that[::K], Uhat[method][:, idx][::K])
                                     plot_sig_pred_axis(ax_sig[3*i+1, M*j+k], that[::K], Shat[method][:, idx][::K])
-                                plot_vel_axis(ax_sig[3 * i + 2, M * j + k],
-                                              that,
-                                              Shat[method][:, idx],
+                                plot_vel_axis(ax_sig[3*i+2, M*j+k],
+                                              t,
+                                              S[:, idx],
                                               V[method][:, idx],
-                                              Labels_demo[method],
+                                              Labels[method],
                                               Legends[method],
                                               sparsity_correction=sparsity_correction,
                                               color_map=color_map)
-                            else:
+                            else:  # plot line prediction
                                 plot_sig_pred_axis(ax_sig[3*i, M*j+k],
                                                    that,
                                                    Uhat[method][:, idx],
@@ -1759,11 +1769,11 @@ def plot_sig_grid(Nr,
                                                    '-',
                                                    1.0,
                                                    1)
-                                plot_vel_axis(ax_sig[3 * i + 2, M * j + k],
-                                              that,
-                                              Shat[method][:, idx],
+                                plot_vel_axis(ax_sig[3*i+2, M*j+k],
+                                              t,
+                                              S[:, idx],
                                               V[method][:, idx],
-                                              Labels_demo[method],
+                                              Labels[method],
                                               Legends[method],
                                               sparsity_correction=sparsity_correction,
                                               color_map=color_map)
@@ -1771,27 +1781,21 @@ def plot_sig_grid(Nr,
                             print("[** Warning **]: "
                                   "Skip plotting the prediction because of key value error or invalid data type.")
                             pass
-
-                        ax_sig[3*i,  M*j+k].set_xlim(t.min(), np.quantile(t, 0.999))
-                        ax_sig[3*i+1,  M*j+k].set_xlim(t.min(), np.quantile(t, 0.999))
-                        ax_sig[3*i+2,  M*j+k].set_xlim(t.min(), np.quantile(t, 0.999))
+                        if np.all(~np.isnan(t)):
+                            ax_sig[3*i,  M*j+k].set_xlim(t.min(), np.quantile(t, 0.999))
+                            ax_sig[3*i+1,  M*j+k].set_xlim(t.min(), np.quantile(t, 0.999))
+                            ax_sig[3*i+2,  M*j+k].set_xlim(t.min(), np.quantile(t, 0.999))
 
                         ax_sig[3*i,  M*j+k].set_xticks([])
                         ax_sig[3*i+1,  M*j+k].set_xticks([])
                         ax_sig[3*i+2,  M*j+k].set_xticks([])
 
-                        tmin, tmax = ax_sig[3*i,  M*j+k].get_xlim()
-                        umin, umax = ax_sig[3*i,  M*j+k].get_ylim()
                         ax_sig[3*i,  M*j+k].set_ylabel("U", fontsize=30, rotation=0)
                         ax_sig[3*i,  M*j+k].yaxis.set_label_coords(-0.03, 0.5)
 
-                        tmin, tmax = ax_sig[3*i+1,  M*j+k].get_xlim()
-                        smin, smax = ax_sig[3*i+1,  M*j+k].get_ylim()
                         ax_sig[3*i+1,  M*j+k].set_ylabel("S", fontsize=30, rotation=0)
                         ax_sig[3*i+1,  M*j+k].yaxis.set_label_coords(-0.03, 0.5)
 
-                        tmin, tmax = ax_sig[3*i+2,  M*j+k].get_xlim()
-                        smin, smax = ax_sig[3*i+2,  M*j+k].get_ylim()
                         ax_sig[3*i+2,  M*j+k].set_ylabel("S", fontsize=30, rotation=0)
                         ax_sig[3*i+2,  M*j+k].yaxis.set_label_coords(-0.03, 0.5)
 
@@ -1817,7 +1821,7 @@ def plot_sig_grid(Nr,
 
         fig_sig.subplots_adjust(hspace=0.3, wspace=0.12)
 
-        save = None if figname is None else f'{path}/{figname}_sig_{i_fig+1}.{format}'
+        save = None if (path is None or figname is None) else f'{path}/{figname}_sig_{i_fig+1}.{format}'
         save_fig(fig_sig, save, (lgd,))
 
 
@@ -2051,8 +2055,8 @@ def plot_rate_grid(adata,
 
     # Plotting
     for i_fig in range(Nfig):
-        fig, ax = plt.subplots(Nr, 3*Nc, figsize=(W*3*Nc, H*Nr), facecolor='white')
-        if Nr == 1:
+        fig, ax = plt.subplots(3*Nr, Nc, figsize=(W*Nc, H*3*Nr), facecolor='white')
+        if Nc == 1:
             for i in range(Nc):
                 idx = i_fig*Nr * Nc + i
                 gidx = np.where(adata.var_names == gene_list[idx])[0][0]
@@ -2109,34 +2113,34 @@ def plot_rate_grid(adata,
                     gamma = adata.varm[f"{key}_gamma"][gidx]
                     t_trans = adata.uns[f"{key}_t_trans"]
 
-                    ax[i, 3*j] = _plot_branch(ax[i, 3*j],
+                    ax[3*i, j] = _plot_branch(ax[3*i, j],
                                               t_trans,
                                               alpha,
                                               graph,
                                               label_dic_rev,
                                               color_map=color_map)
-                    ax[i, 3*j+1] = _plot_branch(ax[i, 3*j+1],
+                    ax[3*i+1, j] = _plot_branch(ax[3*i+1, j],
                                                 t_trans,
                                                 beta,
                                                 graph,
                                                 label_dic_rev,
                                                 color_map=color_map)
-                    ax[i, 3*j+2] = _plot_branch(ax[i, 3*j+2],
+                    ax[3*i+2, j] = _plot_branch(ax[3*i+2, j],
                                                 t_trans,
                                                 gamma,
                                                 graph,
                                                 label_dic_rev,
                                                 color_map=color_map)
 
-                    ax[i, 3*j].set_ylabel(r"$\alpha$", fontsize=20, rotation=0)
-                    ax[i, 3*j+1].set_ylabel(r"$\beta$", fontsize=20, rotation=0)
-                    ax[i, 3*j+2].set_ylabel(r"$\gamma$", fontsize=20, rotation=0)
+                    ax[3*i, j].set_ylabel(r"$\alpha$", fontsize=20, rotation=0)
+                    ax[3*i+1, j].set_ylabel(r"$\beta$", fontsize=20, rotation=0)
+                    ax[3*i+2, j].set_ylabel(r"$\gamma$", fontsize=20, rotation=0)
                     for k in range(3):
-                        ax[i, 3*j+k].set_xticks([])
-                        ax[i, 3*j+k].set_yticks([])
-                        ax[i, 3*j+k].set_xlabel("time", fontsize=20)
-                        ax[i, 3*j+k].yaxis.set_label_coords(-0.03, 0.5)
-                        ax[i, 3*j+k].set_title(gene_list[idx], fontsize=30)
+                        ax[3*i+k, j].set_xticks([])
+                        ax[3*i+k, j].set_yticks([])
+                        ax[3*i+k, j].set_xlabel("time", fontsize=20)
+                        ax[3*i+k, j].yaxis.set_label_coords(-0.03, 0.5)
+                        ax[3*i+k, j].set_title(gene_list[idx], fontsize=30)
             handles, labels = ax[0, 0].get_legend_handles_labels()
         plt.tight_layout()
 
@@ -2737,6 +2741,7 @@ def plot_transition_graph(adata,
             target=ax)
 
     ax.axis("off")
+    plt.tight_layout()
 
     # Get legends
     _fig, _ax = plt.subplots()
@@ -2752,9 +2757,8 @@ def plot_transition_graph(adata,
                      fontsize=15,
                      markerscale=2,
                      ncol=1,
-                     bbox_to_anchor=(0.2, 0.95),
+                     bbox_to_anchor=(0.0, min(0.95, 0.5+0.02*n_type)),
                      loc='upper right')
-
     save_fig(fig, save, (lgd,))
 
     return
