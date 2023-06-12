@@ -4,6 +4,7 @@ from torch.utils.data import Dataset
 from torch_geometric.data import Data
 import torch_geometric.transforms as T
 # from torch_geometric.loader import NeighborLoader
+from sys import getsizeof
 
 
 class SCData(Dataset):
@@ -114,8 +115,88 @@ class SCGraphData():
     This class wraps around torch_geometric.data to include graph structured datasets.
     """
     def __init__(self, data, labels, graph, n_train, device, seed=2022):
+        """Constructor
+
+        Args:
+            data (:class:`numpy.ndarray`):
+                Cell-by-gene count matrix. Unspliced and spliced counts are concatenated in the gene dimension.
+            labels (:class:`numpy.ndarray`):
+                Cell type annotation encoded in integer.
+            graph (:class:`scipy.sparse.csr_matrix`):
+                Cell-cell connectivity graph.
+            n_train (int):
+                Number of training samples.
+            device (:class:`torch.device`):
+                {'cpu' or 'cuda'}
+            seed (int, optional):
+                Random seed. Defaults to 2022.
+        """
         self.N, self.G = data.shape[0], data.shape[1]//2
         self.data = T.ToSparseTensor()(Data(x=torch.tensor(data,
+                                                           dtype=torch.float32,
+                                                           requires_grad=False),
+                                            edge_index=torch.tensor(np.stack(graph.nonzero()),
+                                                                    dtype=torch.long,
+                                                                    requires_grad=False),
+                                            y=torch.tensor(labels,
+                                                           dtype=torch.int8,
+                                                           requires_grad=False))).to(device)
+        """
+        self.edge_weight = torch.tensor(graph.data,
+                                        dtype=torch.float32,
+                                        device=device,
+                                        requires_grad=False)
+        print(getsizeof(self.edge_weight)/(1024**2))
+        """
+        np.random.seed(seed)
+        rand_perm = np.random.permutation(self.N)
+        self.train_idx = torch.tensor(rand_perm[:n_train],
+                                      dtype=torch.int32,
+                                      requires_grad=False,
+                                      device=device)
+        self.test_idx = torch.tensor(rand_perm[n_train:],
+                                     dtype=torch.int32,
+                                     requires_grad=False,
+                                     device=device)
+        self.n_train = n_train
+        self.n_test = self.N - self.n_train
+
+        self.u0 = None
+        self.s0 = None
+        self.t0 = None
+        self.u1 = None
+        self.s1 = None
+        self.t1 = None
+
+        return
+
+
+class SCMultiGraphData():
+    """
+    This class builds a single graph dataset from multiple slices of graph datasets.
+    """
+    def __init__(self, data, labels, graph, n_train, device, seed=2022):
+        """Constructor
+
+        Args:
+            data (list[:class:`numpy.ndarray`]):
+                Multiple slices of cell-by-gene count matrix.
+                Assumes that the gene dimension is the same for all slices.
+                Unspliced and spliced counts are concatenated in the gene dimension.
+            labels (:class:`numpy.ndarray`):
+                Cell type annotation encoded in integer.
+            graph (list[:class:`scipy.sparse.csr_matrix`]):
+                Cell-cell connectivity graph.
+            n_train (int):
+                Number of training samples.
+            device (:class:`torch.device`):
+                {'cpu' or 'cuda'}
+            seed (int, optional):
+                Random seed. Defaults to 2022.
+        """
+        
+        self.N, self.G = np.sum([x.shape[0] for x in data]), data[0].shape[1]//2
+        self.data = T.ToSparseTensor()(Data(x=torch.tensor(np.stack(data),
                                                            dtype=torch.float32,
                                                            requires_grad=False),
                                             edge_index=torch.tensor(np.stack(graph.nonzero()),
