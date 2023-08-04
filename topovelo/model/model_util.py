@@ -6,6 +6,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from scipy.special import loggamma
+from scipy.spatial import Delaunay
 from .scvelo_util import mRNA, vectorize, tau_inv, R_squared, test_bimodality, leastsq_NxN
 from sklearn.neighbors import NearestNeighbors
 import pynndescent
@@ -13,6 +14,65 @@ from tqdm.autonotebook import trange
 from sklearn.cluster import SpectralClustering, KMeans
 from scipy.stats import dirichlet, bernoulli, kstest, linregress
 from scipy.linalg import svdvals
+
+###################################################################################
+# Spatial time prior estimation based Delaunay triangulation
+###################################################################################
+def triangle_area(p1, p2, p3):
+    if p1.ndim == 2:
+        return np.abs(p1[:, 0]*p2[:, 1]+p2[:, 0]*p3[:, 1]+p3[:, 0]*p1[:, 1]\
+                      -p2[:, 0]*p1[:, 1]-p3[:, 0]*p2[:, 1]-p1[:, 0]*p3[:, 1])/2
+    return np.abs(p1[0]*p2[1]+p2[0]*p3[1]+p3[0]*p1[1]-p2[0]*p1[1]-p3[0]*p2[1]-p1[0]*p3[1])/2
+
+
+def triangle_height(p_query, p1, p2):
+    if p_query.ndim == 2:
+        l = np.sqrt((p1[:, 0]-p2[:, 0])**2+(p1[:, 1]-p2[:, 1])**2)
+    else:
+        l = np.sqrt((p1[0]-p2[0])**2+(p1[1]-p2[1])**2)
+    return  triangle_area(p1, p2, p_query)/l
+
+
+def get_spatial_tprior(adata, tmax, basis="spatial", q=0.95):
+    P = adata.obsm[f"X_{basis}"]
+    T = Delaunay(P)
+    # Compute area of all triangles and remove outliers
+    area = []
+    for simplex in T.simplices:
+        area.append(triangle_area(P[simplex[0]], P[simplex[1]], P[simplex[2]]))
+    ub = np.quantile(area, q)
+    outliers = np.where(area > ub)[0]
+    for i in range(len(T.neighbors)):
+        for k in range(3):
+            if (T.neighbors[i][k] in outliers):
+                T.neighbors[i][k] = -1
+    # Find edges at the boundary
+    boundary = set()
+    for i in range(len(T.neighbors)):
+        for k in range(3):
+            if (T.neighbors[i][k] == -1):
+                nk1, nk2 = (k+1) % 3, (k+2) % 3
+                boundary.add(T.simplices[i][nk1])
+                boundary.add(T.simplices[i][nk2])
+    from sklearn.neighbors import NearestNeighbors
+    # Define time prior
+    X_boundary = np.stack(P[list(boundary)])
+    nb_obj = NearestNeighbors(n_neighbors=1)
+    nb_obj.fit(X_boundary)
+    _, ind_boundary = nb_obj.kneighbors()
+    ind_boundary = ind_boundary.squeeze()
+    _, ind = nb_obj.kneighbors(P)
+    ind = ind.squeeze()
+    dist = triangle_height(P, X_boundary[ind], X_boundary[ind_boundary][ind])
+    sigma = np.median(dist) * 1.5
+    t_prior = tmax*np.exp(-(dist/sigma)**2)
+    adata.obs['tprior'] = t_prior
+    # For debugging
+    # plt.figure(figsize=(12, 8))
+    # plt.triplot(P[:,0], P[:,1], T.simplices[np.where(area <= ub)[0]])
+    # plt.plot(P[:,0], P[:,1], '.')
+    # plt.plot(P[list(boundary),0], P[list(boundary),1], 'or')
+    # plt.show()
 
 ###################################################################################
 # Dynamical Model

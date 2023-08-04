@@ -1,4 +1,5 @@
 import numpy as np
+import scipy as sp
 import torch
 from torch.utils.data import Dataset
 from torch_geometric.data import Data
@@ -114,7 +115,15 @@ class SCGraphData():
     """
     This class wraps around torch_geometric.data to include graph structured datasets.
     """
-    def __init__(self, data, labels, graph, n_train, device, seed=2022):
+    def __init__(self,
+                 data,
+                 labels,
+                 graph,
+                 n_train,
+                 device,
+                 test_samples=None,
+                 train_edge_weight=False,
+                 seed=2022):
         """Constructor
 
         Args:
@@ -128,6 +137,8 @@ class SCGraphData():
                 Number of training samples.
             device (:class:`torch.device`):
                 {'cpu' or 'cuda'}
+            test_samples (:class:`numpy.ndarray`):
+                Specifies samples as unseen data for model testing.
             seed (int, optional):
                 Random seed. Defaults to 2022.
         """
@@ -148,18 +159,46 @@ class SCGraphData():
                                         requires_grad=False)
         print(getsizeof(self.edge_weight)/(1024**2))
         """
+        if train_edge_weight:
+            self.edge_weight = torch.zeros(self.N,
+                                           dtype=torch.float32,
+                                           requires_grad=False).to(device)
+            torch.manual_seed(2022)
+            torch.nn.init.normal_(self.edge_weight, mean=1.0, std=5e-2)
+        else:
+            self.edge_weight = None
         np.random.seed(seed)
-        rand_perm = np.random.permutation(self.N)
-        self.train_idx = torch.tensor(rand_perm[:n_train],
-                                      dtype=torch.int32,
-                                      requires_grad=False,
-                                      device=device)
-        self.test_idx = torch.tensor(rand_perm[n_train:],
-                                     dtype=torch.int32,
-                                     requires_grad=False,
-                                     device=device)
+        if test_samples is None:
+            rand_perm = np.random.permutation(self.N)
+            self.train_idx = torch.tensor(rand_perm[:n_train],
+                                          dtype=torch.int32,
+                                          requires_grad=False,
+                                          device=device)
+            self.validation_idx = torch.tensor(rand_perm[n_train:],
+                                               dtype=torch.int32,
+                                               requires_grad=False,
+                                               device=device)
+            self.test_idx = None
+            self.n_test = 0
+        else:
+            train_valid_idx = list(range(self.N))
+            for idx in test_samples:
+                train_valid_idx.remove(idx)
+            rand_perm = np.random.permutation(train_valid_idx)
+            self.train_idx = torch.tensor(rand_perm[:n_train],
+                                          dtype=torch.int32,
+                                          requires_grad=False,
+                                          device=device)
+            self.validation_idx = torch.tensor(rand_perm[n_train:],
+                                               dtype=torch.int32,
+                                               requires_grad=False,
+                                               device=device)
+            self.test_idx = torch.tensor(test_samples,
+                                         dtype=torch.int32,
+                                         requires_grad=False,
+                                         device=device)
+            self.n_test = len(train_valid_idx) - self.n_train
         self.n_train = n_train
-        self.n_test = self.N - self.n_train
 
         self.u0 = None
         self.s0 = None
@@ -175,7 +214,7 @@ class SCMultiGraphData():
     """
     This class builds a single graph dataset from multiple slices of graph datasets.
     """
-    def __init__(self, data, labels, graph, n_train, device, seed=2022):
+    def __init__(self, data, labels, graphs, n_train, test_slices, device, train_edge_weight, seed=2022):
         """Constructor
 
         Args:
@@ -183,39 +222,57 @@ class SCMultiGraphData():
                 Multiple slices of cell-by-gene count matrix.
                 Assumes that the gene dimension is the same for all slices.
                 Unspliced and spliced counts are concatenated in the gene dimension.
-            labels (:class:`numpy.ndarray`):
+            labels (list[:class:`numpy.ndarray`]):
                 Cell type annotation encoded in integer.
-            graph (list[:class:`scipy.sparse.csr_matrix`]):
+            graphs (list[:class:`scipy.sparse.csr_matrix`]):
                 Cell-cell connectivity graph.
             n_train (int):
                 Number of training samples.
+            test_slices (list[int]):
+                List of slice indices for testing
             device (:class:`torch.device`):
                 {'cpu' or 'cuda'}
             seed (int, optional):
                 Random seed. Defaults to 2022.
         """
-        
-        self.N, self.G = np.sum([x.shape[0] for x in data]), data[0].shape[1]//2
+        graph_combined = self._concat_adj_mtx(graphs)
         self.data = T.ToSparseTensor()(Data(x=torch.tensor(np.stack(data),
                                                            dtype=torch.float32,
                                                            requires_grad=False),
-                                            edge_index=torch.tensor(np.stack(graph.nonzero()),
+                                            edge_index=torch.tensor(np.stack(graph_combined.nonzero()),
                                                                     dtype=torch.long,
                                                                     requires_grad=False),
-                                            y=torch.tensor(labels,
+                                            y=torch.tensor(np.concatenate(labels),
                                                            dtype=torch.int8,
                                                            requires_grad=False))).to(device)
-        self.edge_weight = torch.tensor(graph.data,
-                                        dtype=torch.float32,
-                                        device=device,
-                                        requires_grad=False)
+        if train_edge_weight:
+            self.edge_weight = torch.tensor(graph_combined.data,
+                                            dtype=torch.float32,
+                                            device=device,
+                                            requires_grad=False)
+        else:
+            self.edge_weight = None
         np.random.seed(seed)
-        rand_perm = np.random.permutation(self.N)
+        train_valid_idx = []
+        test_idx = []
+        start = 0
+        for i in range(len(data)):
+            if i in test_slices:
+                test_idx.extend(list(range(start, start+data[i].shape[0])))
+            else:
+                train_valid_idx.extend(list(range(start, start+data[i].shape[0])))
+            start += data[i].shape[0]
+        self.N, self.G = len(train_valid_idx), data[0].shape[1]//2
+        rand_perm = np.random.permutation(train_valid_idx)
         self.train_idx = torch.tensor(rand_perm[:n_train],
                                       dtype=torch.int32,
                                       requires_grad=False,
                                       device=device)
-        self.test_idx = torch.tensor(rand_perm[n_train:],
+        self.validation_idx = torch.tensor(rand_perm[n_train:],
+                                           dtype=torch.int32,
+                                           requires_grad=False,
+                                           device=device)
+        self.test_idx = torch.tensor(test_idx,
                                      dtype=torch.int32,
                                      requires_grad=False,
                                      device=device)
@@ -230,6 +287,9 @@ class SCMultiGraphData():
         self.t1 = None
 
         return
+
+    def _concat_adj_mtx(self, graphs):
+        return sp.sparse.block_diag(graphs)
 
 
 class Index(Dataset):

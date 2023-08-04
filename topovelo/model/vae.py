@@ -1,5 +1,4 @@
 import numpy as np
-import scipy.stats as stats
 import os
 import matplotlib.pyplot as plt
 import torch
@@ -10,6 +9,7 @@ from torch.distributions.negative_binomial import NegativeBinomial
 from torch.distributions.poisson import Poisson
 
 from torch_geometric.nn import GCNConv, GATConv
+from torch_geometric.nn.norm import BatchNorm, LayerNorm, GraphNorm
 
 import time
 from ..plotting import plot_sig, plot_time
@@ -19,7 +19,7 @@ from .model_util import hist_equal, init_params, get_ts_global, reinit_params
 from .model_util import convert_time, get_gene_index
 from .model_util import pred_su, ode_numpy, knnx0_index, get_x0
 from .model_util import elbo_collapsed_categorical
-from .model_util import assign_gene_mode, find_dirichlet_param
+from .model_util import assign_gene_mode, find_dirichlet_param, assign_gene_mode_tprior
 from .model_util import get_cell_scale, get_dispersion
 
 from .transition_graph import encode_type
@@ -46,6 +46,9 @@ class encoder(nn.Module):
         super(encoder, self).__init__()
         if attention:
             self.conv1 = GATConv(Cin, n_hidden, 5)
+            # self.fc_1 = nn.Linear(5*n_hidden, 5*n_hidden)
+            # self.gn = LayerNorm(5*n_hidden)
+            # self.conv2 = GATConv(n_hidden*5, n_hidden, 5)
 
             self.fc_mu_t = nn.Linear(5*n_hidden+dim_cond, 1).float()
             self.spt1 = nn.Softplus().float()
@@ -57,6 +60,9 @@ class encoder(nn.Module):
             self.spt3 = nn.Softplus().float()
         else:
             self.conv1 = GCNConv(Cin, n_hidden)
+            # self.fc_1 = nn.Linear(n_hidden, n_hidden)
+            # self.gn = LayerNorm(n_hidden)
+            # self.conv2 = GCNConv(n_hidden, n_hidden)
 
             self.fc_mu_t = nn.Linear(n_hidden+dim_cond, 1).float()
             self.spt1 = nn.Softplus().float()
@@ -67,30 +73,36 @@ class encoder(nn.Module):
             self.fc_std_z = nn.Linear(n_hidden+dim_cond, dim_z).float()
             self.spt3 = nn.Softplus().float()
 
+        self.act = nn.LeakyReLU()
         self.init_weights()
 
     def init_weights(self):
-        if isinstance(self.conv1, GCNConv):
-            nn.init.xavier_uniform_(self.conv1.lin.weight, 0.05)
-            nn.init.constant_(self.conv1.bias, 0)
-        else:
-            nn.init.xavier_uniform_(self.conv1.att_src, 0.05)
-            nn.init.xavier_uniform_(self.conv1.att_dst, 0.05)
-            nn.init.constant_(self.conv1.bias, 0)
+        for m in [self.conv1]:
+            if isinstance(m, GCNConv):
+                nn.init.xavier_uniform_(m.lin.weight, 0.05)
+                nn.init.constant_(m.bias, 0)
+            else:
+                nn.init.xavier_uniform_(m.att_src, 0.05)
+                nn.init.xavier_uniform_(m.att_dst, 0.05)
+                nn.init.constant_(m.bias, 0)
         for m in [self.fc_mu_t,
                   self.fc_std_t,
                   self.fc_mu_z,
                   self.fc_std_z]:
-            nn.init.xavier_uniform_(m.weight, 0.05)
+            nn.init.xavier_uniform_(m.weight)
             nn.init.constant_(m.bias, 0)
+        # self.gn.reset_parameters()
 
     def forward(self, data_in, edge_index, edge_weight=None, condition=None):
         if isinstance(self.conv1, GCNConv):
             h = self.conv1(data_in, edge_index, edge_weight)
+            # h = self.conv2(h, edge_index, edge_weight)
         else:
             h = self.conv1(data_in, edge_index)
+            # h = self.conv2(h, edge_index)
         if condition is not None:
             h = torch.cat((h, condition), 1)
+        # h = self.act(self.gn(self.fc_1(h)))
         mu_tx, std_tx = self.spt1(self.fc_mu_t(h)), self.spt2(self.fc_std_t(h))
         mu_zx, std_zx = self.fc_mu_z(h), self.spt3(self.fc_std_z(h))
         return mu_tx, std_tx, mu_zx, std_zx
@@ -150,36 +162,48 @@ class GraphDecoder(nn.Module):
         super(GraphDecoder, self).__init__()
         if attention:
             self.conv1 = GATConv(Cin, n_hidden, 5)
+            # self.fc_1 = nn.Linear(5*n_hidden, 5*n_hidden)
+            # self.gn = LayerNorm(5*n_hidden)
+            # self.conv2 = GATConv(5*n_hidden, n_hidden, 5)
 
             self.fc_out = nn.Linear(5*n_hidden+dim_cond, dim_out).float()
             self.sigm = nn.Sigmoid().float()
         else:
             self.conv1 = GCNConv(Cin, n_hidden)
+            # self.fc_1 = nn.Linear(n_hidden, n_hidden)
+            # self.gn = LayerNorm(n_hidden)
+            # self.conv2 = GCNConv(n_hidden, n_hidden)
 
             self.fc_out = nn.Linear(n_hidden+dim_cond, dim_out).float()
             self.sigm = nn.Sigmoid().float()
-
+        self.act = nn.LeakyReLU()
         self.init_weights()
 
     def init_weights(self):
-        if isinstance(self.conv1, GCNConv):
-            nn.init.xavier_uniform_(self.conv1.lin.weight, 0.05)
-            nn.init.constant_(self.conv1.bias, 0)
-        else:
-            nn.init.xavier_uniform_(self.conv1.att_src, 0.05)
-            nn.init.xavier_uniform_(self.conv1.att_dst, 0.05)
-            nn.init.constant_(self.conv1.bias, 0)
-
-        nn.init.xavier_uniform_(self.fc_out.weight, 0.05)
+        for m in [self.conv1]:
+            if isinstance(m, GCNConv):
+                nn.init.xavier_uniform_(m.lin.weight, 0.05)
+                nn.init.constant_(m.bias, 0)
+            else:
+                nn.init.xavier_uniform_(m.att_src, 0.05)
+                nn.init.xavier_uniform_(m.att_dst, 0.05)
+                nn.init.constant_(m.bias, 0)
+        # self.gn.reset_parameters()
+        nn.init.xavier_uniform_(self.fc_out.weight)
         nn.init.constant_(self.fc_out.bias, 0)
+        # nn.init.xavier_uniform_(self.fc_1.weight)
+        # nn.init.constant_(self.fc_1.bias, 0)
 
     def forward(self, data_in, edge_index, edge_weight=None, condition=None):
         if isinstance(self.conv1, GCNConv):
             h = self.conv1(data_in, edge_index, edge_weight)
+            # h = self.conv2(h, edge_index, edge_weight)
         else:
             h = self.conv1(data_in, edge_index)
+            # h = self.conv2(h, edge_index)
         if condition is not None:
             h = torch.cat((h, condition), 1)
+        # h = self.act(self.gn(self.fc_1(h)))
         return self.sigm(self.fc_out(h))
 
 
@@ -431,7 +455,6 @@ class decoder(nn.Module):
         s0 = torch.stack([torch.zeros(self.u0.shape, device=rho.device, dtype=float),
                           self.s0.exp()])
         tau = torch.stack([F.leaky_relu(t - self.ton.exp(), neg_slope) for i in range(2)], 1)
-
         Uhat, Shat = pred_su(tau,
                              u0,
                              s0,
@@ -505,7 +528,7 @@ class decoder(nn.Module):
 
 
 class VAE(VanillaVAE):
-    """VeloVAE Model
+    """TopoVelo Model
     """
     def __init__(self,
                  adata,
@@ -531,6 +554,7 @@ class VAE(VanillaVAE):
                      'beta': (0.0, 0.5),
                      'gamma': (0.0, 0.5)
                  },
+                 random_state=2022,
                  **kwargs):
         """VeloVAE Model
 
@@ -641,8 +665,8 @@ class VAE(VanillaVAE):
             "early_stop_thred": early_stop_thred,
             "train_test_split": 0.7,
             "neg_slope": 0.0,
-            "train_std": False,
             "train_ton": (init_method != 'tprior'),
+            "train_edge_weight": False,
             "weight_sample": False,
             "vel_continuity_loss": False,
 
@@ -664,6 +688,7 @@ class VAE(VanillaVAE):
         self.dim_z = dim_z
         self.enable_cvae = dim_cond > 0
 
+        torch.manual_seed(random_state)
         self.decoder = decoder(adata,
                                tmax,
                                self.train_idx,
@@ -1235,7 +1260,7 @@ class VAE(VanillaVAE):
                                           self.graph_data.data.adj_t,
                                           batch_sample,
                                           lu_scale, ls_scale,
-                                          None,
+                                          self.graph_data.edge_weight,
                                           u0, s0,
                                           t0, t1,
                                           condition)
@@ -1386,7 +1411,8 @@ class VAE(VanillaVAE):
               cluster_key="clusters",
               figure_path="figures",
               embed="umap",
-              random_state=2022):
+              random_state=2022,
+              test_samples=None):
         """The high-level API for training.
 
         Arguments
@@ -1405,6 +1431,8 @@ class VAE(VanillaVAE):
             Path to the folder for saving plots.
         embed : str, optional
             Low dimensional embedding in adata.obsm. The actual key storing the embedding should be f'X_{embed}'
+        test_samples : :class:`numpy.array`
+            Indices of samples included in the test set (unseen data)
         """
         self.load_config(config)
         if self.config["learning_rate"] is None:
@@ -1443,10 +1471,13 @@ class VAE(VanillaVAE):
                                       graph,
                                       n_train,
                                       self.device,
+                                      test_samples,
+                                      self.config['train_edge_weight'],
                                       random_state)
-        
+
         self.train_idx = self.graph_data.train_idx.cpu().numpy()
-        self.test_idx = self.graph_data.test_idx.cpu().numpy()
+        self.validation_idx = self.graph_data.validation_idx.cpu().numpy()
+        self.test_idx = test_samples
         # Automatically set test iteration if not given
         if self.config["test_iter"] is None:
             self.config["test_iter"] = len(self.train_idx)//self.config["batch_size"]*2
@@ -1467,10 +1498,9 @@ class VAE(VanillaVAE):
                      self.decoder.logit_pw]
         if self.config['train_ton']:
             param_ode.append(self.decoder.ton)
-        if self.config['train_std']:
-            self.decoder.sigma_u.requires_grad = True
-            self.decoder.sigma_s.requires_grad = True
-            param_ode = param_ode+[self.decoder.sigma_u, self.decoder.sigma_s]
+        if self.config['train_edge_weight']:
+            self.graph_data.edge_weight.requires_grad = True
+            param_nn.append(self.graph_data.edge_weight)
 
         optimizer = torch.optim.Adam(param_nn, lr=self.config["learning_rate"], weight_decay=self.config["lambda"])
         optimizer_ode = torch.optim.Adam(param_ode, lr=self.config["learning_rate_ode"])
@@ -1489,7 +1519,6 @@ class VAE(VanillaVAE):
                 stop_training = self.train_epoch(optimizer, None)
 
             if plot and (epoch == 0 or (epoch+1) % self.config["save_epoch"] == 0):
-                print('Plotting')
                 elbo_train = self.test(Xembed[self.train_idx],
                                        f"train{epoch+1}",
                                        False,
@@ -1597,14 +1626,14 @@ class VAE(VanillaVAE):
                                gene_plot,
                                plot,
                                figure_path)
-        elbo_test = self.test(Xembed[self.test_idx],
+        elbo_test = self.test(Xembed[self.validation_idx],
                               "final-test",
                               True,
                               gind,
                               gene_plot,
                               plot,
                               figure_path)
-        self.loss_train.append(elbo_train)
+        self.loss_train.append(-elbo_train)
         self.loss_test.append(elbo_test)
         # Plot final results
         if plot:
@@ -1631,7 +1660,7 @@ class VAE(VanillaVAE):
         with torch.no_grad():
             w_hard = F.one_hot(torch.argmax(self.decoder.logit_pw, 1), num_classes=2).T
             if mode == "test":
-                sample_idx = self.test_idx
+                sample_idx = self.validation_idx
             elif mode == "train":
                 sample_idx = self.train_idx
             else:
@@ -1659,7 +1688,7 @@ class VAE(VanillaVAE):
                                              self.graph_data.data.adj_t,
                                              lu_scale,
                                              ls_scale,
-                                             self.graph_data.data.edge_attr,
+                                             self.graph_data.edge_weight,
                                              u0,
                                              s0,
                                              t0,
@@ -1756,13 +1785,13 @@ class VAE(VanillaVAE):
             # Plot Time
             plot_time(t, Xembed, save=f"{path}/time-{testid}-velovae.png")
             cell_labels = np.array([self.label_dic_rev[x] for x in self.cell_labels])
-            cell_labels = cell_labels[self.test_idx] if test_mode else cell_labels[self.train_idx]
+            cell_labels = cell_labels[self.validation_idx] if test_mode else cell_labels[self.train_idx]
             # Plot u/s-t and phase portrait for each gene
             cell_idx = np.array(range(self.graph_data.N))
             if mode == "train":
                 cell_idx = self.train_idx
             elif mode == "test":
-                cell_idx = self.test_idx
+                cell_idx = self.validation_idx
             for i in range(len(gind)):
                 idx = gind[i]
                 u = self.graph_data.data.x[cell_idx, idx].detach().cpu().numpy()
@@ -1784,7 +1813,7 @@ class VAE(VanillaVAE):
                              gene_plot[i],
                              save=f"{path}/sig-{gene_plot[i]}-{testid}-bw.png",
                              sparsify=self.config['sparsify'])
-            plt.close()
+            plt.close('all')
 
         return elbo
 
@@ -1874,7 +1903,9 @@ class VAE(VanillaVAE):
             adata.layers[f"{key}_s1"] = self.graph_data.s1.detach().cpu().numpy()
 
         adata.uns[f"{key}_train_idx"] = self.train_idx
-        adata.uns[f"{key}_test_idx"] = self.test_idx
+        adata.uns[f"{key}_validation_idx"] = self.validation_idx
+        if self.test_idx is not None:
+            adata.uns[f"{key}_test_idx"] = self.test_idx
         adata.uns[f"{key}_run_time"] = self.timer
 
         rna_velocity_vae(adata,
