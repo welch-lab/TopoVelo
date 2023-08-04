@@ -1854,7 +1854,7 @@ def plot_time_grid(T,
             if M > 1:
                 ax[0, i].scatter(X_emb[::down_sample, 0],
                                  X_emb[::down_sample, 1],
-                                 s=2.0,
+                                 s=10.0,
                                  c=t[::down_sample],
                                  cmap='plasma',
                                  edgecolors='none')
@@ -1864,7 +1864,7 @@ def plot_time_grid(T,
             else:
                 ax[0].scatter(X_emb[::down_sample, 0],
                               X_emb[::down_sample, 1],
-                              s=2.0,
+                              s=10.0,
                               c=t[::down_sample],
                               cmap='plasma',
                               edgecolors='none')
@@ -1879,7 +1879,7 @@ def plot_time_grid(T,
                 if M > 1:
                     ax[1, i].scatter(X_emb[::down_sample, 0],
                                      X_emb[::down_sample, 1],
-                                     s=2.0,
+                                     s=10.0,
                                      c=var_t[::down_sample],
                                      cmap='Reds',
                                      edgecolors='none')
@@ -1892,7 +1892,7 @@ def plot_time_grid(T,
                 else:
                     ax[1].scatter(X_emb[::down_sample, 0],
                                   X_emb[::down_sample, 1],
-                                  s=2.0,
+                                  s=10.0,
                                   c=var_t[::down_sample],
                                   cmap='Reds',
                                   edgecolors='none')
@@ -1912,7 +1912,7 @@ def plot_time_grid(T,
             if M > 1:
                 ax[i].scatter(X_emb[::down_sample, 0],
                               X_emb[::down_sample, 1],
-                              s=2.0,
+                              s=10.0,
                               c=t[::down_sample],
                               cmap='plasma',
                               edgecolors='none')
@@ -1922,7 +1922,7 @@ def plot_time_grid(T,
             else:
                 ax.scatter(X_emb[::down_sample, 0],
                            X_emb[::down_sample, 1],
-                           s=2.0,
+                           s=10.0,
                            c=t[::down_sample],
                            cmap='plasma',
                            edgecolors='none')
