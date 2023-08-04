@@ -1629,6 +1629,38 @@ def velocity_consistency(adata, vkey, gene_mask=None):
     adata.obs[f'{vkey}_consistency'] = consistency_score
     return np.mean(consistency_score)
 
+
+def spatial_velocity_consistency(adata, vkey, graph, gene_mask=None):
+    """Velocity Consistency as reported in scVelo paper
+
+    Args:
+        adata (:class:`anndata.AnnData`):
+            Anndata object.
+        vkey (str):
+            key to the velocity matrix in adata.obsm.
+        graph (:class:`scipy.sparse_matrix`):
+            Spatial graph
+        gene_mask (:class:`numpy.ndarray`, optional):
+            Boolean array to filter out genes. Defaults to None.
+
+    Returns:
+        float: Average score over all cells.
+    """
+    # nbs = adata.uns['neighbors']['indices']
+    nbs = [np.where(graph[i] > 0)[0] for i in range(graph.shape[0])]
+
+    velocities = adata.layers[vkey]
+    nan_mask = ~np.isnan(velocities[0]) if gene_mask is None else gene_mask
+    velocities = velocities[:, nan_mask]
+
+    consistency_score = []
+    for ith, nbs_i in enumerate(nbs):
+        if len(nbs_i) < 1:
+            continue;
+        consistency_score.append(_pearson_corr(velocities[ith], velocities[nbs_i]).mean())
+    # adata.obs[f'{vkey}_consistency'] = consistency_score
+    return np.mean(consistency_score)
+
 ##########################################################################
 # End of Reference
 ##########################################################################

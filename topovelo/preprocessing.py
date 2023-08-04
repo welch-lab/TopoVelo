@@ -1,7 +1,9 @@
 import scanpy
 import numpy as np
+from scipy.sparse import block_diag
 from .scvelo_preprocessing import *
 from tqdm import tqdm
+from sklearn.neighbors import NearestNeighbors
 
 
 def count_peak_expression(adata, cluster_key="clusters"):
@@ -135,6 +137,7 @@ def rank_gene_selection(adata, cluster_key, **kwargs):
 def preprocess(adata,
                n_gene=1000,
                cluster_key="clusters",
+               spatial_key=None,
                tkey=None,
                selection_method="scv",
                min_count_per_cell=None,
@@ -151,10 +154,12 @@ def preprocess(adata,
                max_cells_u=None,
                npc=30,
                n_neighbors=30,
+               n_spatial_neighbors=8,
                genes_retain=None,
                perform_clustering=False,
                resolution=1.0,
                compute_umap=False,
+               divide_compartments=False,
                umap_min_dist=0.5,
                keep_raw=True,
                **kwargs):
@@ -179,6 +184,8 @@ def preprocess(adata,
         Number of principal components in PCA dimension reduction
     n_neighbors : int, optional
         Number of neighbors in KNN graph
+    n_spatial_neighbors : int, optional
+        Number of spatial neighbors in spatial KNN graph
     genes_retain : `numpy array` or string list, optional
         By setting genes_retain to a specific list of gene names
         preprocessing will pick these exact genes regardless of their counts and gene selection method.
@@ -248,6 +255,7 @@ def preprocess(adata,
             filter_and_normalize(adata,
                                  min_shared_counts=min_shared_counts,
                                  min_shared_cells=min_shared_cells,
+                                 min_counts=min_counts_s,
                                  min_counts_u=min_counts_u,
                                  n_top_genes=n_gene,
                                  retain_genes=genes_retain,
@@ -306,3 +314,24 @@ def preprocess(adata,
         if "X_umap" in adata.obsm:
             print("Warning: Overwriting existing UMAP coordinates.")
         scanpy.tl.umap(adata, min_dist=umap_min_dist)
+
+    # 6. Compute the spatial graph
+    if spatial_key is not None:
+        if not divide_compartments:
+            print('Perform spatial clustering.')
+            X_pos = adata.obsm[spatial_key]
+            nn = NearestNeighbors(n_neighbors=n_spatial_neighbors)
+            nn.fit(X_pos)
+            adata.obsp['spatial_graph'] = nn.kneighbors_graph()
+        else:
+            print('Divide compartments and perform spatial clustering.')
+            scanpy.tl.leiden(adata, key_added='compartment', resolution=resolution)
+            print(f"{len(np.unique(adata.obs['compartment']))} compartments detected.")
+            compartments = adata.obs['compartment'].to_numpy().astype(int)
+            blocks = []
+            for i in range(compartments.max()+1):
+                X_pos = adata.obsm[spatial_key][compartments == i]
+                nn = NearestNeighbors(n_neighbors=min(n_spatial_neighbors, len(X_pos)-1))
+                nn.fit(X_pos)
+                blocks.append(nn.kneighbors_graph().toarray())
+            adata.obsp['spatial_graph'] = block_diag(blocks).tocsr()
