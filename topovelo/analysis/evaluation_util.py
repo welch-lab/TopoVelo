@@ -1,10 +1,13 @@
 import numpy as np
 from scipy.stats import spearmanr, poisson, norm, mannwhitneyu
+from scipy.optimize import minimize
 from scipy.special import loggamma
+from scipy.spatial import Delaunay
 from sklearn.metrics.pairwise import pairwise_distances
-from ..model.model_util import pred_su_numpy, ode_numpy, ode_br_numpy, scv_pred, scv_pred_single
+from ..model.model_util import pred_su_numpy, ode_numpy, ode_br_numpy, scv_pred, scv_pred_single, triangle_area
 import hnswlib
 from sklearn.decomposition import PCA
+from sklearn.neighbors import NearestNeighbors
 from sklearn.metrics.pairwise import cosine_similarity
 import torch
 import torch.nn.functional as F
@@ -1665,6 +1668,174 @@ def spatial_velocity_consistency(adata, vkey, graph, gene_mask=None):
 # End of Reference
 ##########################################################################
 
+
+def use_spatial_knn(adata, spatial_key, n_neighbors=8):
+    X_pos = adata.obsm[spatial_key]
+    nn = NearestNeighbors(n_neighbors=n_neighbors)
+    nn.fit(X_pos)
+    adata.obsp['connectivities'] = nn.kneighbors_graph(mode='connectivity')
+    adata.obsp['distances'] = nn.kneighbors_graph(mode='distance')
+    return
+
+
+def f_logis(x, t, n):
+    return n[-1]/(1 + np.exp(-x[0]*t-x[1]))
+
+
+def _fit_growth_rate(num_cells, time_points):
+    def l2_loss(x, t, n):
+        return np.mean((f_logis(x, t, n) - n)**2)
+    out = minimize(l2_loss, np.array([0, 0]), args=(time_points, num_cells))
+    return out.x
+
+
+def _find_boundary_points(adata, spatial_key, q):
+    # Use Delaunay triangulation to find boundary points
+    P = adata.obsm[spatial_key]
+    T = Delaunay(P)
+    # Compute area of all triangles and remove outliers
+    area = []
+    for simplex in T.simplices:
+        area.append(triangle_area(P[simplex[0]], P[simplex[1]], P[simplex[2]]))
+    ub = np.quantile(area, q)
+    outliers = np.where(area > ub)[0]
+    for i in range(len(T.neighbors)):
+        for k in range(3):
+            if (T.neighbors[i][k] in outliers):
+                T.neighbors[i][k] = -1
+    # Find edges at the boundary
+    boundary = set()
+    for i in range(len(T.neighbors)):
+        for k in range(3):
+            if (T.neighbors[i][k] == -1):
+                nk1, nk2 = (k+1) % 3, (k+2) % 3
+                boundary.add(T.simplices[i][nk1])
+                boundary.add(T.simplices[i][nk2])
+    boundary = np.array(list(boundary))
+
+    # Filter outliers
+
+
+    # reorder the boundary points in a counter-clockwise order
+    xb_centered = P[boundary] - P[0]
+    theta = np.arctan(xb_centered[:, 1]/xb_centered[:, 0])\
+        + (-1)**(xb_centered[:, 1] < 0)*(xb_centered[:, 0] < 0)*np.pi
+    idx_sort = np.argsort(theta)
+    boundary = boundary[idx_sort]
+
+    return boundary
+
+
+def _est_area(x, grid_size):
+    H, xedges, yedges = np.histogram2d(x[:, 0], x[:, 1], grid_size)
+    dx = np.mean(np.diff(xedges))
+    dy = np.mean(np.diff(yedges))
+    return np.sum(H > 0) * dx * dy, dx * dy
+
+
+def _dist_weight(v):
+    mag_v = np.sqrt(v[:, 0]**2+v[:, 1]**2)
+    sigma = np.median(mag_v)
+    weight = np.exp(-mag_v/sigma)
+    weight = weight / np.sum(weight)
+    return weight
+
+
+def _find_max_k(arr, k):
+    out = [0, 0, 0]
+    vals = [-np.inf, -np.inf, -np.inf]
+    for i in range(len(arr)):
+        for j in range(k):
+            if arr[i] > vals[j]:
+                vals.insert(j, arr[i])
+                out.insert(j, i)
+                vals.pop()
+                out.pop()
+                break
+    return np.array(out).astype(int)
+
+
+def _nearest_boundary_point(boundary, x, v):
+    ps = np.zeros((len(x), 3)).astype(int)
+    for i in range(len(x)):
+        c = cosine_similarity(x[boundary]-x[i], v[i:i+1]).squeeze()
+        idx = np.argmax(c)
+        idx = np.array([idx, (idx-1) % len(boundary), (idx + 1)%len(boundary)])
+        ps[i] = boundary[idx]
+    return ps
+
+
+def pred_tissue_growth(adata,
+                       slice_key,
+                       time_points,
+                       spatial_key,
+                       vkey,
+                       time_pred=None,
+                       n_t=3,
+                       grid_size=100,
+                       q=0.95):
+    """Predicts shape of a tissue using spatial velocity
+
+    Args:
+        adata (:class:`anndata.AnnData`):
+            AnnData object.
+        slice_key (str):
+            Key in .obs for slice information in multiple time point integration.
+        time_points (`array like`):
+            List of time points.
+        spatial_key (str):
+            Key in .obsm for spatial coordinates.
+        vkey (str):
+            Key in .obsm for velocity embedding.
+    """
+    # Fit a cell number growth model
+    slices = np.unique(adata.obs[slice_key].to_numpy())
+    num_cells = np.array([np.sum(adata.obs[slice_key] == x) for x in slices])
+    k = _fit_growth_rate(num_cells, time_points)
+
+    new_boundary = []
+    for i, x in enumerate(slices):
+        cell_mask = adata.obs[slice_key].to_numpy() == x
+        X = adata.obsm[spatial_key][cell_mask]
+        V = adata.obsm[vkey][cell_mask]
+        # Get boundary points
+        boundary = _find_boundary_points(adata[cell_mask], spatial_key, q)
+
+        # Compute tissue area
+        area, ds = _est_area(X, grid_size)
+
+        # Get future time points
+        if time_pred is None:
+            if i < len(slices) - 1:
+                time_pred_ = np.linspace(time_points[i], time_points[i+1], n_t)
+            else:
+                time_pred_ = np.linspace(time_points[i], time_points[i]+np.mean(np.diff(time_points)), n_t)
+        else:
+            if i < len(slices) - 1:
+                idx = np.where((time_pred >= time_points[i]) & (time_pred < time_points[i+1]))
+            else:
+                idx = np.where(time_pred >= time_points[i])
+            time_pred_ = time_pred[idx]
+
+        # Future cell number
+        num_cells_pred = f_logis(k, time_pred_, num_cells)
+
+        # Distribute tissue growth
+        weight = _dist_weight(V)
+
+        # Simulate tissue growth
+        total_growth = (num_cells_pred - num_cells[i])/num_cells[i]*area
+        bs = _nearest_boundary_point(boundary, X, V)
+        delta_xy = X[bs[:, 0]] - X
+        delta_xy = delta_xy / (np.linalg.norm(delta_xy).reshape(-1, 1))
+
+        new_x = np.stack([boundary for j in range(len(total_growth))])
+        new_y = np.stack([boundary for j in range(len(total_growth))])
+        dx = np.sqrt(ds/delta_xy[:, 1]*delta_xy[:, 0])
+        dy = np.sqrt(ds/delta_xy[:, 0]*delta_xy[:, 1])
+        new_x += weight * (total_growth.reshape(-1, 1) * dx)
+        new_boundary.append(np.stack([new_x, new_y]))
+    return new_boundary
 
 # Cell Cycle Assignment based on scanpy
 # Reference: https://github.com/scverse/scanpy_usage/blob/master/180209_cell_cycle/cell_cycle.ipynb

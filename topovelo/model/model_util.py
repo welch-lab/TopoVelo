@@ -18,6 +18,8 @@ from scipy.linalg import svdvals
 ###################################################################################
 # Spatial time prior estimation based Delaunay triangulation
 ###################################################################################
+
+
 def triangle_area(p1, p2, p3):
     if p1.ndim == 2:
         return np.abs(p1[:, 0]*p2[:, 1]+p2[:, 0]*p3[:, 1]+p3[:, 0]*p1[:, 1]\
@@ -404,18 +406,15 @@ def init_gene(s, u, percent, fit_scaling=False, Ntype=None):
     return alpha, beta, gamma, t_latent, u0_, s0_, t_, scaling
 
 
-def init_params(data, percent, fit_offset=False, fit_scaling=True, eps=1e-3):
+def init_params(u, s, percent, fit_offset=False, fit_scaling=True, eps=1e-3):
     # Adopted from SCVELO
     # Use the steady-state model to estimate alpha, beta,
     # gamma and the latent time
-    # data: ncell x (2*ngene) tensor
     # percent: percentage limit to pick the data
     # Output: a ncellx4 2D array of parameters
 
-    ngene = data.shape[1]//2
-    u = data[:, :ngene]
-    s = data[:, ngene:]
-
+    ngene = u.shape[1]
+    
     params = np.ones((ngene, 4))  # four parameters: alpha, beta, gamma, scaling
     params[:, 0] = np.random.rand((ngene))*np.max(u, 0)
     params[:, 2] = np.clip(np.random.rand((ngene))*np.max(u, 0)/(np.max(s, 0)+1e-10), eps, None)

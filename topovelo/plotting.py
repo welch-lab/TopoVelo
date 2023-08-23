@@ -1379,7 +1379,8 @@ def plot_vel_axis(ax,
                       headlength=8.0,
                       color='k')
     else:
-        colors = get_colors(len(legends), color_map)
+        colors = (color_map if isinstance(color_map, np.ndarray) or isinstance(color_map, list)
+                  else get_colors(len(legends), color_map))
         for i in range(len(legends)):
             mask = labels == i
             t_type = t[mask]
@@ -1422,7 +1423,7 @@ def plot_vel_axis(ax,
                               headlength=8.0,
                               color=colors[i % len(colors)])
     ymin, ymax = ax.get_ylim()
-    ax.set_yticks([0, ymax])
+    ax.set_yticks([max(0, ymin)*0.95, ymax*1.1])
     return ax
 
 

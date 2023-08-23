@@ -121,6 +121,7 @@ class SCGraphData():
                  graph,
                  n_train,
                  device,
+                 batch=None, 
                  test_samples=None,
                  train_edge_weight=False,
                  seed=2022):
@@ -159,12 +160,17 @@ class SCGraphData():
                                         requires_grad=False)
         print(getsizeof(self.edge_weight)/(1024**2))
         """
+        self.batch = torch.tensor(batch, dtype=int, device=device) if batch is not None else None
         if train_edge_weight:
-            self.edge_weight = torch.zeros(self.N,
-                                           dtype=torch.float32,
-                                           requires_grad=False).to(device)
-            torch.manual_seed(2022)
-            torch.nn.init.normal_(self.edge_weight, mean=1.0, std=5e-2)
+            # self.edge_weight = torch.zeros(self.N,
+            #                                dtype=torch.float32,
+            #                                requires_grad=False).to(device)
+            # torch.manual_seed(2022)
+            # torch.nn.init.normal_(self.edge_weight, mean=1.0, std=5e-2)
+            self.edge_weight = torch.tensor(graph.data,
+                                            dtype=torch.float32,
+                                            device=device,
+                                            requires_grad=False)
         else:
             self.edge_weight = None
         np.random.seed(seed)
@@ -197,7 +203,7 @@ class SCGraphData():
                                          dtype=torch.int32,
                                          requires_grad=False,
                                          device=device)
-            self.n_test = len(train_valid_idx) - self.n_train
+            self.n_test = len(train_valid_idx) - n_train
         self.n_train = n_train
 
         self.u0 = None
