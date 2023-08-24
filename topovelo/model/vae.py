@@ -42,17 +42,22 @@ class encoder(nn.Module):
                  dim_cond=0,
                  n_hidden=500,
                  attention=True,
+                 n_head=5,
                  checkpoint=None):
         super(encoder, self).__init__()
+        self.dim_z = dim_z
+        self.dim_cond = dim_cond
+        self.n_hidden = n_hidden
+        self.n_head = n_head
         if attention:
-            self.conv1 = GATConv(Cin, n_hidden, 5)
-            self.fc_mu_t = nn.Linear(5*n_hidden+dim_cond, 1).float()
+            self.conv1 = GATConv(Cin, n_hidden, n_head)
+            self.fc_mu_t = nn.Linear(n_head*n_hidden+dim_cond, 1).float()
             self.spt1 = nn.Softplus().float()
-            self.fc_std_t = nn.Linear(5*n_hidden+dim_cond, 1).float()
+            self.fc_std_t = nn.Linear(n_head*n_hidden+dim_cond, 1).float()
             self.spt2 = nn.Softplus().float()
 
-            self.fc_mu_z = nn.Linear(5*n_hidden+dim_cond, dim_z).float()
-            self.fc_std_z = nn.Linear(5*n_hidden+dim_cond, dim_z).float()
+            self.fc_mu_z = nn.Linear(n_head*n_hidden+dim_cond, dim_z).float()
+            self.fc_std_z = nn.Linear(n_head*n_hidden+dim_cond, dim_z).float()
             self.spt3 = nn.Softplus().float()
         else:
             self.conv1 = GCNConv(Cin, n_hidden)
@@ -73,6 +78,8 @@ class encoder(nn.Module):
                 nn.init.xavier_uniform_(m.lin.weight, 0.05)
                 nn.init.constant_(m.bias, 0)
             else:
+                nn.init.xavier_uniform_(m.lin_src.weight, 0.05)
+                nn.init.xavier_uniform_(m.lin_dst.weight, 0.05)
                 nn.init.xavier_uniform_(m.att_src, 0.05)
                 nn.init.xavier_uniform_(m.att_dst, 0.05)
                 nn.init.constant_(m.bias, 0)
@@ -80,7 +87,7 @@ class encoder(nn.Module):
                   self.fc_std_t,
                   self.fc_mu_z,
                   self.fc_std_z]:
-            nn.init.xavier_uniform_(m.weight, 0.05)
+            nn.init.xavier_uniform_(m.weight)
             nn.init.constant_(m.bias, 0)
 
     def forward(self, data_in, edge_index, edge_weight=None, condition=None):
@@ -145,11 +152,15 @@ class GraphDecoder(nn.Module):
                  dim_cond=0,
                  n_hidden=500,
                  attention=True,
+                 n_head=5,
                  checkpoint=None):
         super(GraphDecoder, self).__init__()
+        self.dim_out = dim_out
+        self.dim_cond = dim_cond
+        self.n_head = 5
         if attention:
-            self.conv1 = GATConv(Cin, n_hidden, 5)
-            self.fc_out = nn.Linear(5*n_hidden+dim_cond, dim_out).float()
+            self.conv1 = GATConv(Cin, n_hidden, n_head)
+            self.fc_out = nn.Linear(n_head*n_hidden+dim_cond, dim_out).float()
             self.sigm = nn.Sigmoid().float()
         else:
             self.conv1 = GCNConv(Cin, n_hidden)
@@ -164,10 +175,12 @@ class GraphDecoder(nn.Module):
                 nn.init.xavier_uniform_(m.lin.weight, 0.05)
                 nn.init.constant_(m.bias, 0)
             else:
+                nn.init.xavier_uniform_(m.lin_src.weight, 0.05)
+                nn.init.xavier_uniform_(m.lin_dst.weight, 0.05)
                 nn.init.xavier_uniform_(m.att_src, 0.05)
                 nn.init.xavier_uniform_(m.att_dst, 0.05)
                 nn.init.constant_(m.bias, 0)
-        nn.init.xavier_uniform_(self.fc_out.weight, 0.05)
+        nn.init.xavier_uniform_(self.fc_out.weight)
         nn.init.constant_(self.fc_out.bias, 0)
 
     def forward(self, data_in, edge_index, edge_weight=None, condition=None):
@@ -190,6 +203,7 @@ class decoder(nn.Module):
                  discrete=False,
                  graph_decoder=False,
                  attention=False,
+                 n_head=5,
                  dim_cond=0,
                  batch_idx=None,
                  ref_batch=None,
@@ -222,19 +236,21 @@ class decoder(nn.Module):
         self.init_method = init_method
         self.init_key = init_key
         self.checkpoint = checkpoint
-        self.construct_nn(adata, dim_z, dim_cond, N1, N2, p, **kwargs)
+        self.construct_nn(adata, dim_z, dim_cond, N1, N2, p, n_head, **kwargs)
 
-    def construct_nn(self, adata, dim_z, dim_cond, N1, N2, p, **kwargs):
+    def construct_nn(self, adata, dim_z, dim_cond, N1, N2, p, n_head, **kwargs):
         self.set_shape(self.n_gene, dim_cond)
         if self.graph_decoder:
             self.net_rho = GraphDecoder(dim_z,
                                         self.n_gene,
                                         n_hidden=N2,
-                                        attention=self.attention).to(self.device)
+                                        attention=self.attention,
+                                        n_head=n_head).to(self.device)
             self.net_rho2 = GraphDecoder(dim_z,
                                          self.n_gene,
                                          n_hidden=N2,
-                                         attention=self.attention).to(self.device)
+                                         attention=self.attention,
+                                         n_head=n_head).to(self.device)
         else:
             self.net_rho = MLPDecoder(dim_z, self.n_gene, hidden_size=(N1, N2)).to(self.device)
             self.net_rho2 = MLPDecoder(dim_z, self.n_gene, hidden_size=(N1, N2)).to(self.device)
@@ -592,6 +608,7 @@ class VAE(VanillaVAE):
                  discrete=False,
                  graph_decoder=False,
                  attention=False,
+                 n_head=5,
                  batch_key=None,
                  ref_batch=None,
                  init_method="steady",
@@ -721,7 +738,7 @@ class VAE(VanillaVAE):
             "train_test_split": 0.7,
             "neg_slope": 0.0,
             "train_ton": (init_method != 'tprior'),
-            "train_edge_weight": False,
+            "enable_edge_weight": False,
             "weight_sample": False,
             "vel_continuity_loss": False,
 
@@ -755,6 +772,7 @@ class VAE(VanillaVAE):
                                discrete=discrete,
                                graph_decoder=graph_decoder,
                                attention=attention,
+                               n_head=n_head,
                                dim_cond=self.n_batch,
                                batch_idx=self.batch_,
                                ref_batch=self.ref_batch,
@@ -773,6 +791,7 @@ class VAE(VanillaVAE):
                                    dim_cond,
                                    hidden_size[0],
                                    attention=attention,
+                                   n_head=n_head,
                                    checkpoint=checkpoints[0]).to(device)
         except IndexError:
             print('Please provide two dimensions!')
@@ -1569,7 +1588,7 @@ class VAE(VanillaVAE):
                                       self.device,
                                       self.batch_,
                                       test_samples,
-                                      self.config['train_edge_weight'],
+                                      self.config['enable_edge_weight'],
                                       random_state)
 
         self.train_idx = self.graph_data.train_idx.cpu().numpy()
@@ -1595,8 +1614,7 @@ class VAE(VanillaVAE):
                      self.decoder.logit_pw]
         if self.config['train_ton']:
             param_ode.append(self.decoder.ton)
-        if self.config['train_edge_weight']:
-            self.graph_data.edge_weight.requires_grad = True
+        if self.config['enable_edge_weight']:
             param_nn.append(self.graph_data.edge_weight)
 
         optimizer = torch.optim.Adam(param_nn, lr=self.config["learning_rate"], weight_decay=self.config["lambda"])
@@ -1631,6 +1649,9 @@ class VAE(VanillaVAE):
 
             if stop_training:
                 print(f"*********       Stage 1: Early Stop Triggered at epoch {epoch+1}.       *********")
+                print(f"[**   Train ELBO = {self.loss_train[-1]:.3f},\t"
+                      f"Test ELBO = {self.loss_test[-1]:.3f},\t"
+                      f"Total Time = {convert_time(time.time()-start)} **]")
                 break
 
         count_epoch = epoch+1
@@ -1930,6 +1951,32 @@ class VAE(VanillaVAE):
                                             dtype=torch.float,
                                             device=self.device))
         return
+
+    def get_enc_att(self, data_in, edge_index):
+        gatconv = self.encoder.conv1
+        if not isinstance(gatconv, GATConv):
+            print("Invalid graph layer! Please use GATConv instead.")
+            return None
+        with torch.no_grad():
+            _, att = gatconv(data_in, edge_index, return_attention_weights=True)
+        row, col, val = att.cpu().csr()
+        row = row.numpy()
+        col = col.numpy()
+        val = val.numpy()
+        return row, col, val
+    
+    def get_dec_att(self, data_in, edge_index):
+        gatconv = self.decoder.net_rho2.conv1
+        if not isinstance(gatconv, GATConv):
+            print("Invalid graph layer! Please use GATConv instead.")
+            return None
+        with torch.no_grad():
+            _, att = gatconv(data_in, edge_index, return_attention_weights=True)
+        row, col, val = att.cpu().csr()
+        row = row.numpy()
+        col = col.numpy()
+        val = val.numpy()
+        return row, col, val
 
     def save_anndata(self, adata, key, file_path, file_name=None):
         """Save the ODE parameters and cell time to the anndata object and write it to disk.

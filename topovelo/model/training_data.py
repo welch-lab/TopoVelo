@@ -1,6 +1,7 @@
 import numpy as np
 import scipy as sp
 import torch
+import torch.nn as nn
 from torch.utils.data import Dataset
 from torch_geometric.data import Data
 import torch_geometric.transforms as T
@@ -123,7 +124,7 @@ class SCGraphData():
                  device,
                  batch=None, 
                  test_samples=None,
-                 train_edge_weight=False,
+                 enable_edge_weight=False,
                  seed=2022):
         """Constructor
 
@@ -153,20 +154,8 @@ class SCGraphData():
                                             y=torch.tensor(labels,
                                                            dtype=torch.int8,
                                                            requires_grad=False))).to(device)
-        """
-        self.edge_weight = torch.tensor(graph.data,
-                                        dtype=torch.float32,
-                                        device=device,
-                                        requires_grad=False)
-        print(getsizeof(self.edge_weight)/(1024**2))
-        """
         self.batch = torch.tensor(batch, dtype=int, device=device) if batch is not None else None
-        if train_edge_weight:
-            # self.edge_weight = torch.zeros(self.N,
-            #                                dtype=torch.float32,
-            #                                requires_grad=False).to(device)
-            # torch.manual_seed(2022)
-            # torch.nn.init.normal_(self.edge_weight, mean=1.0, std=5e-2)
+        if enable_edge_weight:
             self.edge_weight = torch.tensor(graph.data,
                                             dtype=torch.float32,
                                             device=device,
