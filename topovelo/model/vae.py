@@ -43,12 +43,14 @@ class encoder(nn.Module):
                  n_hidden=500,
                  attention=True,
                  n_head=5,
+                 xavier_gain=1,
                  checkpoint=None):
         super(encoder, self).__init__()
         self.dim_z = dim_z
         self.dim_cond = dim_cond
         self.n_hidden = n_hidden
         self.n_head = n_head
+        self.xavier_gain = xavier_gain
         if attention:
             self.conv1 = GATConv(Cin, n_hidden, n_head)
             self.fc_mu_t = nn.Linear(n_head*n_hidden+dim_cond, 1).float()
@@ -75,13 +77,13 @@ class encoder(nn.Module):
     def init_weights(self):
         for m in [self.conv1]:
             if isinstance(m, GCNConv):
-                nn.init.xavier_uniform_(m.lin.weight, 0.05)
+                nn.init.xavier_uniform_(m.lin.weight, self.xavier_gain)
                 nn.init.constant_(m.bias, 0)
             else:
-                nn.init.xavier_uniform_(m.lin_src.weight, 0.05)
-                nn.init.xavier_uniform_(m.lin_dst.weight, 0.05)
-                nn.init.xavier_uniform_(m.att_src, 0.05)
-                nn.init.xavier_uniform_(m.att_dst, 0.05)
+                nn.init.xavier_uniform_(m.lin_src.weight, self.xavier_gain)
+                nn.init.xavier_uniform_(m.lin_dst.weight, self.xavier_gain)
+                nn.init.xavier_uniform_(m.att_src, self.xavier_gain)
+                nn.init.xavier_uniform_(m.att_dst, self.xavier_gain)
                 nn.init.constant_(m.bias, 0)
         for m in [self.fc_mu_t,
                   self.fc_std_t,
@@ -110,8 +112,10 @@ class MLPDecoder(nn.Module):
                  dim_out,
                  dim_cond=0,
                  hidden_size=(250, 500),
+                 xavier_gain=1.0,
                  checkpoint=None):
         super(MLPDecoder, self).__init__()
+        self.xavier_gain = xavier_gain
         N1, N2 = hidden_size
         self.fc1 = nn.Linear(Cin+dim_cond, N1)
         self.bn1 = nn.BatchNorm1d(num_features=N1)
@@ -131,7 +135,7 @@ class MLPDecoder(nn.Module):
     def init_weights(self):
         for m in self.net_rho.modules():
             if isinstance(m, nn.Linear):
-                nn.init.xavier_uniform_(m.weight)
+                nn.init.xavier_uniform_(m.weight, self.xavier_gain)
                 nn.init.constant_(m.bias, 0.0)
             elif isinstance(m, nn.BatchNorm1d):
                 nn.init.constant_(m.weight, 1)
@@ -153,11 +157,13 @@ class GraphDecoder(nn.Module):
                  n_hidden=500,
                  attention=True,
                  n_head=5,
+                 xavier_gain=1.0,
                  checkpoint=None):
         super(GraphDecoder, self).__init__()
         self.dim_out = dim_out
         self.dim_cond = dim_cond
         self.n_head = 5
+        self.xavier_gain = xavier_gain
         if attention:
             self.conv1 = GATConv(Cin, n_hidden, n_head)
             self.fc_out = nn.Linear(n_head*n_hidden+dim_cond, dim_out).float()
@@ -172,13 +178,13 @@ class GraphDecoder(nn.Module):
     def init_weights(self):
         for m in [self.conv1]:
             if isinstance(m, GCNConv):
-                nn.init.xavier_uniform_(m.lin.weight, 0.05)
+                nn.init.xavier_uniform_(m.lin.weight, self.xavier_gain)
                 nn.init.constant_(m.bias, 0)
             else:
-                nn.init.xavier_uniform_(m.lin_src.weight, 0.05)
-                nn.init.xavier_uniform_(m.lin_dst.weight, 0.05)
-                nn.init.xavier_uniform_(m.att_src, 0.05)
-                nn.init.xavier_uniform_(m.att_dst, 0.05)
+                nn.init.xavier_uniform_(m.lin_src.weight, self.xavier_gain)
+                nn.init.xavier_uniform_(m.lin_dst.weight, self.xavier_gain)
+                nn.init.xavier_uniform_(m.att_src, self.xavier_gain)
+                nn.init.xavier_uniform_(m.att_dst, self.xavier_gain)
                 nn.init.constant_(m.bias, 0)
         nn.init.xavier_uniform_(self.fc_out.weight)
         nn.init.constant_(self.fc_out.bias, 0)
@@ -212,6 +218,7 @@ class decoder(nn.Module):
                  p=98,
                  init_ton_zero=False,
                  filter_gene=False,
+                 xavier_gain=1.0,
                  device=torch.device('cpu'),
                  init_method="steady",
                  init_key=None,
@@ -236,21 +243,23 @@ class decoder(nn.Module):
         self.init_method = init_method
         self.init_key = init_key
         self.checkpoint = checkpoint
-        self.construct_nn(adata, dim_z, dim_cond, N1, N2, p, n_head, **kwargs)
+        self.construct_nn(adata, dim_z, dim_cond, N1, N2, p, n_head, xavier_gain, **kwargs)
 
-    def construct_nn(self, adata, dim_z, dim_cond, N1, N2, p, n_head, **kwargs):
+    def construct_nn(self, adata, dim_z, dim_cond, N1, N2, p, n_head, xavier_gain, **kwargs):
         self.set_shape(self.n_gene, dim_cond)
         if self.graph_decoder:
             self.net_rho = GraphDecoder(dim_z,
                                         self.n_gene,
                                         n_hidden=N2,
                                         attention=self.attention,
-                                        n_head=n_head).to(self.device)
+                                        n_head=n_head,
+                                        xavier_gain=xavier_gain).to(self.device)
             self.net_rho2 = GraphDecoder(dim_z,
                                          self.n_gene,
                                          n_hidden=N2,
                                          attention=self.attention,
-                                         n_head=n_head).to(self.device)
+                                         n_head=n_head,
+                                         xavier_gain=xavier_gain).to(self.device)
         else:
             self.net_rho = MLPDecoder(dim_z, self.n_gene, hidden_size=(N1, N2)).to(self.device)
             self.net_rho2 = MLPDecoder(dim_z, self.n_gene, hidden_size=(N1, N2)).to(self.device)
@@ -409,8 +418,8 @@ class decoder(nn.Module):
             self.ton = nn.Parameter(torch.zeros(G, device=self.device))
         else:
             self.ton = nn.Parameter(torch.tensor(ton+1e-10, device=self.device))
-        self.register_buffer('sigma_u', torch.tensor(sigma_u, device=self.device))
-        self.register_buffer('sigma_s', torch.tensor(sigma_s, device=self.device))
+        self.register_buffer('sigma_u', torch.tensor(np.log(sigma_u), device=self.device))
+        self.register_buffer('sigma_s', torch.tensor(np.log(sigma_s), device=self.device))
         self.register_buffer('zero_vec', torch.zeros_like(self.u0, device=self.device))
         if self.cvae:
             self.register_buffer('one_mat', torch.ones_like(self.scaling, device=self.device))
@@ -618,6 +627,7 @@ class VAE(VanillaVAE):
                  filter_gene=False,
                  count_distribution="Poisson",
                  std_z_prior=0.01,
+                 xavier_gain=1.0,
                  checkpoints=[None, None],
                  rate_prior={
                      'alpha': (0.0, 1.0),
@@ -778,6 +788,7 @@ class VAE(VanillaVAE):
                                ref_batch=self.ref_batch,
                                init_ton_zero=init_ton_zero,
                                filter_gene=filter_gene,
+                               xavier_gain=xavier_gain,
                                device=self.device,
                                init_method=init_method,
                                init_key=init_key,
@@ -792,6 +803,7 @@ class VAE(VanillaVAE):
                                    hidden_size[0],
                                    attention=attention,
                                    n_head=n_head,
+                                   xavier_gain=xavier_gain,
                                    checkpoint=checkpoints[0]).to(device)
         except IndexError:
             print('Please provide two dimensions!')
@@ -1649,9 +1661,10 @@ class VAE(VanillaVAE):
 
             if stop_training:
                 print(f"*********       Stage 1: Early Stop Triggered at epoch {epoch+1}.       *********")
-                print(f"[**   Train ELBO = {self.loss_train[-1]:.3f},\t"
-                      f"Test ELBO = {self.loss_test[-1]:.3f},\t"
-                      f"Total Time = {convert_time(time.time()-start)} **]")
+                print(f"Summary: \n"
+                      f"Train ELBO = {-self.loss_train[-1]:.3f}\n"
+                      f"Test ELBO = {self.loss_test[-1]:.3f}\n"
+                      f"Total Time = {convert_time(time.time()-start)}\n")
                 break
 
         count_epoch = epoch+1
@@ -1714,6 +1727,10 @@ class VAE(VanillaVAE):
                     print(f"*********       "
                           f"Round {r+1}: Early Stop Triggered at epoch {epoch+count_epoch+1}."
                           f"       *********")
+                    print(f"Summary: \n"
+                          f"Train ELBO = {-self.loss_train[-1]:.3f}\n"
+                          f"Test ELBO = {self.loss_test[-1]:.3f}\n"
+                          f"Total Time = {convert_time(time.time()-start)}\n")
                     break
             count_epoch += (epoch+1)
             if not self.is_discrete:
