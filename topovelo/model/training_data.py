@@ -120,9 +120,10 @@ class SCGraphData():
                  data,
                  labels,
                  graph,
+                 xy,
                  n_train,
                  device,
-                 batch=None, 
+                 batch=None,
                  test_samples=None,
                  enable_edge_weight=False,
                  seed=2022):
@@ -154,6 +155,12 @@ class SCGraphData():
                                             y=torch.tensor(labels,
                                                            dtype=torch.int8,
                                                            requires_grad=False))).to(device)
+        # Normalize spatial coordinates
+        xy_norm = (xy - np.min(xy, 0))/(np.max(xy, 0) - np.min(xy, 0))
+        self.xy_scale = torch.tensor(np.max(xy, 0) - np.min(xy, 0), device=device)
+        self.xy = torch.tensor(xy_norm, dtype=torch.float32, device=device)
+        
+        # Batch information
         self.batch = torch.tensor(batch, dtype=int, device=device) if batch is not None else None
         if enable_edge_weight:
             self.edge_weight = torch.tensor(graph.data,
