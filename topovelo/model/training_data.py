@@ -157,7 +157,7 @@ class SCGraphData():
                                                            requires_grad=False))).to(device)
         # Normalize spatial coordinates
         xy_norm = (xy - np.min(xy, 0))/(np.max(xy, 0) - np.min(xy, 0))
-        self.xy_scale = torch.tensor(np.max(xy, 0) - np.min(xy, 0), device=device)
+        # self.xy_scale = torch.tensor(np.max(xy, 0) - np.min(xy, 0), device=device)
         self.xy = torch.tensor(xy_norm, dtype=torch.float32, device=device)
         
         # Batch information

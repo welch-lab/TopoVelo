@@ -294,13 +294,12 @@ class decoder(nn.Module):
         else:
             self.net_rho = MLPDecoder(dim_z, self.n_gene, dim_cond, hidden_size=(N1, N2)).to(self.device)
             self.net_rho2 = MLPDecoder(dim_z, self.n_gene, dim_cond, hidden_size=(N1, N2)).to(self.device)
-        
         self.net_coord = GraphDecoder(dim_z+dim_cond+1,
                                       2,
                                       n_hidden=N2,
                                       attention=self.attention,
                                       n_head=n_head,
-                                      xavier_gain=xavier_gain,
+                                      xavier_gain=1.0,
                                       enable_sigmoid=True).to(self.device)
 
         if self.checkpoint is not None:
@@ -533,8 +532,7 @@ class decoder(nn.Module):
         beta = self.get_param_1d('beta', condition, sample=sample)
         gamma = self.get_param_1d('gamma', condition, sample=sample)
         scaling = self.get_param_1d('scaling', condition, sample=sample)
-        if condition is not None:
-            return alpha, beta.unsqueeze(1), gamma.unsqueeze(1), scaling.unsqueeze(1)
+        
         return alpha, beta, gamma, scaling
 
     def _clip_rate(self, rate, max_val):
@@ -566,9 +564,13 @@ class decoder(nn.Module):
                     edge_weight=None,
                     condition=None):
         if condition is None:
-            coord = self.net_coord(torch.cat((z, t), 1), edge_index, edge_weight)
+            coord = (self.net_coord(torch.cat((z, t), 1), edge_index, edge_weight)
+                     if isinstance(self.net_coord, GraphDecoder) else
+                     self.net_coord(torch.cat((z, t), 1)))
         else:
-            coord = self.net_coord(torch.cat((z, t, condition), 1), edge_index, edge_weight)
+            coord = (self.net_coord(torch.cat((z, t, condition), 1), edge_index, edge_weight)
+                     if isinstance(self.net_coord, GraphDecoder) else
+                     self.net_coord(torch.cat((z, t, condition), 1)))
         return coord
 
     def _solve_ode(self,
@@ -584,6 +586,36 @@ class decoder(nn.Module):
                    return_vel=False,
                    detach=True,
                    neg_slope=0.0):
+        """Evaluate ODE solution, compatible with 2 stages of TopoVelo
+        as well as batch correction
+
+        Args:
+            t (:class:`torch.tensor`): Time
+            alpha (:class:`torch.tensor`):
+                Cellwise transcription rate, (N, G)
+            beta (:class:`torch.tensor`):
+                Splicing rate, (G)
+            gamma (:class:`torch.tensor`):
+                Degradation rate, (G)
+            scaling (:class:`torch.tensor`):
+            u0 (:class:`torch.tensor`, optional):
+                Initial condition of u in stage 2, (N, G). Defaults to None.
+            s0 (:class:`torch.tensor`, optional):
+                Initial condition of s in stage 2. Defaults to None.
+            t0 (:class:`torch.tensor`, optional):
+                Initial time in stage 2. Defaults to None.
+            condition (:class:`torch.tensor`, optional):
+                Batch information, (N, num batch). Defaults to None.
+            return_vel (bool, optional):
+                Whether to return velocity. Defaults to False.
+            detach (bool, optional):
+                Whether to return detached tensors. Defaults to True.
+            neg_slope (float, optional):
+                Leaky ReLU parameter used for time clipping. Defaults to 0.0.
+
+        Returns:
+            Predicted u, s and velocity
+        """
         if u0 is None or s0 is None or t0 is None:
             t0 = self.get_param_1d('ton', condition, sample=False, detach=detach)
             u0 = torch.stack([torch.zeros(self.u0.shape, device=alpha.device, dtype=float),
@@ -592,6 +624,10 @@ class decoder(nn.Module):
                               self.get_param_1d('s0', condition, sample=False, detach=detach)])
             alpha = torch.stack([alpha,
                                  torch.zeros(alpha.shape, device=alpha.device, dtype=float)], 1)
+            if condition is not None:
+                beta = beta.unsqueeze(1)
+                gamma = gamma.unsqueeze(1)
+                scaling = scaling.unsqueeze(1)
             tau = torch.stack([F.leaky_relu(t-t0, neg_slope) for i in range(2)], 1)
             uhat, shat = pred_su(tau, u0, s0, alpha, beta, gamma)
         else:
@@ -624,6 +660,10 @@ class decoder(nn.Module):
             rho = rho[batch_sample]
         condition_batch = None if condition is None else condition[batch_sample]
         alpha, beta, gamma, scaling = self._sample_ode_param(condition_batch, sample=not eval_mode)
+        if condition is not None:
+            beta = beta.unsqueeze(1)
+            gamma = gamma.unsqueeze(1)
+            scaling = scaling.unsqueeze(1)
         # tensor shape (n_cell, n_basis, n_gene)
         alpha = torch.stack([alpha*rho,
                              torch.zeros(rho.shape, device=rho.device, dtype=float)], 1)
@@ -631,7 +671,6 @@ class decoder(nn.Module):
                           self.u0.exp()])
         s0 = torch.stack([torch.zeros(self.u0.shape, device=rho.device, dtype=float),
                           self.s0.exp()])
-        
         if batch_sample is not None:
             tau = torch.stack([F.leaky_relu(t[batch_sample] - self.ton.exp(), neg_slope) for i in range(2)], 1)
         else:
@@ -1305,9 +1344,9 @@ class VAE(VanillaVAE):
                         break
                 if condition is not None:
                     alpha = self.decoder.get_param_1d('alpha', condition[batch_idx], sample=False, detach=True)
-                    beta = self.decoder.get_param_1d('beta', condition[batch_idx], sample=False, detach=True).unsqueeze(1)
-                    gamma = self.decoder.get_param_1d('gamma', condition[batch_idx], sample=False, detach=True).unsqueeze(1)
-                    scaling = self.decoder.get_param_1d('scaling', condition[batch_idx], sample=False, detach=True).unsqueeze(1)
+                    beta = self.decoder.get_param_1d('beta', condition[batch_idx], sample=False, detach=True)
+                    gamma = self.decoder.get_param_1d('gamma', condition[batch_idx], sample=False, detach=True)
+                    scaling = self.decoder.get_param_1d('scaling', condition[batch_idx], sample=False, detach=True)
                 _u0 = None if u0 is None else u0[batch_idx]
                 _s0 = None if s0 is None else s0[batch_idx]
                 _t0 = None if t0 is None else t0[batch_idx]
@@ -1562,7 +1601,7 @@ class VAE(VanillaVAE):
         err_rec = torch.mean(torch.sum(logp, 1))
         err_xy = torch.mean(torch.sum(((xy-xy_hat)/self.config['sigma_pos']).pow(2), 1))
         
-        return - err_rec + kl_term + err_xy
+        return [- err_rec, kl_term, err_xy]
 
     def _kl_poisson(self, lamb_1, lamb_2):
         return lamb_1 * (torch.log(lamb_1) - torch.log(lamb_2)) + lamb_2 - lamb_1
@@ -1606,7 +1645,7 @@ class VAE(VanillaVAE):
         err_rec = torch.mean(logp.sum(1))
         err_xy = torch.mean(torch.sum(((xy-xy_hat)/self.config['sigma_pos']).pow(2), 1))
 
-        return - err_rec + kl_term + err_xy
+        return [- err_rec, kl_term, err_xy]
 
     def _kl_nb(self, m1, m2, p):
         r1 = m1 * (1 - p) / p
@@ -1647,7 +1686,7 @@ class VAE(VanillaVAE):
         err_rec = torch.mean(torch.sum(logp, 1))
         err_xy = torch.mean(torch.sum(((xy-xy_hat)/self.config['sigma_pos']).pow(2), 1))
 
-        return - err_rec + kl_term + err_xy
+        return [- err_rec, kl_term, err_xy]
 
     def train_epoch(self, optimizer, optimizer2=None):
         ##########################################################################
@@ -1690,7 +1729,7 @@ class VAE(VanillaVAE):
                                       self.counter,
                                       True)
                 if len(self.loss_test) > 0:  # update the number of epochs with dropping/converging ELBO
-                    if elbo_test - self.loss_test[-1] <= self.config["early_stop_thred"]:
+                    if np.sum(elbo_test) - np.sum(self.loss_test[-1]) <= self.config["early_stop_thred"]:
                         self.n_drop = self.n_drop+1
                     else:
                         self.n_drop = 0
@@ -1703,17 +1742,17 @@ class VAE(VanillaVAE):
             optimizer.zero_grad()
             if optimizer2 is not None:
                 optimizer2.zero_grad()
-            u0 = self.graph_data.u0
-            s0 = self.graph_data.s0
-            t0 = self.graph_data.t0
-            u1 = self.graph_data.u1
-            s1 = self.graph_data.s1
-            t1 = self.graph_data.t1
 
-            if u0 is not None:
-                u0, s0, t0 = u0[batch_sample], s0[batch_sample], t0[batch_sample]
-            if u1 is not None:
-                u1, s1, t1 = u1[batch_sample], s1[batch_sample], t1[batch_sample]
+            if self.graph_data.u0 is not None:
+                u0, s0 = self.graph_data.u0[batch_sample], self.graph_data.s0[batch_sample]
+                t0 = self.graph_data.t0[batch_sample]
+            else:
+                u0, s0, t0 = None, None, None
+            if self.graph_data.u1 is not None:
+                u1, s1, t1 = self.graph_data.u1[batch_sample], self.graph_data.s1[batch_sample]
+                t1 = self.graph_data.t1[batch_sample]
+            else:
+                u1, s1, t1 = None, None, None
             lu_scale = self.lu_scale[batch_sample].exp()
             ls_scale = self.ls_scale[batch_sample].exp()
 
@@ -1735,7 +1774,6 @@ class VAE(VanillaVAE):
                                           u0, s0,
                                           t0, t1,
                                           condition)
-            
             if uhat.ndim == 3:
                 lu_scale = lu_scale.unsqueeze(-1)
                 ls_scale = ls_scale.unsqueeze(-1)
@@ -1744,21 +1782,21 @@ class VAE(VanillaVAE):
                 shat_fw = uhat_fw[batch_sample]*ls_scale[batch_sample]
                 u1 = u1[batch_sample]
                 s1 = s1[batch_sample]
-            
-            loss = self.vae_risk((mu_tx, std_tx),
-                                 self.p_t[:, batch_sample, :],
-                                 (mu_zx, std_zx),
-                                 self.p_z[:, batch_sample, :],
-                                 self.graph_data.data.x[batch_sample][:, :G],
-                                 self.graph_data.data.x[batch_sample][:, G:],
-                                 uhat*lu_scale,
-                                 shat*ls_scale,
-                                 xy,
-                                 xy_hat[batch_sample],
-                                 uhat_fw, shat_fw,
-                                 u1, s1,
-                                 None)
-            
+            loss_terms = self.vae_risk((mu_tx, std_tx),
+                                       self.p_t[:, batch_sample, :],
+                                       (mu_zx, std_zx),
+                                       self.p_z[:, batch_sample, :],
+                                       self.graph_data.data.x[batch_sample][:, :G],
+                                       self.graph_data.data.x[batch_sample][:, G:],
+                                       uhat*lu_scale,
+                                       shat*ls_scale,
+                                       xy,
+                                       xy_hat[batch_sample],
+                                       uhat_fw, shat_fw,
+                                       u1, s1,
+                                       None)
+            loss = loss_terms[0] + loss_terms[1] + loss_terms[2]
+
             # Add velocity regularization
             if self.use_knn and self.config["reg_v"] > 0:
                 scaling = self.decoder.get_param_1d('scaling', condition, sample=False, detach=True)
@@ -1768,7 +1806,7 @@ class VAE(VanillaVAE):
                     loss = loss - self.config["reg_v"]\
                         * (self.loss_vel(uhat/scaling, uhat_fw/scaling, vu_fw) + self.loss_vel(shat, shat_fw, vs_fw))
             loss.backward()
-            
+
             # gradient clipping
             torch.nn.utils.clip_grad_value_(self.encoder.parameters(), GRAD_MAX)
             torch.nn.utils.clip_grad_value_(self.decoder.parameters(), GRAD_MAX)
@@ -1782,7 +1820,7 @@ class VAE(VanillaVAE):
                  uhat_fw, shat_fw,
                  vu, vs,
                  vu_fw, vs_fw)
-            self.loss_train.append(loss.detach().cpu().item())
+            self.loss_train.append([loss_terms[i].detach().cpu().item() for i in range(len(loss_terms))])
             self.counter = self.counter + 1
 
         return False
@@ -1854,6 +1892,7 @@ class VAE(VanillaVAE):
                                 None,
                                 None,
                                 forward=True)
+        
         self.graph_data.u0 = torch.tensor(u0, dtype=torch.float32, device=self.device)
         self.graph_data.s0 = torch.tensor(s0, dtype=torch.float32, device=self.device)
         self.graph_data.t0 = torch.tensor(t0.reshape(-1, 1), dtype=torch.float32, device=self.device)
@@ -1867,6 +1906,7 @@ class VAE(VanillaVAE):
             self.u1 = u1
             self.s1 = s1
             self.t1 = t1.reshape(-1, 1)
+        
 
     def _set_lr(self, p):
         if self.is_discrete:
@@ -1880,8 +1920,7 @@ class VAE(VanillaVAE):
     
     def _set_sigma_pos(self, X_spatial):
         if self.config['sigma_pos'] is None:
-            self.config['sigma_pos'] = np.sqrt(np.sum((np.max(X_spatial, 0) - np.min(X_spatial, 0))**2))\
-                /len(X_spatial) * 0.25
+            self.config['sigma_pos'] = 1 / np.sqrt(len(X_spatial))
 
     def train(self,
               adata,
@@ -2013,16 +2052,16 @@ class VAE(VanillaVAE):
                                        plot,
                                        figure_path)
                 self.set_mode('train')
-                elbo_test = self.loss_test[-1] if len(self.loss_test) > 0 else -np.inf
-                print(f"Epoch {epoch+1}: Train ELBO = {elbo_train:.3f},\t"
-                      f"Test ELBO = {elbo_test:.3f},\t"
+                elbo_test = self.loss_test[-1] if len(self.loss_test) > 0 else [-np.inf]
+                print(f"Epoch {epoch+1}: Train ELBO = {np.sum(elbo_train):.3f},\t"
+                      f"Test ELBO = {np.sum(elbo_test):.3f},\t"
                       f"Total Time = {convert_time(time.time()-start)}")
 
             if stop_training:
                 print(f"*********       Stage 1: Early Stop Triggered at epoch {epoch+1}.       *********")
                 print(f"Summary: \n"
-                      f"Train ELBO = {-self.loss_train[-1]:.3f}\n"
-                      f"Test ELBO = {self.loss_test[-1]:.3f}\n"
+                      f"Train ELBO = {-np.sum(self.loss_train[-1]):.3f}\n"
+                      f"Test ELBO = {np.sum(self.loss_test[-1]):.3f}\n"
                       f"Total Time = {convert_time(time.time()-start)}\n")
                 break
 
@@ -2033,6 +2072,7 @@ class VAE(VanillaVAE):
         self.encoder.eval()
         self.use_knn = True
         self.train_stage = 2
+        self.num_test = len(self.loss_test)
         self.decoder.logit_pw.requires_grad = False
         if not self.is_discrete:
             sigma_u_prev = self.decoder.sigma_u.detach().cpu().numpy()
@@ -2057,6 +2097,8 @@ class VAE(VanillaVAE):
             if (not self.is_discrete) and (noise_change > 0.001) and (r < self.config['n_refine']-1):
                 self.update_std_noise()
                 stop_training = False
+            if r > 0:
+                stop_training = stop_training or (len(self.loss_test)-self.num_test >= self.config['early_stop']+10)
             if stop_training:
                 print(f"Stage 2: Early Stop Triggered at round {r}.")
                 break
@@ -2078,19 +2120,19 @@ class VAE(VanillaVAE):
                                            plot,
                                            figure_path)
                     self.decoder.train()
-                    elbo_test = self.loss_test[-1] if len(self.loss_test) > n_test1 else -np.inf
-                    print(f"Epoch {epoch+count_epoch+1}: Train ELBO = {elbo_train:.3f},\t"
-                          f"Test ELBO = {elbo_test:.3f},\t"
+                    elbo_test = self.loss_test[-1] if len(self.loss_test) > n_test1 else [-np.inf]
+                    print(f"Epoch {epoch+count_epoch+1}: Train ELBO = {np.sum(elbo_train):.3f},\t"
+                          f"Test ELBO = {np.sum(elbo_test):.3f},\t"
                           f"Total Time = {convert_time(time.time()-start)}")
 
                 if stop_training:
+                    print(f"Summary: \n"
+                          f"Train ELBO = {-np.sum(self.loss_train[-1]):.3f}\n"
+                          f"Test ELBO = {np.sum(self.loss_test[-1]):.3f}\n"
+                          f"Total Time = {convert_time(time.time()-start)}\n")
                     print(f"*********       "
                           f"Round {r+1}: Early Stop Triggered at epoch {epoch+count_epoch+1}."
                           f"       *********")
-                    print(f"Summary: \n"
-                          f"Train ELBO = {-self.loss_train[-1]:.3f}\n"
-                          f"Test ELBO = {self.loss_test[-1]:.3f}\n"
-                          f"Total Time = {convert_time(time.time()-start)}\n")
                     break
             count_epoch += (epoch+1)
             if not self.is_discrete:
@@ -2126,21 +2168,35 @@ class VAE(VanillaVAE):
                               gene_plot,
                               plot,
                               figure_path)
-        self.loss_train.append(-elbo_train)
+        self.loss_train.append([-x for x in elbo_train])
         self.loss_test.append(elbo_test)
         # Plot final results
         if plot:
-            plot_train_loss(self.loss_train,
+            self.loss_train = np.stack(self.loss_train)
+            plot_train_loss(self.loss_train[:, 0],
                             range(1, len(self.loss_train)+1),
-                            save=f'{figure_path}/train_loss_velovae.png')
+                            save=f'{figure_path}/likelihood_train.png')
+            plot_train_loss(self.loss_train[:, 1],
+                            range(1, len(self.loss_train)+1),
+                            save=f'{figure_path}/kl_train.png')
+            plot_train_loss(self.loss_train[:, 2],
+                            range(1, len(self.loss_train)+1),
+                            save=f'{figure_path}/xyloss_train.png')
             if self.config["test_iter"] > 0:
-                plot_test_loss(self.loss_test,
+                self.loss_test = np.stack(self.loss_test)
+                plot_test_loss(self.loss_test[:, 0],
                                [i*self.config["test_iter"] for i in range(1, len(self.loss_test)+1)],
-                               save=f'{figure_path}/test_loss_velovae.png')
+                               save=f'{figure_path}/likelihood_validation.png')
+                plot_test_loss(self.loss_test[:, 1],
+                               [i*self.config["test_iter"] for i in range(1, len(self.loss_test)+1)],
+                               save=f'{figure_path}/kl_validation.png')
+                plot_test_loss(self.loss_test[:, 2],
+                               [i*self.config["test_iter"] for i in range(1, len(self.loss_test)+1)],
+                               save=f'{figure_path}/xyloss_test.png')
 
         self.timer = self.timer + (time.time()-start)
         print(f"*********              Finished. Total Time = {convert_time(self.timer)}             *********")
-        print(f"Final: Train ELBO = {elbo_train:.3f},\tTest ELBO = {elbo_test:.3f}")
+        print(f"Final: Train ELBO = {np.sum(elbo_train):.3f},\tTest ELBO = {np.sum(elbo_test):.3f}")
         return
 
     def pred_all(self, cell_labels, mode='test', output=["uhat", "shat", "t", "z", "xy"], gene_idx=None):
@@ -2199,18 +2255,18 @@ class VAE(VanillaVAE):
                 u1 = u1[sample_idx].cpu()
                 s1 = s1[sample_idx].cpu()
             xy = self.graph_data.xy[sample_idx].cpu()
-            loss = self.vae_risk((mu_tx[sample_idx], std_tx[sample_idx]), p_t,
-                                 (mu_zx[sample_idx], std_zx[sample_idx]), p_z,
-                                 self.graph_data.data.x[sample_idx, :G].cpu(),
-                                 self.graph_data.data.x[sample_idx, G:].cpu(),
-                                 uhat[sample_idx].cpu()*lu_scale[sample_idx],
-                                 shat[sample_idx].cpu()*ls_scale[sample_idx],
-                                 xy,
-                                 xy_hat[sample_idx].cpu(),
-                                 uhat_fw, shat_fw,
-                                 u1, s1,
-                                 None,
-                                 to_cpu=True)
+            loss_terms = self.vae_risk((mu_tx[sample_idx], std_tx[sample_idx]), p_t,
+                                       (mu_zx[sample_idx], std_zx[sample_idx]), p_z,
+                                       self.graph_data.data.x[sample_idx, :G].cpu(),
+                                       self.graph_data.data.x[sample_idx, G:].cpu(),
+                                       uhat[sample_idx].cpu()*lu_scale[sample_idx],
+                                       shat[sample_idx].cpu()*ls_scale[sample_idx],
+                                       xy,
+                                       xy_hat[sample_idx].cpu(),
+                                       uhat_fw, shat_fw,
+                                       u1, s1,
+                                       None,
+                                       to_cpu=True)
 
         out = {}
         if "uhat" in output:
@@ -2240,7 +2296,8 @@ class VAE(VanillaVAE):
              uhat_fw, shat_fw,
              vu, vs,
              vu_fw, vs_fw)
-        return out, -loss.item()
+        
+        return out, [-loss_terms[i].cpu().item() for i in range(len(loss_terms))]
 
     def test(self,
              Xembed,
@@ -2273,7 +2330,7 @@ class VAE(VanillaVAE):
 
         Returns
         -------
-        elbo : float
+        elbo_terms : list[float]
         """
         self.set_mode('eval')
         mode = "test" if test_mode else "train"
@@ -2281,7 +2338,7 @@ class VAE(VanillaVAE):
         out_type = ["uhat", "shat", "uhat_fw", "shat_fw", "t", "xy"]
         if self.train_stage == 2:
             out_type.append("v")
-        out, elbo = self.pred_all(self.cell_labels, mode, out_type, gind)
+        out, elbo_terms = self.pred_all(self.cell_labels, mode, out_type, gind)
         Uhat, Shat, t = out["uhat"], out["shat"], out["t"]
         G = self.graph_data.G
 
@@ -2319,17 +2376,17 @@ class VAE(VanillaVAE):
                              sparsify=self.config['sparsify'])
             plt.close('all')
 
-        return elbo
+        return elbo_terms
 
     def update_std_noise(self):
         """Update the standard deviation of Gaussian noise.
         .. deprecated:: 1.0
         """
         G = self.graph_data.G
-        out, elbo = self.pred_all(self.cell_labels,
-                                  mode='train',
-                                  output=["uhat", "shat"],
-                                  gene_idx=np.array(range(G)))
+        out, _ = self.pred_all(self.cell_labels,
+                               mode='train',
+                               output=["uhat", "shat", "xy"],
+                               gene_idx=np.array(range(G)))
         std_u = (out["uhat"]-self.graph_data.data.x[:, :G].detach().cpu().numpy()[self.train_idx]).std(0)
         std_s = (out["shat"]-self.graph_data.data.x[:, G:].detach().cpu().numpy()[self.train_idx]).std(0)
         self.decoder.sigma_u = nn.Parameter(torch.tensor(np.log(std_u+1e-16),
@@ -2338,6 +2395,7 @@ class VAE(VanillaVAE):
         self.decoder.sigma_s = nn.Parameter(torch.tensor(np.log(std_s+1e-16),
                                             dtype=torch.float,
                                             device=self.device))
+        
         return
 
     def get_enc_att(self, data_in, edge_index):
@@ -2365,7 +2423,31 @@ class VAE(VanillaVAE):
         col = col.numpy()
         val = val.numpy()
         return row, col, val
-
+    
+    def xy_velocity(self,
+                    t,
+                    z,
+                    edge_index=None,
+                    edge_weight=None,
+                    condition=None,
+                    delta_t=1e-3):
+        self.set_mode('eval')
+        
+        t_ts = torch.tensor(t).float().to(self.device)
+        t_ts.requires_grad = True
+        xy_hat = self.decoder._compute_xy(t_ts.view(-1, 1),
+                                          torch.tensor(z).float().to(self.device),
+                                          edge_index,
+                                          edge_weight,
+                                          condition).detach().cpu().numpy()
+        xy_hat_1 = self.decoder._compute_xy(t_ts.view(-1, 1) + delta_t,
+                                            torch.tensor(z).float().to(self.device),
+                                            edge_index,
+                                            edge_weight,
+                                            condition).detach().cpu().numpy()
+        
+        return (xy_hat_1 - xy_hat) / delta_t
+    
     def save_anndata(self, adata, key, file_path, file_name=None):
         """Save the ODE parameters and cell time to the anndata object and write it to disk.
 
@@ -2444,6 +2526,14 @@ class VAE(VanillaVAE):
                          use_raw=False,
                          use_scv_genes=False,
                          full_vb=self.is_full_vb)
-
+        condition = None
+        if self.enable_cvae:
+            condition = F.one_hot(self.graph_data.batch, self.n_batch).float()
+        adata.obsm[f"{key}_velocity_{key}_xy"] = self.xy_velocity(t,
+                                                                  z,
+                                                                  self.graph_data.data.adj_t,
+                                                                  self.graph_data.edge_weight,
+                                                                  condition)
+        del condition, rho, out, U, S
         if file_name is not None:
             adata.write_h5ad(f"{file_path}/{file_name}")
