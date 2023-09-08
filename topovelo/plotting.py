@@ -1821,6 +1821,7 @@ def plot_time_grid(T,
                    q=0.99,
                    W=6,
                    H=3,
+                   grid_size=None,
                    save="figures/time_grid.png"):
     """Plot the latent time of different methods.
 
@@ -1851,40 +1852,46 @@ def plot_time_grid(T,
     else:
         methods = list(T.keys())
     M = len(methods)
+    
+    if grid_size is None:
+        grid_size = (1, M)
+    n_row, n_col = grid_size
     if std_t is not None:
-        fig_time, ax = plt.subplots(2, M, figsize=(W*M+2, H), facecolor='white')
+        fig_time, ax = plt.subplots(2*n_row, n_col, figsize=(W*n_col+2, H*n_row), facecolor='white')
         for i, method in enumerate(methods):
+            row = i // n_col
+            col = i - row * n_col
             t = capture_time if method == "Capture Time" else T[method]
             t = np.clip(t, None, np.quantile(t, q))
             t = t - t.min()
             t = t/t.max()
-            if M > 1:
-                ax[0, i].scatter(X_emb[::down_sample, 0],
-                                 X_emb[::down_sample, 1],
-                                 s=10.0,
-                                 c=t[::down_sample],
-                                 cmap='plasma',
-                                 edgecolors='none')
+            if n_col > 1:
+                ax[2*row, col].scatter(X_emb[::down_sample, 0],
+                                       X_emb[::down_sample, 1],
+                                       s=10.0,
+                                       c=t[::down_sample],
+                                       cmap='plasma',
+                                       edgecolors='none')
                 title = "VeloVAE" if method == "FullVB" else method
-                ax[0, i].set_title(title, fontsize=24)
-                ax[0, i].axis('off')
+                ax[2*row, col].set_title(title, fontsize=24)
+                ax[2*row, col].axis('off')
             else:
-                ax[0].scatter(X_emb[::down_sample, 0],
-                              X_emb[::down_sample, 1],
-                              s=10.0,
-                              c=t[::down_sample],
-                              cmap='plasma',
-                              edgecolors='none')
+                ax[2*row].scatter(X_emb[::down_sample, 0],
+                                  X_emb[::down_sample, 1],
+                                  s=10.0,
+                                  c=t[::down_sample],
+                                  cmap='plasma',
+                                  edgecolors='none')
                 title = "VeloVAE" if method == "FullVB" else method
-                ax[0].set_title(title, fontsize=24)
-                ax[0].axis('off')
+                ax[2*row].set_title(title, fontsize=24)
+                ax[2*row].axis('off')
 
             # Plot the Time Variance in a Colormap
             var_t = std_t[method]**2
 
             if np.any(var_t > 0):
                 if M > 1:
-                    ax[1, i].scatter(X_emb[::down_sample, 0],
+                    ax[2*row+1, col].scatter(X_emb[::down_sample, 0],
                                      X_emb[::down_sample, 1],
                                      s=10.0,
                                      c=var_t[::down_sample],
@@ -1892,12 +1899,12 @@ def plot_time_grid(T,
                                      edgecolors='none')
                     norm1 = matplotlib.colors.Normalize(vmin=np.min(var_t), vmax=np.max(var_t))
                     sm1 = matplotlib.cm.ScalarMappable(norm=norm1, cmap='Reds')
-                    cbar1 = fig_time.colorbar(sm1, ax=ax[1, i])
+                    cbar1 = fig_time.colorbar(sm1, ax=ax[2*row+1, col])
                     cbar1.ax.get_yaxis().labelpad = 15
                     cbar1.ax.set_ylabel('Time Variance', rotation=270, fontsize=12)
-                    ax[1, i].axis('off')
+                    ax[2*row+1, col].axis('off')
                 else:
-                    ax[1].scatter(X_emb[::down_sample, 0],
+                    ax[2*row+1].scatter(X_emb[::down_sample, 0],
                                   X_emb[::down_sample, 1],
                                   s=10.0,
                                   c=var_t[::down_sample],
@@ -1905,27 +1912,47 @@ def plot_time_grid(T,
                                   edgecolors='none')
                     norm1 = matplotlib.colors.Normalize(vmin=np.min(var_t), vmax=np.max(var_t))
                     sm1 = matplotlib.cm.ScalarMappable(norm=norm1, cmap='Reds')
-                    cbar1 = fig_time.colorbar(sm1, ax=ax[1])
+                    cbar1 = fig_time.colorbar(sm1, ax=ax[2*row+1])
                     cbar1.ax.get_yaxis().labelpad = 15
                     cbar1.ax.set_ylabel('Time Variance', rotation=270, fontsize=12)
-                    ax[1].axis('off')
+                    ax[2*row+1].axis('off')
     else:
-        fig_time, ax = plt.subplots(1, M, figsize=(8*M, 4), facecolor='white')
+        fig_time, ax = plt.subplots(n_row, n_col, figsize=(8*n_col, 4*n_row), facecolor='white')
         for i, method in enumerate(methods):
+            row = i // n_col
+            col = i - row * n_col
             t = capture_time if method == "Capture Time" else T[method]
             t = np.clip(t, None, np.quantile(t, q))
             t = t - t.min()
             t = t/t.max()
-            if M > 1:
-                ax[i].scatter(X_emb[::down_sample, 0],
-                              X_emb[::down_sample, 1],
-                              s=10.0,
-                              c=t[::down_sample],
-                              cmap='plasma',
-                              edgecolors='none')
-                title = "VeloVAE" if method == "FullVB" else method
-                ax[i].set_title(title, fontsize=24)
-                ax[i].axis('off')
+            title = "VeloVAE" if method == "FullVB" else method
+            if n_col > 1 and n_row > 1:
+                ax[row, col].scatter(X_emb[::down_sample, 0],
+                                     X_emb[::down_sample, 1],
+                                     s=10.0,
+                                     c=t[::down_sample],
+                                     cmap='plasma',
+                                     edgecolors='none')
+                ax[row, col].set_title(title, fontsize=24)
+                ax[row, col].axis('off')
+            elif n_col > 1:
+                ax[col].scatter(X_emb[::down_sample, 0],
+                                X_emb[::down_sample, 1],
+                                s=10.0,
+                                c=t[::down_sample],
+                                cmap='plasma',
+                                edgecolors='none')
+                ax[col].set_title(title, fontsize=24)
+                ax[col].axis('off')
+            elif n_row > 1:
+                ax[row].scatter(X_emb[::down_sample, 0],
+                                X_emb[::down_sample, 1],
+                                s=10.0,
+                                c=t[::down_sample],
+                                cmap='plasma',
+                                edgecolors='none')
+                ax[row].set_title(title, fontsize=24)
+                ax[row].axis('off')
             else:
                 ax.scatter(X_emb[::down_sample, 0],
                            X_emb[::down_sample, 1],
@@ -1933,7 +1960,6 @@ def plot_time_grid(T,
                            c=t[::down_sample],
                            cmap='plasma',
                            edgecolors='none')
-                title = "VeloVAE" if method == "FullVB" else method
                 ax.set_title(title, fontsize=24)
                 ax.axis('off')
     norm0 = matplotlib.colors.Normalize(vmin=0, vmax=1)

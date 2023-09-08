@@ -620,11 +620,16 @@ def post_analysis(adata,
                 T[method_] = adata.obs["latent_time"].to_numpy()
             else:
                 T[method_] = adata.obs[f"{keys[i]}_time"].to_numpy()
+        k = len(methods)+(capture_time is not None)
+        n_col = max(int(np.sqrt(k*2)), 1)
+        n_row = k // n_col
+        n_row += (n_row*n_col < k)
         plot_time_grid(T,
                        X_embed,
                        capture_time,
                        None,
                        down_sample=min(10, max(1, adata.n_obs//5000)),
+                       grid_size=(n_row, n_col),
                        save=(None if figure_path is None else
                              f"{figure_path}/{test_id}_time.png"))
 
@@ -707,19 +712,7 @@ def post_analysis(adata,
                     gene_subset = adata.var_names[adata.var['velocity_genes'].to_numpy()]
                 else:
                     gene_subset = adata.var_names[~np.isnan(adata.layers[vkey][0])]
-                if methods[i] == 'TopoVelo':
-                    velocity_embedding_stream(adata,
-                                              basis=f'{keys[i]}_xy',
-                                              vkey=vkey,
-                                              color=cluster_key,
-                                              title="",
-                                              palette=colors,
-                                              legend_fontsize=np.clip(15 - np.clip(len(colors)-10, 0, None), 8, None),
-                                              legend_loc='on data' if len(colors) <= 10 else 'right margin',
-                                              dpi=dpi,
-                                              show=True,
-                                              save=(None if figure_path is None else
-                                                    f'{figure_path}/{test_id}_{keys[i]}_true_velocity.png'))
+                
                 velocity_graph(adata, vkey=vkey, gene_subset=gene_subset, n_jobs=get_n_cpu(adata.n_obs))
                 velocity_embedding_stream(adata,
                                           basis=embed,
@@ -733,6 +726,21 @@ def post_analysis(adata,
                                           show=True,
                                           save=(None if figure_path is None else
                                                 f'{figure_path}/{test_id}_{keys[i]}_stream.png'))
+                if methods[i] == 'TopoVelo':
+                    adata.uns[f"{vkey}_params"]["embeddings"].append(f'{keys[i]}_xy')
+                    velocity_embedding_stream(adata,
+                                              basis=f'{keys[i]}_xy',
+                                              vkey=vkey,
+                                              recompute=False,
+                                              color=cluster_key,
+                                              title="",
+                                              palette=colors,
+                                              legend_fontsize=np.clip(15 - np.clip(len(colors)-10, 0, None), 8, None),
+                                              legend_loc='on data' if len(colors) <= 10 else 'right margin',
+                                              dpi=dpi,
+                                              show=True,
+                                              save=(None if figure_path is None else
+                                                    f'{figure_path}/{test_id}_{keys[i]}_true_velocity.png'))
         except ImportError:
             print('Please install scVelo in order to generate stream plots')
             pass

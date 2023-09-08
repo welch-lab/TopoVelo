@@ -121,10 +121,11 @@ class SCGraphData():
                  labels,
                  graph,
                  xy,
-                 n_train,
+                 train_idx,
+                 validation_idx,
+                 test_idx,
                  device,
                  batch=None,
-                 test_samples=None,
                  enable_edge_weight=False,
                  seed=2022):
         """Constructor
@@ -140,8 +141,6 @@ class SCGraphData():
                 Number of training samples.
             device (:class:`torch.device`):
                 {'cpu' or 'cuda'}
-            test_samples (:class:`numpy.ndarray`):
-                Specifies samples as unseen data for model testing.
             seed (int, optional):
                 Random seed. Defaults to 2022.
         """
@@ -169,38 +168,19 @@ class SCGraphData():
                                             requires_grad=False)
         else:
             self.edge_weight = None
-        np.random.seed(seed)
-        if test_samples is None:
-            rand_perm = np.random.permutation(self.N)
-            self.train_idx = torch.tensor(rand_perm[:n_train],
-                                          dtype=torch.int32,
-                                          requires_grad=False,
-                                          device=device)
-            self.validation_idx = torch.tensor(rand_perm[n_train:],
-                                               dtype=torch.int32,
-                                               requires_grad=False,
-                                               device=device)
-            self.test_idx = None
-            self.n_test = 0
-        else:
-            train_valid_idx = list(range(self.N))
-            for idx in test_samples:
-                train_valid_idx.remove(idx)
-            rand_perm = np.random.permutation(train_valid_idx)
-            self.train_idx = torch.tensor(rand_perm[:n_train],
-                                          dtype=torch.int32,
-                                          requires_grad=False,
-                                          device=device)
-            self.validation_idx = torch.tensor(rand_perm[n_train:],
-                                               dtype=torch.int32,
-                                               requires_grad=False,
-                                               device=device)
-            self.test_idx = torch.tensor(test_samples,
-                                         dtype=torch.int32,
-                                         requires_grad=False,
-                                         device=device)
-            self.n_test = len(train_valid_idx) - n_train
-        self.n_train = n_train
+        
+        self.train_idx = torch.tensor(train_idx,
+                                      dtype=torch.int32,
+                                      requires_grad=False,
+                                      device=device)
+        self.validation_idx = torch.tensor(validation_idx,
+                                           dtype=torch.int32,
+                                           requires_grad=False,
+                                           device=device)
+        self.test_idx = torch.tensor(test_idx,
+                                     dtype=torch.int32,
+                                     requires_grad=False,
+                                     device=device)
 
         self.u0 = None
         self.s0 = None

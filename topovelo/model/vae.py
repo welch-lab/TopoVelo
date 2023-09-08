@@ -766,6 +766,8 @@ class VAE(VanillaVAE):
                  init_method="steady",
                  init_key=None,
                  tprior=None,
+                 train_test_split=(0.7, 0.2, 0.1),
+                 test_samples=None,
                  init_ton_zero=True,
                  filter_gene=False,
                  count_distribution="Poisson",
@@ -889,7 +891,7 @@ class VAE(VanillaVAE):
             "n_warmup": 5,
             "early_stop": 5,
             "early_stop_thred": early_stop_thred,
-            "train_test_split": 0.7,
+            "train_test_split": train_test_split,
             "neg_slope": 0.0,
             "train_ton": (init_method != 'tprior'),
             "enable_edge_weight": True,
@@ -909,13 +911,14 @@ class VAE(VanillaVAE):
         }
 
         self.set_device(device)
-        self.split_train_test(adata.n_obs)
         self.encode_batch(adata)
 
         self.dim_z = dim_z
         self.enable_cvae = dim_cond > 0
 
         torch.manual_seed(random_state)
+        np.random.seed(random_state)
+        self.split_train_validation_test(adata.n_obs, test_samples)
         self.decoder = decoder(adata,
                                tmax,
                                self.train_idx,
@@ -993,6 +996,25 @@ class VAE(VanillaVAE):
         self.train_stage = 1
 
         self.timer = time.time()-t_start
+
+    def split_train_validation_test(self, N, test_samples=None):
+        # Randomly select indices as training samples.
+        if test_samples is None:
+            rand_perm = np.random.permutation(N)
+            n_train = int(N*self.config["train_test_split"][0])
+            n_validation = int(N*self.config["train_test_split"][1])
+            self.train_idx = rand_perm[:n_train]
+            self.validation_idx = rand_perm[n_train:n_train+n_validation]
+            self.test_idx = rand_perm[n_train+n_validation:]
+        else:
+            print("Test samples provided. Distribute training and validation samples based on their proportions.")
+            self.test_idx = test_samples
+            train_valid_idx = np.array(list(set(range(N)).difference(set(test_samples))))
+            rand_perm = np.random.permutation(train_valid_idx)
+            n_train = int((N-len(test_samples))*self.config["train_test_split"][0])
+            self.train_idx = rand_perm[:n_train]
+            self.validation_idx = rand_perm[n_train:]
+        return
 
     def encode_batch(self, adata):
         self.n_batch = 0
@@ -1932,8 +1954,7 @@ class VAE(VanillaVAE):
               cluster_key="clusters",
               figure_path="figures",
               embed="umap",
-              random_state=2022,
-              test_samples=None):
+              random_state=2022):
         """The high-level API for training.
 
         Arguments
@@ -1955,6 +1976,8 @@ class VAE(VanillaVAE):
         test_samples : :class:`numpy.array`
             Indices of samples included in the test set (unseen data)
         """
+        torch.manual_seed(random_state)
+        np.random.seed(random_state)
         self.load_config(config)
         if self.config["learning_rate"] is None:
             p = (np.sum(adata.layers["unspliced"].A > 0)
@@ -1988,21 +2011,18 @@ class VAE(VanillaVAE):
         self.cell_types = np.array([self.label_dic[cell_types_raw[i]] for i in range(self.n_type)])
 
         print("*********               Creating a Graph Dataset              *********")
-        n_train = int(adata.n_obs * self.config['train_test_split'])
         self.graph_data = SCGraphData(X,
                                       self.cell_labels,
                                       graph,
                                       adata.obsm[spatial_key],
-                                      n_train,
+                                      self.train_idx,
+                                      self.validation_idx,
+                                      self.test_idx,
                                       self.device,
                                       self.batch_,
-                                      test_samples,
                                       self.config['enable_edge_weight'],
                                       random_state)
 
-        self.train_idx = self.graph_data.train_idx.cpu().numpy()
-        self.validation_idx = self.graph_data.validation_idx.cpu().numpy()
-        self.test_idx = test_samples
         # Automatically set test iteration if not given
         if self.config["test_iter"] is None:
             self.config["test_iter"] = len(self.train_idx)//self.config["batch_size"]*2
