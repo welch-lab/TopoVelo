@@ -298,7 +298,7 @@ def plot_phase(u, s,
     save_fig(fig, save, (lgd,))
 
 
-def plot_cluster(X_embed, cell_labels, color_map=None, embed='umap', show_labels=True, save=None):
+def plot_cluster(X_embed, cell_labels, color_map=None, embed='umap', show_legend=False, save=None):
     """Plot the predicted cell types from the encoder
 
     Args:
@@ -330,7 +330,7 @@ def plot_cluster(X_embed, cell_labels, color_map=None, embed='umap', show_labels
         ax.plot(x[mask], y[mask], '.', color=colors[i % len(colors)])
         n_char = len(typei)
         if show_labels:
-            txt = ax.text(xbar - x_range*4e-3*n_char, ybar - y_range*4e-3, typei, fontsize=200//n_char_max, color='k')
+            txt = ax.text(xbar - x_range*4e-3*n_char, ybar - y_range*4e-3, typei, fontsize=max(30, 200//n_char_max), color='k')
             txt.set_bbox(dict(facecolor='white', alpha=0.5, edgecolor='black'))
 
     ax.set_xlabel(f'{embed} 1')

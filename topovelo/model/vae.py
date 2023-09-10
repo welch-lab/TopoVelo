@@ -14,7 +14,7 @@ from torch_geometric.nn import GCNConv, GATConv
 from torch_geometric.nn.norm import BatchNorm, LayerNorm, GraphNorm
 
 import time
-from ..plotting import plot_sig, plot_time
+from ..plotting import plot_sig, plot_time, plot_cluster
 from ..plotting import plot_train_loss, plot_test_loss
 
 from .model_util import hist_equal, init_params, get_ts_global, reinit_params
@@ -515,9 +515,10 @@ class decoder(nn.Module):
                 mask = torch.ones_like(condition)
                 mask[:, mask_idx] = 0
                 mask_flip = (~mask.bool()).int()
-                y = torch.mm(condition * mask, y) + torch.mm(condition * mask_flip, self.one_mat if mask_to == 1 else self.zero_mat)
+                y = torch.einsum('ij,jk->ik', condition * mask, y)\
+                    + torch.einsum('ij,jk->ik', condition * mask_flip, self.one_mat if mask_to == 1 else self.zero_mat)
             else:
-                y = torch.mm(condition, y)
+                y = torch.einsum('ij,jk->ik', condition, y)
 
         return y
 
@@ -2394,6 +2395,8 @@ class VAE(VanillaVAE):
                              gene_plot[i],
                              save=f"{path}/sig-{gene_plot[i]}-{testid}-bw.png",
                              sparsify=self.config['sparsify'])
+                plot_cluster(out['xy'], cell_labels, embed='Predicted Coordinates',
+                             save=f"{path}/xy-{testid}.png")
             plt.close('all')
 
         return elbo_terms
