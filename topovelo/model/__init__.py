@@ -3,7 +3,7 @@ from .vae import VAE
 from .maskvae import MaskVAE
 from .brode import BrODE
 from .model_util import ode, ode_numpy
-from .model_util import knnx0, knn_transition_prob
+from .model_util import knn_transition_prob
 from .model_util import sample_genes
 from .velocity import rna_velocity_vanillavae, rna_velocity_vae, rna_velocity_brode
 from .training_data import SCGraphData
@@ -22,7 +22,6 @@ __all__ = [
     "rna_velocity_brode",
     "ode",
     "ode_numpy",
-    "knnx0",
     "knn_transition_prob",
     "SCGraphData",
     "TransGraph",

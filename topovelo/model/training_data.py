@@ -185,9 +185,11 @@ class SCGraphData():
         self.u0 = None
         self.s0 = None
         self.t0 = None
+        self.xy0 = None
         self.u1 = None
         self.s1 = None
         self.t1 = None
+        self.xy1 = None
 
         return
 

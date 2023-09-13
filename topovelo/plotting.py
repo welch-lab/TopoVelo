@@ -329,9 +329,8 @@ def plot_cluster(X_embed, cell_labels, color_map=None, embed='umap', show_legend
         xbar, ybar = np.mean(x[mask]), np.mean(y[mask])
         ax.plot(x[mask], y[mask], '.', color=colors[i % len(colors)])
         n_char = len(typei)
-        if show_labels:
-            txt = ax.text(xbar - x_range*4e-3*n_char, ybar - y_range*4e-3, typei, fontsize=max(30, 200//n_char_max), color='k')
-            txt.set_bbox(dict(facecolor='white', alpha=0.5, edgecolor='black'))
+        txt = ax.text(xbar - x_range*4e-3*n_char, ybar - y_range*4e-3, typei, fontsize=max(30, 200//n_char_max), color='k')
+        txt.set_bbox(dict(facecolor='white', alpha=0.5, edgecolor='black'))
 
     ax.set_xlabel(f'{embed} 1')
     ax.set_ylabel(f'{embed} 2')

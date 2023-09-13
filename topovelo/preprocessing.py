@@ -318,7 +318,7 @@ def preprocess(adata,
     # 6. Compute the spatial graph
     if spatial_key is not None:
         if not divide_compartments:
-            print('Perform spatial clustering.')
+            print('Perform spatial KNN graph.')
             X_pos = adata.obsm[spatial_key]
             nn = NearestNeighbors(n_neighbors=n_spatial_neighbors)
             nn.fit(X_pos)

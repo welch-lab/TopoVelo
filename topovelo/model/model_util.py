@@ -12,6 +12,7 @@ from sklearn.neighbors import NearestNeighbors
 import pynndescent
 from tqdm.autonotebook import trange
 from sklearn.cluster import SpectralClustering, KMeans
+from sklearn.neighbors import BallTree
 from scipy.stats import dirichlet, bernoulli, kstest, linregress
 from scipy.linalg import svdvals
 
@@ -1190,114 +1191,15 @@ def _hist_equal(t, t_query, perc=0.95, n_bin=51):
     return t_out, t_out_query
 
 
-def knnx0(U, S,
-          t,
-          z,
-          t_query,
-          z_query,
-          dt,
-          k,
-          u0_init=None,
-          s0_init=None,
-          adaptive=0.0,
-          std_t=None,
-          forward=False,
-          hist_eq=False):
-    ############################################################
-    # Given cell time and state, find KNN for each cell in a time window ahead of
-    # it. The KNNs are used to compute the initial condition for the ODE of
-    # the cell.
-    # 1-2.    U,S [2D array (N,G)]
-    #         Unspliced and Spliced count matrix
-    # 3-4.    t,z [1D array (N)]
-    #         Latent cell time and state used to build KNN
-    # 5-6.    t_query [1D array (N)]
-    #         Query cell time and state
-    # 7.      dt [float tuple]
-    #         Time window coefficient
-    # 8.      k [int]
-    #         Number of neighbors
-    # 9-10.   u0_init, s0_init [1D array]
-    #         Default initial condition when a cell has very few neighbors
-    #         in its time window
-    # 9.      adaptive [float]
-    #         When set to positive value, neighbors will be chosen from
-    #         [t-adaptive*std_t, t-adaptive*std_t+delta_t]
-    # 10.     std_t [1D array (N)]
-    #         Posterior standard deviation of cell time
-    # 11.     forward [bool]
-    #         Whether to look for ancestors or descendants
-    # 12.     hist_eq [bool]
-    #         Whether to perform histogram equalization to time.
-    #         The purpose is to preserve more resolution in
-    #         densely populated time intervals.
-    ############################################################
-    Nq = len(t_query)
-    u0 = (np.zeros((Nq, U.shape[1])) if u0_init is None
-          else np.tile(u0_init, (Nq, 1)))
-    s0 = (np.zeros((Nq, S.shape[1])) if s0_init is None
-          else np.tile(s0_init, (Nq, 1)))
-    t0 = np.ones((Nq))*(t.min() - dt[0])
-    t_knn = t
-
-    n1 = 0
-    len_avg = 0
-    if hist_eq:  # time histogram equalization
-        t, t_query = _hist_equal(t, t_query)
-    # Used as the default u/s counts at the final time point
-    t_98 = np.quantile(t, 0.98)
-    p = 0.98
-    while not np.any(t >= t_98) and p > 0.01:
-        p = p - 0.01
-        t_98 = np.quantile(t, p)
-    u_end, s_end = U[t >= t_98].mean(0), S[t >= t_98].mean(0)
-    for i in trange(Nq):  # iterate through every cell
-        if adaptive > 0:
-            dt_r, dt_l = adaptive*std_t[i], adaptive*std_t[i] + (dt[1]-dt[0])
-        else:
-            dt_r, dt_l = dt[0], dt[1]
-        if forward:
-            t_ub, t_lb = t_query[i] + dt_l, t_query[i] + dt_r
-        else:
-            t_ub, t_lb = t_query[i] - dt_r, t_query[i] - dt_l
-        indices = np.where((t >= t_lb) & (t < t_ub))[0]  # filter out cells in the bin
-        k_ = len(indices)
-        delta_t = dt[1] - dt[0]  # increment / decrement of the time window boundary
-        while k_ < k and t_lb > t.min() - (dt[1] - dt[0]) and t_ub < t.max() + (dt[1] - dt[0]):
-            if forward:
-                t_lb = t_query[i]
-                t_ub = t_ub + delta_t
-            else:
-                t_lb = t_lb - delta_t
-                t_ub = t_query[i]
-            indices = np.where((t >= t_lb) & (t < t_ub))[0]  # filter out cells in the bin
-            k_ = len(indices)
-        len_avg = len_avg + k_
-        if k_ > 0:
-            k_neighbor = k if k_ > k else max(1, k_//2)
-            knn_model = NearestNeighbors(n_neighbors=k_neighbor)
-            knn_model.fit(z[indices])
-            dist, ind = knn_model.kneighbors(z_query[i:i+1])
-            u0[i] = np.mean(U[indices[ind.squeeze()].astype(int)], 0)
-            s0[i] = np.mean(S[indices[ind.squeeze()].astype(int)], 0)
-            t0[i] = np.mean(t_knn[indices[ind.squeeze()].astype(int)])
-        else:
-            if forward:
-                u0[i] = u_end
-                s0[i] = s_end
-                t0[i] = t_98 + (t_98-t.min()) * 0.01
-            n1 = n1+1
-    print(f"Percentage of Invalid Sets: {n1/Nq:.3f}")
-    print(f"Average Set Size: {len_avg//Nq}")
-    return u0, s0, t0
-
-
 def knnx0_index(t,
                 z,
+                xy,
                 t_query,
                 z_query,
+                xy_query,
                 dt,
                 k,
+                radius,
                 adaptive=0.0,
                 std_t=None,
                 forward=False,
@@ -1310,9 +1212,10 @@ def knnx0_index(t,
     len_avg = 0
     if hist_eq:
         t, t_query = _hist_equal(t, t_query)
+    bt = BallTree(xy)
     neighbor_index = []
     for i in trange(Nq):
-        if adaptive > 0:
+        if adaptive > 0 and std_t is not None:
             dt_r, dt_l = adaptive*std_t[i], adaptive*std_t[i] + (dt[1]-dt[0])
         else:
             dt_r, dt_l = dt[0], dt[1]
@@ -1320,7 +1223,11 @@ def knnx0_index(t,
             t_ub, t_lb = t_query[i] + dt_l, t_query[i] + dt_r
         else:
             t_ub, t_lb = t_query[i] - dt_r, t_query[i] - dt_l
-        indices = np.where((t >= t_lb) & (t < t_ub))[0]
+        try:
+            spatial_nbs = bt.query_radius(xy_query[i:i+1], radius)[0]
+        except ValueError:
+            spatial_nbs = bt.query(xy_query[i:i+1], k=min(k+50, len(xy)))[0]
+        indices = np.where((t[spatial_nbs] >= t_lb) & (t[spatial_nbs] < t_ub))[0]
         k_ = len(indices)
         delta_t = dt[1] - dt[0]  # increment / decrement of the time window boundary
         while k_ < k and t_lb > t.min() - (dt[1] - dt[0]) and t_ub < t.max() + (dt[1] - dt[0]):
@@ -1330,19 +1237,20 @@ def knnx0_index(t,
             else:
                 t_lb = t_lb - delta_t
                 t_ub = t_query[i]
-            indices = np.where((t >= t_lb) & (t < t_ub))[0]  # filter out cells in the bin
+            indices = np.where((t[spatial_nbs] >= t_lb) & (t[spatial_nbs] < t_ub))[0]  # filter out cells in the bin
             k_ = len(indices)
         len_avg = len_avg + k_
         if k_ > 1:
+            spatial_nbs = spatial_nbs[indices]
             k_neighbor = k if k_ > k else max(1, k_//2)
             knn_model = NearestNeighbors(n_neighbors=k_neighbor)
-            knn_model.fit(z[indices])
+            knn_model.fit(z[spatial_nbs])
             dist, ind = knn_model.kneighbors(z_query[i:i+1])
             if isinstance(ind, int):
                 ind = np.array([int])
-            neighbor_index.append(indices[ind.flatten()].astype(int))
+            neighbor_index.append(spatial_nbs[ind.flatten()].astype(int))
         elif k_ == 1:
-            neighbor_index.append(indices)
+            neighbor_index.append(spatial_nbs)
         else:
             neighbor_index.append([])
             n1 = n1+1
@@ -1353,6 +1261,7 @@ def knnx0_index(t,
 
 def get_x0(U,
            S,
+           X_spatial,
            t,
            dt,
            neighbor_index,
@@ -1364,6 +1273,7 @@ def get_x0(U,
           else np.tile(u0_init, (N, 1)))
     s0 = (np.zeros((N, S.shape[1])) if s0_init is None
           else np.tile(s0_init, (N, 1)))
+    xy0 = np.zeros((N, 2)) 
     t0 = np.ones((N))*(t.min() - dt[0])
     # Used as the default u/s counts at the final time point
     t_98 = np.quantile(t, 0.98)
@@ -1372,17 +1282,20 @@ def get_x0(U,
         p = p - 0.01
         t_98 = np.quantile(t, p)
     u_end, s_end = U[t >= t_98].mean(0), S[t >= t_98].mean(0)
+    xy_end = X_spatial[t >= t_98].mean(0)
 
     for i in range(N):
         if len(neighbor_index[i]) > 0:
             u0[i] = U[neighbor_index[i]].mean(0)
             s0[i] = S[neighbor_index[i]].mean(0)
+            xy0[i] = X_spatial[neighbor_index[i]].mean(0)
             t0[i] = t[neighbor_index[i]].mean()
         elif forward:
             u0[i] = u_end
             s0[i] = s_end
+            xy0[i] = xy_end
             t0[i] = t_98 + (t_98-t.min()) * 0.01
-    return u0, s0, t0
+    return u0, s0, xy0, t0
 
 
 def knn_transition_prob(t,

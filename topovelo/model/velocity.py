@@ -76,6 +76,7 @@ def rna_velocity_vanillavae(adata,
 
 def rna_velocity_vae(adata,
                      key,
+                     batch_key=None,
                      use_raw=False,
                      use_scv_genes=False,
                      sigma=None,
@@ -90,6 +91,8 @@ def rna_velocity_vae(adata,
     adata : :class:`anndata.AnnData`
     key : str
         key used for extracting ODE parameters
+    batch_key : str
+        key used for extracting batch labels
     use_raw : bool, optional
         whether to use the (noisy) input count to compute the velocity
     use_scv_genes : bool, optional
@@ -127,22 +130,36 @@ def rna_velocity_vae(adata,
     if use_raw:
         U, S = adata.layers['Mu'], adata.layers['Ms']
     else:
-        scaling = adata.var[f"{key}_scaling"].to_numpy()
+        try:
+            scaling_u_full = adata.var[f"{key}_scaling_u"].to_numpy()
+            scaling_s_full = adata.var[f"{key}_scaling_s"].to_numpy()
+        except KeyError:
+            scaling_u = adata.varm[f"{key}_scaling_u"]
+            scaling_s = adata.varm[f"{key}_scaling_s"]
+            batch = adata.obs[batch_key].to_numpy()
+            n_batch = int(batch.max())+1
+            scaling_u_full = np.empty(adata.shape)
+            scaling_s_full = np.empty(adata.shape)
+            for i in range(n_batch):
+                scaling_u_full[batch == i] = scaling_u[:, i]
+                scaling_s_full[batch == i] = scaling_s[:, i]
         if f"{key}_uhat" in adata.layers and f"{key}_shat" in adata.layers:
             U, S = adata.layers[f"{key}_uhat"], adata.layers[f"{key}_shat"]
-            U = U/scaling
+            U = U/scaling_u_full
+            S = S/scaling_s_full
         else:
             U, S = pred_su_numpy(np.clip(t-t0, 0, None).reshape(-1, 1),
-                                 U0/scaling,
-                                 S0,
+                                 U0/scaling_u_full,
+                                 S0/scaling_s_full,
                                  alpha*rho,
-                                 beta, gamma)
+                                 beta,
+                                 gamma)
             U, S = np.clip(U, 0, None), np.clip(S, 0, None)
-            adata.layers["Uhat"] = U * scaling
-            adata.layers["Shat"] = S
+            adata.layers["Uhat"] = U * scaling_u_full
+            adata.layers["Shat"] = S * scaling_s_full
     if approx:
-        V = (S - S0)/((t - t0).reshape(-1, 1))
-        Vu = (U - U0)/((t - t0).reshape(-1, 1))
+        V = (S - S0)/scaling_s_full/((t - t0).reshape(-1, 1))
+        Vu = (U - U0)/scaling_u_full/((t - t0).reshape(-1, 1))
     else:
         V = (beta * U - gamma * S)
         Vu = rho * alpha - beta * U
@@ -228,85 +245,6 @@ def rna_velocity_brode(adata, key, use_raw=False, use_scv_genes=False, k=10.0):
         gene_mask = np.isnan(adata.var['fit_scaling'].to_numpy())
         V[:, gene_mask] = np.nan
     return V, U, S
-
-
-def rna_velocity_cyclevae(adata,
-                          key,
-                          use_raw=False,
-                          use_scv_genes=False,
-                          k=10,
-                          return_copy=False):
-    """Compute the velocity based on:
-       du/dt = alpha - beta * u, ds/dt = beta * u - gamma * s
-
-    Arguments
-    ---------
-    adata : :class:`anndata.AnnData`
-    key : str
-        key used for extracting ODE parameters
-    use_raw : bool, optional
-        whether to use the (noisy) input count to compute the velocity
-    use_scv_genes : bool, optional
-        whether to compute velocity only for genes scVelo fits
-
-    Returns (only if `return_copy`=True)
-    -------
-    Vu : `numpy array`
-        velocity of u
-    V : `numpy array`
-        velocity of s
-    U : `numpy array`
-        predicted u values
-    S : `numpy array`
-        predicted s values
-    """
-    alpha = adata.var[f"{key}_alpha"].to_numpy()
-    beta = adata.var[f"{key}_beta"].to_numpy()
-    gamma = adata.var[f"{key}_gamma"].to_numpy()
-    theta = adata.obs[f"{key}_phase"].to_numpy()
-    theta_on = adata.var[f"{key}_phase_on"].to_numpy()
-    theta_off = adata.var[f"{key}_phase_off"].to_numpy()
-
-    if use_raw:
-        U, S = adata.layers['Mu'], adata.layers['Ms']
-    else:
-        scaling = adata.var[f"{key}_scaling"].to_numpy()
-        if f"{key}_uhat" in adata.layers and f"{key}_shat" in adata.layers:
-            U, S = adata.layers[f"{key}_uhat"], adata.layers[f"{key}_shat"]
-            U = U/scaling
-        else:
-            t = adata.uns['tmax'] * \
-                (1 - np.cos(np.clip(theta.reshape(-1, 1)-theta_on, 0, None))) \
-                / 2
-            toff = adata.uns['tmax'] * \
-                (1 - np.cos(np.clip(theta_off-theta_on, 0, None))) / 2
-            U, S = ode_numpy(t,
-                             alpha,
-                             beta,
-                             gamma,
-                             0,
-                             toff,
-                             None)  # don't need scaling here
-            adata.layers["Uhat"] = U*scaling
-            adata.layers["Shat"] = S
-    # smooth transition at the switch-on time
-    soft_coeff = 1/(1+np.exp(-(theta.reshape(-1, 1) - theta_on)*k))
-
-    dt_dtheta = adata.uns['tmax']\
-        * np.sin(np.clip(theta.reshape(-1, 1)-theta_on, 0, None))*0.5
-    alpha_mask = (theta.reshape(-1, 1) >= theta_on)\
-        & (theta.reshape(-1, 1) <= theta_off)
-    Vu = (alpha * alpha_mask - beta * U) * dt_dtheta
-    V = (beta * U - gamma * S) * soft_coeff * dt_dtheta
-
-    adata.layers[f"{key}_velocity_u"] = Vu
-    adata.layers[f"{key}_velocity"] = V
-    if use_scv_genes:
-        gene_mask = np.isnan(adata.var['fit_scaling'].to_numpy())
-        Vu[:, gene_mask] = np.nan
-        V[:, gene_mask] = np.nan
-    if return_copy:
-        return Vu, V, U, S
 
 
 def smooth_vel(v, t, W=5):
