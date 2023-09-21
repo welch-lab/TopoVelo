@@ -402,9 +402,10 @@ class VanillaVAE():
             self.encoder.eval()
             self.decoder.eval()
         else:
-            print("Warning: mode not recognized. Must be 'train' or 'test'! ")
+            print("Warning: mode not recognized. Must be 'train' or 'eval'! ")
         if self.train_stage > 1:
             self.encoder.eval()
+
     ############################################################
     # Training Objective
     ############################################################

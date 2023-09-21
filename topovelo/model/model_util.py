@@ -15,6 +15,7 @@ from sklearn.cluster import SpectralClustering, KMeans
 from sklearn.neighbors import BallTree
 from scipy.stats import dirichlet, bernoulli, kstest, linregress
 from scipy.linalg import svdvals
+from scipy.spatial.distance import cosine
 
 ###################################################################################
 # Spatial time prior estimation based Delaunay triangulation
@@ -1209,6 +1210,7 @@ def knnx0_index(t,
     ############################################################
     Nq = len(t_query)
     n1 = 0
+    num_nbs = 0
     len_avg = 0
     if hist_eq:
         t, t_query = _hist_equal(t, t_query)
@@ -1223,10 +1225,12 @@ def knnx0_index(t,
             t_ub, t_lb = t_query[i] + dt_l, t_query[i] + dt_r
         else:
             t_ub, t_lb = t_query[i] - dt_r, t_query[i] - dt_l
-        try:
-            spatial_nbs = bt.query_radius(xy_query[i:i+1], radius)[0]
-        except ValueError:
-            spatial_nbs = bt.query(xy_query[i:i+1], k=min(k+50, len(xy)))[0]
+        #try:
+        out = bt.query_radius(xy_query[i:i+1], radius, return_distance=True)
+        spatial_nbs, dist = out[0][0], out[1][0]
+        
+        #except ValueError:
+        #    spatial_nbs = bt.query(xy_query[i:i+1], k=min(k+50, len(xy)))[0]
         indices = np.where((t[spatial_nbs] >= t_lb) & (t[spatial_nbs] < t_ub))[0]
         k_ = len(indices)
         delta_t = dt[1] - dt[0]  # increment / decrement of the time window boundary
@@ -1240,6 +1244,7 @@ def knnx0_index(t,
             indices = np.where((t[spatial_nbs] >= t_lb) & (t[spatial_nbs] < t_ub))[0]  # filter out cells in the bin
             k_ = len(indices)
         len_avg = len_avg + k_
+        num_nbs = num_nbs + len(spatial_nbs)
         if k_ > 1:
             spatial_nbs = spatial_nbs[indices]
             k_neighbor = k if k_ > k else max(1, k_//2)
@@ -1254,14 +1259,16 @@ def knnx0_index(t,
         else:
             neighbor_index.append([])
             n1 = n1+1
+    
     print(f"Percentage of Invalid Sets: {n1/Nq:.3f}")
-    print(f"Average Set Size: {len_avg//Nq}")
+    print(f"Average Neighborhood Size: {num_nbs/Nq:.1f}")
+    print(f"Average Set Size: {len_avg/Nq:.1f}")
     return neighbor_index
 
 
 def get_x0(U,
            S,
-           X_spatial,
+           xy,
            t,
            dt,
            neighbor_index,
@@ -1273,7 +1280,7 @@ def get_x0(U,
           else np.tile(u0_init, (N, 1)))
     s0 = (np.zeros((N, S.shape[1])) if s0_init is None
           else np.tile(s0_init, (N, 1)))
-    xy0 = np.zeros((N, 2)) 
+    xy0 = np.zeros((N, 2))
     t0 = np.ones((N))*(t.min() - dt[0])
     # Used as the default u/s counts at the final time point
     t_98 = np.quantile(t, 0.98)
@@ -1282,20 +1289,186 @@ def get_x0(U,
         p = p - 0.01
         t_98 = np.quantile(t, p)
     u_end, s_end = U[t >= t_98].mean(0), S[t >= t_98].mean(0)
-    xy_end = X_spatial[t >= t_98].mean(0)
+    xy_start, xy_end = xy[t >= t_98].mean(0), xy[t <= np.quantile(t, 0.02)].mean(0)
 
     for i in range(N):
         if len(neighbor_index[i]) > 0:
             u0[i] = U[neighbor_index[i]].mean(0)
             s0[i] = S[neighbor_index[i]].mean(0)
-            xy0[i] = X_spatial[neighbor_index[i]].mean(0)
+            xy0[i] = xy[neighbor_index[i]].mean(0)
             t0[i] = t[neighbor_index[i]].mean()
         elif forward:
             u0[i] = u_end
             s0[i] = s_end
             xy0[i] = xy_end
             t0[i] = t_98 + (t_98-t.min()) * 0.01
+        else:
+            xy0[i] = xy_start
+        
     return u0, s0, xy0, t0
+
+
+def get_kstep_nbs(nbs, k, t, dt):
+    # nbs: adjacency list
+    nbs_k = []
+    for i in range(len(nbs)):
+        all_nbs = set()  # 1-k step neighbors of i
+        cur_nbs = set([i])  # k-step neighbor
+        next_nbs = set()  # (k+1)-step neighbor
+        for step in range(k):
+            for nb in cur_nbs:
+                candidates = nbs[nb]
+                next_nbs = next_nbs.union(set(candidates))
+                # Select cells fulfilling the time condition
+                mask = (t[candidates] > t[nb] + dt[0]) & (t[candidates] <= t[nb] + dt[1])
+                if not np.any(mask):
+                    mask = t[candidates] > t[nb]
+
+                if np.any(mask):
+                    candidates = candidates[mask]
+                    all_nbs = all_nbs.union(set(candidates))
+
+            if len(next_nbs) == 0:
+                break
+            cur_nbs = next_nbs
+        nbs_k.append(np.array(list(all_nbs)))
+
+    # filter cells based on time
+    tmin, tmax = t.min(), t.max()
+    for i in range(len(nbs_k)):
+        if len(nbs_k[i]) < 1:
+            continue
+        t_ub, t_lb = t[i] + dt[1], t[i] + dt[0]
+        mask = (t[nbs_k[i]] >= t_lb) & (t[nbs_k[i]] <= t_ub)
+        while np.sum(mask) < 1 and t_lb > tmin - (dt[1] - dt[0]) and t_ub < tmax + (dt[1] - dt[0]):
+            t_ub = t_ub + (dt[1] - dt[0])
+            t_lb = t[i]
+        nbs_k[i] = nbs_k[i][mask]
+    return nbs_k
+
+
+def _pearson_corr(v, v_neighbor):
+    return np.corrcoef(v, v_neighbor)[0, 1:]
+
+
+def get_theta(pos_1, pos_2):
+    delta_pos = pos_2 - pos_1
+    return np.arctan(delta_pos[:, 1]/delta_pos[:, 0]) + np.pi/2*(delta_pos[:, 0] < 1)
+
+
+def get_theta_nbs(x, nbs_index):
+    res = []
+    for i in range(len(x)):
+        if len(nbs_index[i]) == 0:
+            res.append([])
+            continue
+        else:
+            res.append(get_theta(x[i], x[nbs_index[i]]))
+    return res
+
+
+def _filt_theta(theta, nbs):
+    theta_25 = np.quantile(theta, 0.25)
+    theta_75 = np.quantile(theta, 0.75)
+    ub = theta_75 + (theta_75 - theta_25)*1.5
+    lb = theta_25 - (theta_75 - theta_25)*1.5
+    return nbs[(theta >= lb) & (theta <= ub)]
+
+
+def filt_nbs(nbs_index, nbs_theta):
+    for i in range(len(nbs_theta)):
+        if len(nbs_theta[i]) < 3:
+            continue
+        nbs_index[i] = _filt_theta(nbs_theta[i], nbs_index[i])
+    return nbs_index
+
+
+def cosine_dist(x, y):
+    D = len(x)//2
+    return 0.5*(cosine(x[:D], y[D:]-x[D:])+cosine(y[:D], x[D:]-y[D:]))
+
+
+def spatial_x1_index(xy, v, s, t, k, graph, dt, n_step=5):
+    """Generate a neighbor index based on velocity similarity
+
+    Args:
+        xy (:class:`numpy.ndarray`):
+            Spatial coordinates
+        v (:class:`numpy.ndarray`):
+            RNA velocity of cells in the training set
+        s (:class:`numpy.ndarray`):
+            Spliced count matrix
+        t (:class:`numpy.ndarray`):
+            Latent time of cells in the training set
+        k (int):
+            Number of neighbors
+        graph (array like):
+            Adjacency matrix
+        k (int):
+            Range of steps numbers for retreiving neighbors on a graph
+    """
+    nbs = [np.where(graph[i] > 0)[0] for i in range(graph.shape[0])]
+    nbs_k = get_kstep_nbs(nbs, n_step, t, dt)
+    del nbs
+
+    neighbor_index = []
+    n1 = 0
+    avg_nbs = 0
+
+    for ith, nbs_i in enumerate(nbs_k):
+        n_nbs = len(nbs_i)
+        avg_nbs += n_nbs
+        if n_nbs > 0:
+            # Select k neighbors with highest velocity similarity
+            k_neighbor = k if n_nbs > k else max(1, n_nbs//2)
+            knn_model = NearestNeighbors(n_neighbors=k_neighbor, metric=cosine_dist)
+            x = np.concatenate((v[nbs_i], s[nbs_i]), 1)
+            knn_model.fit(x)
+            query = np.concatenate((v[ith:ith+1], s[ith:ith+1]), 1)
+
+            dist, ind = knn_model.kneighbors(query)
+            if isinstance(ind, int):
+                ind = np.array([ind])
+            neighbor_index.append(nbs_i[ind.flatten()].astype(int))
+        else:
+            neighbor_index.append([-1])
+            n1 = n1+1
+
+    # Compute the angle between each cell and its spatial neighbors
+    # nbs_theta = get_theta_nbs(xy, neighbor_index)
+    # neighbor_index = filt_nbs(neighbor_index, nbs_theta)
+
+    print(f"Percentage of Invalid Sets: {n1/len(v):.3f}")
+    print(f"Average neighborhood size before filtering: {avg_nbs/len(v):.3f}")
+    print(f"Average neighborhood size after filtering: {np.mean([len(arr) for arr in neighbor_index]):.3f}")
+    return neighbor_index
+
+
+def get_x1_spatial(x,
+                   t,
+                   neighbor_index,
+                   forward=True):
+    N = len(neighbor_index)  # training + validation
+    x1 = np.zeros((N, x.shape[1]))
+    t1 = np.zeros((N))
+
+    # Used as the default u/s counts at the final time point
+    t_98 = np.quantile(t, 0.98)
+    p = 0.98
+    while not np.any(t >= t_98) and p > 0.01:
+        p = p - 0.01
+        t_98 = np.quantile(t, p)
+    x_end = x[t >= t_98].mean(0)
+    delta_t = (t.max() - t.min()) * 0.01
+
+    for i in range(N):
+        if len(neighbor_index[i]) > 0:
+            x1[i] = x[neighbor_index[i]].mean(0)
+            t1[i] = t[neighbor_index[i]].mean(0)
+        else:
+            x1[i] = x_end
+            t1[i] = t[i] + delta_t
+    return x1, t1
 
 
 def knn_transition_prob(t,

@@ -127,6 +127,7 @@ class SCGraphData():
                  device,
                  batch=None,
                  enable_edge_weight=False,
+                 normalize_xy=False,
                  seed=2022):
         """Constructor
 
@@ -145,6 +146,7 @@ class SCGraphData():
                 Random seed. Defaults to 2022.
         """
         self.N, self.G = data.shape[0], data.shape[1]//2
+        self.graph = graph.A
         self.data = T.ToSparseTensor()(Data(x=torch.tensor(data,
                                                            dtype=torch.float32,
                                                            requires_grad=False),
@@ -155,9 +157,12 @@ class SCGraphData():
                                                            dtype=torch.int8,
                                                            requires_grad=False))).to(device)
         # Normalize spatial coordinates
-        xy_norm = (xy - np.min(xy, 0))/(np.max(xy, 0) - np.min(xy, 0))
-        # self.xy_scale = torch.tensor(np.max(xy, 0) - np.min(xy, 0), device=device)
-        self.xy = torch.tensor(xy_norm, dtype=torch.float32, device=device)
+        if normalize_xy:
+            xy_norm = (xy - np.min(xy, 0))/(np.max(xy, 0) - np.min(xy, 0))
+            self.xy = torch.tensor(xy_norm, dtype=torch.float32, device=device)
+        else:
+            self.xy = torch.tensor(xy, dtype=torch.float32, device=device)
+        self.xy_scale = np.max(xy, 0) - np.min(xy, 0)
         
         # Batch information
         self.batch = torch.tensor(batch, dtype=int, device=device) if batch is not None else None
@@ -185,11 +190,12 @@ class SCGraphData():
         self.u0 = None
         self.s0 = None
         self.t0 = None
-        self.xy0 = None
         self.u1 = None
         self.s1 = None
         self.t1 = None
-        self.xy1 = None
+        self.xy0 = None
+        self.t = None
+        self.z = None
 
         return
 
