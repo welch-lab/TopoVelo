@@ -1625,6 +1625,7 @@ def velocity_consistency(adata, vkey, gene_mask=None):
 
     velocities = adata.layers[vkey]
     nan_mask = ~np.isnan(velocities[0]) if gene_mask is None else gene_mask
+    
     velocities = velocities[:, nan_mask]
 
     consistency_score = [_pearson_corr(velocities[ith], velocities[nbs[ith]]).mean()

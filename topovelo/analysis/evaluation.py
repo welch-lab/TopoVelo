@@ -5,7 +5,6 @@ import numpy as np
 import pandas as pd
 from os import makedirs
 from .evaluation_util import *
-from .evaluation_util import time_score
 from topovelo.plotting import set_dpi, get_colors, plot_cluster, plot_phase_grid, plot_sig_grid, plot_time_grid
 from multiprocessing import cpu_count
 from scipy.stats import spearmanr
@@ -26,9 +25,14 @@ def get_velocity_metric_placeholder(cluster_edges):
     cbdir = dict.fromkeys(cluster_edges_)
     tscore = dict.fromkeys(cluster_edges_)
     iccoh = dict.fromkeys(cluster_edges_)
+    nan_arr = np.ones((5)) * np.nan
     return (iccoh, np.nan,
             cbdir_embed, np.nan,
             cbdir, np.nan,
+            nan_arr,
+            nan_arr,
+            nan_arr,
+            nan_arr,
             tscore, np.nan,
             np.nan,
             np.nan)
@@ -37,6 +41,7 @@ def get_velocity_metric_placeholder(cluster_edges):
 def get_velocity_metric(adata,
                         key,
                         vkey,
+                        tkey,
                         cluster_key,
                         cluster_edges,
                         graph=None,
@@ -72,10 +77,14 @@ def get_velocity_metric(adata,
 
             - dict: In-Cluster Coherence per cell type transition
             - float: Mean In-Cluster Coherence
-            - dict: CBDir per cell type transition
-            - float: Mean CBDir
             - dict: CBDir (embedding) per cell type transition
             - float: Mean CBDir (embedding)
+            - dict: CBDir per cell type transition
+            - float: Mean CBDir
+            - :class:`numpy.ndarray` Mean k-step CBDir (embedding)
+            - :class:`numpy.ndarray` Mean k-step CBDir
+            - :class:`numpy.ndarray` k-step Mann-Whitney U test result (embedding)
+            - :class:`numpy.ndarray` k-step Mann-Whitney U test result
             - dict: Time Accuracy Score per cell type transition
             - float: Mean Time Accuracy Score
             - float: Velocity Consistency
@@ -106,6 +115,40 @@ def get_velocity_metric(adata,
                                                        cluster_edges,
                                                        x_emb="Ms",
                                                        gene_mask=gene_mask)
+        k_cbdir_embed, mean_k_cbdir_embed = gen_cross_boundary_correctness(adata,
+                                                                           cluster_key,
+                                                                           vkey,
+                                                                           cluster_edges,
+                                                                           tkey,
+                                                                           dir_test=True,
+                                                                           x_emb=f"X_{embed}",
+                                                                           gene_mask=gene_mask)
+        
+        k_cbdir, mean_k_cbdir = gen_cross_boundary_correctness(adata,
+                                                               cluster_key,
+                                                               vkey,
+                                                               cluster_edges,
+                                                               tkey,
+                                                               dir_test=True,
+                                                               x_emb="Ms",
+                                                               gene_mask=gene_mask)
+        (acc_embed, mean_acc_embed,
+         umtest_embed, mean_umtest_embed) = gen_cross_boundary_correctness_test(adata,
+                                                                                cluster_key,
+                                                                                vkey,
+                                                                                cluster_edges,
+                                                                                tkey,
+                                                                                x_emb=f"X_{embed}",
+                                                                                gene_mask=gene_mask)
+
+        (acc, mean_acc,
+         umtest, mean_umtest) = gen_cross_boundary_correctness_test(adata,
+                                                                    cluster_key,
+                                                                    vkey,
+                                                                    cluster_edges,
+                                                                    tkey,
+                                                                    x_emb="Ms",
+                                                                    gene_mask=gene_mask)
         if not f'{key}_time' in adata.obs:
             tscore, mean_tscore = time_score(adata, 'latent_time', cluster_key, cluster_edges)
         else:
@@ -125,15 +168,123 @@ def get_velocity_metric(adata,
     return (iccoh, mean_iccoh,
             cbdir_embed, mean_cbdir_embed,
             cbdir, mean_cbdir,
+            k_cbdir_embed, mean_k_cbdir_embed,
+            k_cbdir, mean_k_cbdir,
+            acc_embed, mean_acc_embed,
+            acc, mean_acc,
+            umtest_embed, mean_umtest_embed,
+            umtest, mean_umtest,
             tscore, mean_tscore,
             mean_constcy_score,
             mean_sp_constcy_score)
+
+
+def gather_stats(**kwargs):
+    # Helper function, used for gathering scalar performance metrics
+    stats = {
+        'MSE Train': np.nan,
+        'MSE Test': np.nan,
+        'MAE Train': np.nan,
+        'MAE Test': np.nan,
+        'LL Train': np.nan,
+        'LL Test': np.nan,
+        'Training Time': np.nan,
+        'CBDir (Embed)': np.nan,
+        'CBDir': np.nan,
+        'Time Score': np.nan,
+        'In-Cluster Coherence': np.nan,
+        'Velocity Consistency': np.nan,
+        'Spatial Consistency': np.nan
+    }  # contains the performance metrics
+
+    if 'mse_train' in kwargs:
+        stats['MSE Train'] = kwargs['mse_train']
+    if 'mse_test' in kwargs:
+        stats['MSE Test'] = kwargs['mse_test']
+    if 'mae_train' in kwargs:
+        stats['MAE Train'] = kwargs['mae_train']
+    if 'mae_test' in kwargs:
+        stats['MAE Test'] = kwargs['mae_test']
+    if 'logp_train' in kwargs:
+        stats['LL Train'] = kwargs['logp_train']
+    if 'logp_test' in kwargs:
+        stats['LL Test'] = kwargs['logp_test']
+    if 'corr' in kwargs:
+        stats['Time Correlation'] = kwargs['corr']
+    if 'mean_cbdir_embed' in kwargs:
+        stats['CBDir (Embed)'] = kwargs['mean_cbdir_embed']
+    if 'mean_cbdir' in kwargs:
+        stats['CBDir'] = kwargs['mean_cbdir']
+    if 'mean_tscore' in kwargs:
+        stats['Time Score'] = kwargs['mean_tscore']
+    if 'mean_iccoh' in kwargs:
+        stats['In-Cluster Coherence'] = kwargs['mean_iccoh']
+    if 'mean_vel_consistency' in kwargs:
+        stats['Velocity Consistency'] = kwargs['mean_vel_consistency']
+    if 'mean_sp_consistency' in kwargs:
+        stats['Spatial Consistency'] = kwargs['mean_sp_consistency']
+    return stats
+
+
+def gather_type_stats(**kwargs):
+    # Gathers pairwise velocity metrics
+    type_dfs = []
+    metrics = []
+    index_map = {
+        'cbdir': 'CBDir',
+        'cbdir_embed': 'CBDir (Embed)',
+        'tscore': 'Time Score'
+    }
+    for key in kwargs:
+        try:
+            metrics.append(index_map[key])
+            type_dfs.append(pd.DataFrame.from_dict(kwargs[key], orient='index'))
+        except KeyError:
+            print(f"Warning: {key} not found in index map, ignored.")
+            continue
+    stats_type = pd.concat(type_dfs, axis=1).T
+    stats_type.index = pd.Index(metrics)
+    return stats_type
+
+
+def gather_multistats(**kwargs):
+    metrics = {
+        'kcbdir': 'K-CBDir',
+        'kcbdir_embed': 'K-CBDir (Embed)',
+        'acc': 'Mann-Whitney Test',
+        'acc_embed': 'Mann-Whitney Test (Embed)',
+        'mwtest': 'Mann-Whitney Test Stats',
+        'mwtest_embed': 'Mann-Whitney Test Stats (Embed)'
+    }
+    multi_stats = pd.DataFrame()
+    for key in kwargs:
+        for i, val in enumerate(kwargs[key]):
+            multi_stats.loc[metrics[key], f'{i+1}-step'] = val
+    return multi_stats
+
+
+def gather_type_multistats(**kwargs):
+    metrics = {
+        'kcbdir': 'K-CBDir',
+        'kcbdir_embed': 'K-CBDir (Embed)',
+        'acc': 'Mann-Whitney Test',
+        'acc_embed': 'Mann-Whitney Test (Embed)',
+        'mwtest': 'Mann-Whitney Test Stats',
+        'mwtest_embed': 'Mann-Whitney Test Stats (Embed)'
+    }
+    multi_stats = pd.DataFrame(columns=pd.MultiIndex.from_product([[], []], names=['Transition', 'Step']))
+    for key in kwargs:
+        for transition in kwargs[key]:
+            for i, val in enumerate(kwargs[key][transition]):
+                multi_stats.loc[metrics[key], (transition, f'{i+1}-step')] = val
+    return multi_stats
 
 
 def get_metric(adata,
                method,
                key,
                vkey,
+               tkey,
                spatial_graph,
                cluster_key="clusters",
                gene_key='velocity_genes',
@@ -172,15 +323,6 @@ def get_metric(adata,
         stats (:class:`pandas.DataFrame`):
             Stores the performance metrics. Rows are metric names and columns are method names
     """
-    stats = {
-        'MSE Train': np.nan,
-        'MSE Test': np.nan,
-        'MAE Train': np.nan,
-        'MAE Test': np.nan,
-        'LL Train': np.nan,
-        'LL Test': np.nan,
-        'Training Time': np.nan
-    }  # contains the performance metrics
     if gene_key is not None and gene_key in adata.var:
         gene_mask = adata.var[gene_key].to_numpy()
     else:
@@ -236,86 +378,65 @@ def get_metric(adata,
         mae_train, mae_test = np.nan, np.nan
         logp_train, logp_test = np.nan, np.nan
 
-    stats['MSE Train'] = mse_train
-    stats['MSE Test'] = mse_test
-    stats['MAE Train'] = mae_train
-    stats['MAE Test'] = mae_test
-    stats['LL Train'] = logp_train
-    stats['LL Test'] = logp_test
-
     if 'tprior' in adata.obs:
         tprior = adata.obs['tprior'].to_numpy()
         t = (adata.obs["latent_time"].to_numpy()
              if (method in ['scVelo', 'UniTVelo']) else
              adata.obs[f"{key}_time"].to_numpy())
         corr, pval = spearmanr(t, tprior)
-        stats['corr'] = corr
     else:
-        stats['corr'] = np.nan
+        corr = np.nan
 
-    print("Computing velocity embedding using scVelo")
     # Compute velocity metrics using a subset of genes defined by gene_mask
-    if gene_mask is not None:
-        (iccoh_sub, mean_iccoh_sub,
-         cbdir_sub_embed, mean_cbdir_sub_embed,
-         cbdir_sub, mean_cbdir_sub,
-         tscore_sub, mean_tscore_sub,
-         mean_vel_consistency_sub,
-         mean_sp_consistency_sub) = get_velocity_metric(adata,
-                                                        key,
-                                                        vkey,
-                                                        cluster_key,
-                                                        cluster_edges,
-                                                        spatial_graph.A,
-                                                        gene_mask,
-                                                        embed,
-                                                        n_jobs)
-    else:
-        (iccoh_sub, mean_iccoh_sub,
-         cbdir_sub_embed, mean_cbdir_sub_embed,
-         cbdir_sub, mean_cbdir_sub,
-         tscore_sub, mean_tscore_sub,
-         mean_vel_consistency_sub,
-         mean_sp_consistency_sub) = get_velocity_metric_placeholder(cluster_edges)
-    stats['CBDir (Embed, Velocity Genes)'] = mean_cbdir_sub_embed
-    stats['CBDir (Velocity Genes)'] = mean_cbdir_sub
-    stats['In-Cluster Coherence (Velocity Genes)'] = mean_iccoh_sub
-    stats['Vel Consistency (Velocity Genes)'] = mean_vel_consistency_sub
-    stats['Spatial Consistency (Velocity Genes)'] = mean_sp_consistency_sub
-
-    # Compute velocity metrics on all genes
     (iccoh, mean_iccoh,
      cbdir_embed, mean_cbdir_embed,
      cbdir, mean_cbdir,
+     k_cbdir_embed, mean_k_cbdir_embed,
+     k_cbdir, mean_k_cbdir,
+     acc_embed, mean_acc_embed,
+     acc, mean_acc,
+     mwtest_embed, mean_mwtest_embed,
+     mwtest, mean_mwtest,
      tscore, mean_tscore,
-     mean_vel_consistency,
-     mean_sp_consistency) = get_velocity_metric(adata,
-                                                key,
-                                                vkey,
-                                                cluster_key,
-                                                cluster_edges,
-                                                spatial_graph.A,
-                                                None,
-                                                embed,
-                                                n_jobs)
-    stats['CBDir (Embed)'] = mean_cbdir_embed
-    stats['CBDir'] = mean_cbdir
-    stats['Time Score'] = mean_tscore
-    stats['In-Cluster Coherence'] = mean_iccoh
-    stats['Velocity Consistency'] = mean_vel_consistency
-    stats['Spatial Consistency'] = mean_sp_consistency
-    stats_type = pd.concat([pd.DataFrame.from_dict(cbdir_sub, orient='index'),
-                            pd.DataFrame.from_dict(cbdir_sub_embed, orient='index'),
-                            pd.DataFrame.from_dict(cbdir, orient='index'),
-                            pd.DataFrame.from_dict(cbdir_embed, orient='index'),
-                            pd.DataFrame.from_dict(tscore, orient='index')],
-                           axis=1).T
-    stats_type.index = pd.Index(['CBDir (Velocity Genes)',
-                                 'CBDir (Embed, Velocity Genes)',
-                                 'CBDir',
-                                 'CBDir (Embed)',
-                                 'Time Score'])
-    return stats, stats_type
+     mean_constcy_score,
+     mean_sp_constcy_score) = get_velocity_metric(adata,
+                                                  key,
+                                                  vkey,
+                                                  tkey,
+                                                  cluster_key,
+                                                  cluster_edges,
+                                                  spatial_graph.A,
+                                                  gene_mask,
+                                                  embed,
+                                                  n_jobs)
+
+    stats = gather_stats(mse_train=mse_train,
+                         mse_test=mse_test,
+                         mae_train=mae_train,
+                         mae_test=mae_test,
+                         logp_train=logp_train,
+                         logp_test=logp_test,
+                         corr=corr,
+                         mean_cbdir=mean_cbdir,
+                         mean_cbdir_embed=mean_cbdir_embed,
+                         mean_tscore=mean_tscore,
+                         mean_vel_consistency=mean_constcy_score,
+                         mean_sp_consistency=mean_sp_constcy_score)
+    
+    stats_type = gather_type_stats(cbdir=cbdir, cbdir_embed=cbdir_embed, tscore=tscore)
+    multi_stats = gather_multistats(kcbdir=mean_k_cbdir,
+                                    kcbdir_embed=mean_k_cbdir_embed,
+                                    acc=mean_acc,
+                                    acc_embed=mean_acc_embed,
+                                    mwtest=mean_mwtest,
+                                    mwtest_embed=mean_mwtest_embed)
+    multi_stats_type = gather_type_multistats(kcbdir=k_cbdir,
+                                              kcbdir_embed=k_cbdir_embed,
+                                              acc=acc,
+                                              acc_embed=acc_embed,
+                                              mwtest=mwtest,
+                                              mwtest_embed=mwtest_embed)
+    return stats, stats_type, multi_stats, multi_stats_type
 
 
 def post_analysis(adata,
@@ -478,13 +599,16 @@ def post_analysis(adata,
         print(genes)
 
     stats = {}
-    stats_type_list = []
+    stats_type_list, multi_stats_list, multi_stats_type_list = [], [], []
+    methods_display = []  # allows comparing multiple instances of the same model type
     Uhat, Shat, V = {}, {}, {}
     That, Yhat = {}, {}
-    vkeys = []
+    vkeys, tkeys = [], []
     for i, method in enumerate(methods):
         vkey = 'velocity' if method in ['scVelo', 'UniTVelo', 'DeepVelo'] else f'{keys[i]}_velocity'
         vkeys.append(vkey)
+        tkey = 'latent_time' if method == 'scVelo' else f'{keys[i]}_time'
+        tkeys.append(tkey)
 
     # Optionally compute a spatial KNN graph,
     # used for spatial velocity consistency and optionally velocity stream
@@ -508,21 +632,28 @@ def post_analysis(adata,
     # Compute metrics and generate plots for each method
     for i, method in enumerate(methods):
         if compute_metrics:
-            stats_i, stats_type_i = get_metric(adata,
-                                               method,
-                                               keys[i],
-                                               vkeys[i],
-                                               spatial_graph,
-                                               cluster_key,
-                                               gene_key,
-                                               cluster_edges,
-                                               embed,
-                                               n_jobs=(kwargs['n_jobs']
-                                                       if 'n_jobs' in kwargs
-                                                       else None))
+            print(f'*** Computing performance metrics {i+1}/{len(methods)} ***')
+            (stats_i, stats_type_i,
+             multi_stats_i, multi_stats_type_i) = get_metric(adata,
+                                                             method,
+                                                             keys[i],
+                                                             vkeys[i],
+                                                             tkeys[i],
+                                                             spatial_graph,
+                                                             cluster_key,
+                                                             gene_key,
+                                                             cluster_edges,
+                                                             embed,
+                                                             n_jobs=(kwargs['n_jobs']
+                                                                     if 'n_jobs' in kwargs
+                                                                     else None))
+            print('Finished. \n')
             stats_type_list.append(stats_type_i)
+            multi_stats_list.append(multi_stats_i)
+            multi_stats_type_list.append(multi_stats_type_i)
             # avoid duplicate methods with different keys
             method_ = f"{method} ({keys[i]})" if method in stats else method
+            methods_display.append(method_)
             stats[method_] = stats_i
         # Compute prediction for the purpose of plotting (a fixed number of plots)
         if 'phase' in plot_type or 'gene' in plot_type or 'all' in plot_type:
@@ -592,13 +723,21 @@ def post_analysis(adata,
             Shat[method_] = Shat_i
 
     if compute_metrics:
-        print("---     Computing Peformance Metrics     ---")
+        print("---     Integrating Peformance Metrics     ---")
         print(f"Dataset Size: {adata.n_obs} cells, {adata.n_vars} genes")
         stats_df = pd.DataFrame(stats)
         stats_type_df = pd.concat(stats_type_list,
                                   axis=1,
-                                  keys=methods,
+                                  keys=methods_display,
                                   names=['Model'])
+        multi_stats_df = pd.concat(multi_stats_list,
+                                   axis=1,
+                                   keys=methods_display,
+                                   names=['Model'])
+        multi_stats_type_df = pd.concat(multi_stats_type_list,
+                                        axis=1,
+                                        keys=methods_display,
+                                        names=['Model'])
         pd.set_option("display.precision", 3)
 
     print("---   Plotting  Results   ---")
@@ -727,10 +866,12 @@ def post_analysis(adata,
                                           save=(None if figure_path is None else
                                                 f'{figure_path}/{test_id}_{keys[i]}_stream.png'))
                 if methods[i] == 'TopoVelo':
-                    adata.uns[f"{vkey}_params"]["embeddings"].append(f'{keys[i]}_xy')
+                    # adata.uns[f"{vkey}_params"]["embeddings"].append(f'{keys[i]}_xy')
+                    adata.obsm[f"{keys[i]}_true_velocity_{embed}"] = adata.obsm[f"{keys[i]}_true_velocity_spatial"]
+                    adata.uns[f"{vkey}_params"]["embeddings"].append(embed)
                     velocity_embedding_stream(adata,
-                                              basis=f'{keys[i]}_xy',
-                                              vkey=vkey,
+                                              basis=embed,
+                                              vkey=f"{keys[i]}_true_velocity",
                                               recompute=False,
                                               color=cluster_key,
                                               title="",
@@ -749,6 +890,6 @@ def post_analysis(adata,
     if compute_metrics:
         if figure_path is not None:
             stats_df.to_csv(f"{figure_path}/metrics_{test_id}.csv", sep='\t')
-        return stats_df, stats_type_df
+        return stats_df, stats_type_df, multi_stats_df, multi_stats_type_df
 
-    return None, None
+    return None, None, None, None

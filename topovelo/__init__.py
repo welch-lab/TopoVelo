@@ -1,5 +1,6 @@
 from topovelo.model import *
 from topovelo.analysis.evaluation import *
+from topovelo.analysis.perf_logger import PerfLogger
 from .plotting import (get_colors,
                        plot_sig,
                        plot_phase,
