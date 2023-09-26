@@ -92,8 +92,8 @@ def get_velocity_metric(adata,
     mean_constcy_score = velocity_consistency(adata, vkey, gene_mask)
     mean_sp_constcy_score = np.nan
     if graph is not None:
-        mean_sp_constcy_score =  spatial_velocity_consistency(adata, vkey, graph, gene_mask)
-    if cluster_edges is not None:
+        mean_sp_constcy_score = spatial_velocity_consistency(adata, vkey, graph, gene_mask)
+    if len(cluster_edges) > 0:
         try:
             from scvelo.tl import velocity_graph, velocity_embedding
             n_jobs = get_n_cpu(adata.n_obs) if n_jobs is None else n_jobs
@@ -120,7 +120,7 @@ def get_velocity_metric(adata,
                                                                            vkey,
                                                                            cluster_edges,
                                                                            tkey,
-                                                                           dir_test=True,
+                                                                           dir_test=False,
                                                                            x_emb=f"X_{embed}",
                                                                            gene_mask=gene_mask)
         
@@ -129,7 +129,7 @@ def get_velocity_metric(adata,
                                                                vkey,
                                                                cluster_edges,
                                                                tkey,
-                                                               dir_test=True,
+                                                               dir_test=False,
                                                                x_emb="Ms",
                                                                gene_mask=gene_mask)
         (acc_embed, mean_acc_embed,
@@ -496,6 +496,7 @@ def post_analysis(adata,
         spatial_velocity_graph (bool, optional):
             Whether to use the spatial knn graph in velocity graph computation.
             Affects the velocity stream plot.
+            Defaults to False.
         genes (list[str], optional):
             Genes to plot. Used when plot_type contains "phase" or "gene".
             If not provided, gene(s) will be randomly sampled for plotting. Defaults to [].
@@ -861,23 +862,24 @@ def post_analysis(adata,
                                           palette=colors,
                                           legend_fontsize=np.clip(15 - np.clip(len(colors)-10, 0, None), 8, None),
                                           legend_loc='on data' if len(colors) <= 10 else 'right margin',
+                                          cutoff_perc=0.0,
                                           dpi=dpi,
                                           show=True,
                                           save=(None if figure_path is None else
                                                 f'{figure_path}/{test_id}_{keys[i]}_stream.png'))
                 if methods[i] == 'TopoVelo':
-                    # adata.uns[f"{vkey}_params"]["embeddings"].append(f'{keys[i]}_xy')
-                    adata.obsm[f"{keys[i]}_true_velocity_{embed}"] = adata.obsm[f"{keys[i]}_true_velocity_spatial"]
-                    adata.uns[f"{vkey}_params"]["embeddings"].append(embed)
+                    adata.uns[f"{vkey}_params"]["embeddings"].append(f'{keys[i]}_xy')
+                    # adata.obsm[f"{keys[i]}_true_velocity_{embed}"] = adata.obsm[f"{keys[i]}_true_velocity_spatial"]
                     velocity_embedding_stream(adata,
-                                              basis=embed,
-                                              vkey=f"{keys[i]}_true_velocity",
+                                              basis=f'{keys[i]}_xy',
+                                              vkey=vkey,
                                               recompute=False,
                                               color=cluster_key,
                                               title="",
                                               palette=colors,
                                               legend_fontsize=np.clip(15 - np.clip(len(colors)-10, 0, None), 8, None),
                                               legend_loc='on data' if len(colors) <= 10 else 'right margin',
+                                              cutoff_perc=0.0,
                                               dpi=dpi,
                                               show=True,
                                               save=(None if figure_path is None else

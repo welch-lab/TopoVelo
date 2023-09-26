@@ -51,6 +51,8 @@ class PerfLogger:
         else:
             self.df = pd.read_csv(checkpoints[0], header=[0], index_col=[0, 1])
             self.df_type = pd.read_csv(checkpoints[1], header=[0, 1], index_col=[0, 1])
+            self.df_multi = pd.read_csv(checkpoints[2], header=[0, 1], index_col=[0, 1])
+            self.df_multi_type = pd.read_csv(checkpoints[3], header=[0, 1, 2], index_col=[0, 1])
 
     def _create_empty_df(self):
         row_mindex = pd.MultiIndex.from_arrays([[], []], names=["Metrics", "Model"])
@@ -289,13 +291,13 @@ class PerfLogger:
                 fig_name = metric_name+"_"+data_name
                 for i, model in enumerate(models):
                     ax = self.df_multi.loc[(metric, model), dataset].plot(marker=MARKERS[i],
-                                                                          markersize=10,
+                                                                          markersize=6,
                                                                           figsize=(5, 6),
                                                                           color=colors[i],
                                                                           label=model)
                     ax.set_xlabel("")
                     ax.set_xticks(range(len(steps)), steps, rotation=0)
-                    ax.legend(fontsize=13.5, ncol=4, loc='center', bbox_to_anchor=bbox_to_anchor)
+                    ax.legend(fontsize=8, ncol=4, loc='center', bbox_to_anchor=bbox_to_anchor)
                 ax.grid()
                 ax.set_ylabel(metric, fontsize=15)
                 ax.tick_params(axis='both', which='major', labelsize=10)

@@ -1585,7 +1585,8 @@ def plot_sig_grid(Nr,
                                                'Discrete PyroVelocity',
                                                'PyroVelocity',
                                                'VeloVI',
-                                               'cellDancer']):
+                                               'cellDancer',
+                                               'TopoVelo']):
                         K = min(10, max(len(that)//5000, 1))
                         
                         if frac > 0 and frac < 1:
@@ -1711,7 +1712,8 @@ def plot_sig_grid(Nr,
                                                        'Discrete PyroVelocity',
                                                        'PyroVelocity',
                                                        'VeloVI',
-                                                       'cellDancer']):
+                                                       'cellDancer',
+                                                       'TopoVelo']):
                                 # These methods don't have line prediction
                                 K = min(10, max(len(that)//5000, 1))
                                 if frac > 0 and frac < 1:

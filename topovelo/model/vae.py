@@ -935,7 +935,7 @@ class VAE(VanillaVAE):
                  },
                  random_state=2022,
                  **kwargs):
-        """VeloVAE Model
+        """TopoVelo Model
 
         Arguments
         ---------
@@ -1707,7 +1707,7 @@ class VAE(VanillaVAE):
         u, s : `torch.tensor`
             Input data
         uhat, shat : torch.tensor
-            Prediction by VeloVAE
+            Prediction by TopoVelo
         weight : `torch.tensor`, optional
             Sample weight. This feature is not stable. Please consider setting it to None.
 
@@ -1842,7 +1842,7 @@ class VAE(VanillaVAE):
         # 4.  optimizer2 [optimizer from torch.optim
         #     (Optional) A second optimizer.
         #     This is used when we optimize NN and ODE simultaneously in one epoch.
-        #     By default, VeloVAE performs alternating optimization in each epoch.
+        #     By default, TopoVelo performs alternating optimization in each epoch.
         #     The argument will be set to proper value automatically.
         # 5.  K [int]
         #     Alternating update period.
@@ -2201,7 +2201,7 @@ class VAE(VanillaVAE):
         self._set_sigma_pos(adata.obsm[spatial_key])
         self._set_radius(adata.obsm[spatial_key])
 
-        print("--------------------------- Train a VeloVAE ---------------------------")
+        print("--------------------------- Train a TopoVelo ---------------------------")
         # Get data loader
         if self.is_discrete:
             U, S = np.array(adata.layers['unspliced'].todense()), np.array(adata.layers['spliced'].todense())
@@ -2331,7 +2331,7 @@ class VAE(VanillaVAE):
             if (not self.is_discrete) and (noise_change > 0.001) and (r < self.config['n_refine']-1):
                 self.update_std_noise()
                 stop_training = False
-            
+
             if stop_training:
                 print(f"Stage 2: Early Stop Triggered at round {r}.")
                 break
@@ -2457,7 +2457,7 @@ class VAE(VanillaVAE):
                                [i*self.config["test_iter"] for i in range(1, len(self.loss_test)+1)],
                                save=f'{figure_path}/kl_validation.png')
                 plot_test_loss(self.loss_test_sp,
-                               [i*self.config["test_iter"] for i in range(1, loss_test_sp+1)],
+                               [i*self.config["test_iter"] for i in range(1, len(self.loss_test_sp)+1)],
                                save=f'{figure_path}/xyloss_test.png')
 
         self.timer = self.timer + (time.time()-start)
@@ -2520,7 +2520,7 @@ class VAE(VanillaVAE):
                 shat_fw = uhat_fw[sample_idx]*ls_scale[sample_idx]
                 u1 = u1[sample_idx].cpu()
                 s1 = s1[sample_idx].cpu()
-            
+
             loss_terms = self.vae_risk((mu_tx[sample_idx], std_tx[sample_idx]), p_t,
                                        (mu_zx[sample_idx], std_zx[sample_idx]), p_z,
                                        self.graph_data.data.x[sample_idx, :G].cpu(),
@@ -2561,7 +2561,7 @@ class VAE(VanillaVAE):
              uhat_fw, shat_fw,
              vu, vs,
              vu_fw, vs_fw)
-        
+
         return out, [-loss_terms[i].cpu().item() for i in range(len(loss_terms))]
 
     def test(self,
@@ -2609,7 +2609,7 @@ class VAE(VanillaVAE):
 
         if plot:
             # Plot Time
-            plot_time(t, Xembed, save=f"{path}/time-{testid}-velovae.png")
+            plot_time(t, Xembed, save=f"{path}/time-{testid}-TopoVelo.png")
             cell_labels = np.array([self.label_dic_rev[x] for x in self.cell_labels])
             cell_labels = cell_labels[self.validation_idx] if test_mode else cell_labels[self.train_idx]
             # Plot u/s-t and phase portrait for each gene
@@ -2666,9 +2666,10 @@ class VAE(VanillaVAE):
             loss *= self.config['sigma_pos']
         if plot:
             cell_labels = np.array([self.label_dic_rev[x] for x in self.cell_labels])
-            cell_labels = cell_labels[self.validation_idx] if test_mode else cell_labels[self.train_idx]
-            plot_cluster(xy_hat.cpu().numpy(), cell_labels, embed='Predicted Coordinates',
-                         save=f"{path}/xy-{testid}.png")
+            plot_cluster(xy_hat.cpu().numpy()[self.train_idx], cell_labels[self.train_idx], embed='Predicted Coordinates',
+                         save=f"{path}/xy-{testid}-train.png")
+            plot_cluster(xy_hat.cpu().numpy()[self.test_idx], cell_labels[self.test_idx], embed='Predicted Coordinates',
+                         save=f"{path}/xy-{testid}-test.png")
         return loss.cpu().item()
 
     def update_std_noise(self):
