@@ -42,8 +42,8 @@ def cell_state(adata, method, key, gene_indices=None, **kwargs):
             AnnData Object
         method (str):
             Model name.
-            Now supports 'scVelo', 'Vanilla VAE', 'VeloVAE', 'FullVB',
-            'Discrete VeloVAE', 'Discrete FullVB' and 'VeloVI'.
+            Now supports 'scVelo', 'Vanilla VAE', 'VeloVAE', 'VeloVAE (Full VB)',
+            'Discrete VeloVAE', 'Discrete VeloVAE (Full VB)' and 'VeloVI'.
         key (str):
             Key for extracting model outputs.
         gene_indices (:class:`numpy.ndarray`, optional):
@@ -67,7 +67,7 @@ def cell_state(adata, method, key, gene_indices=None, **kwargs):
         toff = toff[gene_indices]
         ton = ton[gene_indices]
         cell_state = (t.reshape(-1, 1) > toff) + (t.reshape(-1, 1) < ton)*2
-    elif method in ['VeloVAE', 'FullVB', 'Discrete VeloVAE', 'Discrete FullVB']:
+    elif method in ['VeloVAE', 'VeloVAE (Full VB)', 'Discrete VeloVAE', 'Discrete VeloVAE (Full VB)']:
         rho = adata.layers[f"{key}_rho"][:, gene_indices]
         t = adata.obs[f"{key}_time"].to_numpy()
         mask_induction = rho > 0.01
@@ -976,15 +976,21 @@ def remove_type(adata, nodes, target, k_cluster):
     return nodes[adata.obs[k_cluster][nodes].values != target]
 
 
+def _get_spatial_nbs(adata, spatial_graph_key, query_idx):
+    # Get an adjacency list for cells in query_idx from a sparse adjacency matrix
+    sub_graph = adata.obsp[spatial_graph_key][query_idx]
+    return [np.where(sub_graph[i].A > 0)[1] for i in range(len(query_idx))]
+
+
 def cross_boundary_correctness(
         adata,
         k_cluster,
         k_velocity,
         cluster_edges,
+        spatial_graph_key=None,
         return_raw=False,
         x_emb="X_umap",
-        gene_mask=None
-        ):
+        gene_mask=None):
     """Cross-Boundary Direction Correctness Score (A->B)
 
     Args:
@@ -1019,7 +1025,7 @@ def cross_boundary_correctness(
         if x_emb_name == "X_umap":
             v_emb = adata.obsm['{}_umap'.format(k_velocity)]
         else:
-            v_emb = adata.obsm[[key for key in adata.obsm if key.startswith(k_velocity)][0]]
+            v_emb = adata.obsm[f'{k_velocity}_{x_emb_name[2:]}']
     else:
         x_emb = adata.layers[x_emb]
         v_emb = adata.layers[k_velocity]
@@ -1027,10 +1033,13 @@ def cross_boundary_correctness(
             gene_mask = ~np.isnan(v_emb[0])
         x_emb = x_emb[:, gene_mask]
         v_emb = v_emb[:, gene_mask]
-
+    cell_labels = adata.obs[k_cluster].to_numpy()
     for u, v in cluster_edges:
-        sel = adata.obs[k_cluster] == u
-        nbs = adata.uns['neighbors']['indices'][sel]  # [n * 30]
+        sel = cell_labels == u
+        if spatial_graph_key is None:
+            nbs = adata.uns['neighbors']['indices'][sel]  # [n * 30]
+        else:
+            nbs = _get_spatial_nbs(adata, spatial_graph_key, np.where(sel)[0])
 
         boundary_nodes = map(lambda nodes: keep_type(adata, nodes, v, k_cluster), nbs)
         x_points = x_emb[sel]
@@ -1062,12 +1071,19 @@ def _cos_sim_sample(v_sample, v_neighbors, dt=None):
     return res
 
 
+def _compute_prune_number(adata, spatial_graph_key):
+    n_nonzero = adata.obsp[spatial_graph_key].count_nonzero()
+    avg_degree = n_nonzero / adata.shape[0]
+    return min(int(avg_degree), 100)
+
+
 def gen_cross_boundary_correctness(
     adata,
     k_cluster,
     k_velocity,
     cluster_edges,
-    tkey=None,
+    tkey,
+    spatial_graph_key=None,
     k_hop=5,
     dir_test=False,
     x_emb="X_umap",
@@ -1121,9 +1137,9 @@ def gen_cross_boundary_correctness(
     if x_emb in adata.obsm:
         x_emb = adata.obsm[x_emb]
         if x_emb_name == "X_umap":
-            v_emb = adata.obsm['{}_umap'.format(k_velocity)]
+            v_emb = adata.obsm[f'{k_velocity}_umap']
         else:
-            v_emb = adata.obsm[[key for key in adata.obsm if key.startswith(k_velocity)][0]]
+            v_emb = adata.obsm[f'{k_velocity}_{x_emb_name[2:]}']
     else:
         x_emb = adata.layers[x_emb]
         v_emb = adata.layers[k_velocity]
@@ -1132,12 +1148,15 @@ def gen_cross_boundary_correctness(
         x_emb = x_emb[:, gene_mask]
         v_emb = v_emb[:, gene_mask]
     t = adata.obs[tkey].to_numpy()
+    cell_labels = adata.obs[k_cluster].to_numpy()
+    
     np.random.seed(random_state)
     for u, v in cluster_edges:
-        sel = adata.obs[k_cluster] == u
-        nbs = adata.uns['neighbors']['indices'][sel]  # [n * 30]
-        # random_pool = np.where(~((adata.obs[k_cluster].to_numpy() == u)\
-        #                          | (adata.obs[k_cluster].to_numpy() == v)))[0]
+        sel = cell_labels == u
+        if spatial_graph_key is None:
+            nbs = adata.uns['neighbors']['indices'][sel]  # [n * 30]
+        else:
+            nbs = _get_spatial_nbs(adata, spatial_graph_key, np.where(sel)[0])
 
         boundary_nodes = map(lambda nodes: keep_type(adata, nodes, v, k_cluster), nbs)
         x_points = x_emb[sel]
@@ -1153,7 +1172,6 @@ def gen_cross_boundary_correctness(
             dt = t[nodes] - t_i
             dir_scores = _cos_sim_sample(x_vel, position_dif, dt)
 
-            # nodes_null = np.random.choice(random_pool, min(len(random_pool), n_prune), replace=False)
             nodes_null = all_nodes if len(all_nodes) < n_prune else np.random.choice(all_nodes, n_prune)
             position_dif_null = x_emb[nodes_null] - x_pos
             dt_null = t[nodes_null] - t_i
@@ -1206,6 +1224,7 @@ def gen_cross_boundary_correctness_test(
     k_velocity,
     cluster_edges,
     tkey,
+    spatial_graph_key=None,
     k_hop=5,
     x_emb="X_umap",
     gene_mask=None,
@@ -1265,7 +1284,7 @@ def gen_cross_boundary_correctness_test(
         if x_emb_name == "X_umap":
             v_emb = adata.obsm['{}_umap'.format(k_velocity)]
         else:
-            v_emb = adata.obsm[[key for key in adata.obsm if key.startswith(k_velocity)][0]]
+            v_emb = adata.obsm[f'{k_velocity}_{x_emb_name[2:]}']
     else:
         x_emb = adata.layers[x_emb]
         v_emb = adata.layers[k_velocity]
@@ -1274,10 +1293,14 @@ def gen_cross_boundary_correctness_test(
         x_emb = x_emb[:, gene_mask]
         v_emb = v_emb[:, gene_mask]
     t = adata.obs[tkey].to_numpy()
+
     np.random.seed(random_state)
     for u, v in cluster_edges:
         sel = adata.obs[k_cluster] == u
-        nbs = adata.uns['neighbors']['indices'][sel]  # [n * 30]
+        if spatial_graph_key is None:
+            nbs = adata.uns['neighbors']['indices'][sel]  # [n * 30]
+        else:
+            nbs = _get_spatial_nbs(adata, spatial_graph_key, np.where(sel)[0])
 
         boundary_nodes = map(lambda nodes: keep_type(adata, nodes, v, k_cluster), nbs)
         x_points = x_emb[sel]
@@ -1634,7 +1657,7 @@ def velocity_consistency(adata, vkey, gene_mask=None):
     return np.mean(consistency_score)
 
 
-def spatial_velocity_consistency(adata, vkey, graph, gene_mask=None):
+def spatial_velocity_consistency(adata, vkey, spatial_graph_key, gene_mask=None):
     """Velocity Consistency as reported in scVelo paper
 
     Args:
@@ -1642,16 +1665,16 @@ def spatial_velocity_consistency(adata, vkey, graph, gene_mask=None):
             Anndata object.
         vkey (str):
             key to the velocity matrix in adata.obsm.
-        graph (:class:`scipy.sparse_matrix`):
-            Spatial graph
+        spatial_graph_key (:class:`scipy.sparse_matrix`):
+            Key in .obsp for the spatial graph
         gene_mask (:class:`numpy.ndarray`, optional):
             Boolean array to filter out genes. Defaults to None.
 
     Returns:
         float: Average score over all cells.
     """
-    # nbs = adata.uns['neighbors']['indices']
-    nbs = [np.where(graph[i] > 0)[0] for i in range(graph.shape[0])]
+    graph = adata.obsp[spatial_graph_key]
+    nbs = [np.where(graph[i].A > 0)[1] for i in range(graph.shape[0])]
 
     velocities = adata.layers[vkey]
     nan_mask = ~np.isnan(velocities[0]) if gene_mask is None else gene_mask

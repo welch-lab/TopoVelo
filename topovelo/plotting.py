@@ -1008,7 +1008,7 @@ def plot_phase_grid(Nr,
             if labels is not None:
                 if labels.ndim == 2:
                     labels = labels[:, i_fig]
-            title = f"{gene_list[i_fig]} (VeloVAE)" if methods[0] == "FullVB" else f"{gene_list[i_fig]} ({methods[0]})"
+            title = f"{gene_list[i_fig]} ({methods[0]})"
             ax_phase = plot_phase_axis(ax_phase,
                                        U[:, i_fig],
                                        S[:, i_fig],
@@ -1044,9 +1044,7 @@ def plot_phase_grid(Nr,
                     if labels is not None:
                         if labels.ndim == 2:
                             labels = labels[:, i_fig*Nc+j]
-                    title = (f"{gene_list[i_fig*Nc+j]} (VeloVAE)"
-                             if methods[0] == "FullVB" else
-                             f"{gene_list[i_fig*Nc+j]} ({method})")
+                    title = f"{gene_list[i_fig*Nc+j]} ({method})"
                     ax_phase[M*j+k] = plot_phase_axis(ax_phase[M*j+k],
                                                       U[:, i_fig*Nc+j],
                                                       S[:, i_fig*Nc+j],
@@ -1082,9 +1080,7 @@ def plot_phase_grid(Nr,
                 if labels is not None:
                     if labels.ndim == 2:
                         labels = labels[:, i_fig * Nr + i]
-                title = (f"{gene_list[i_fig*Nr+i]} (VeloVAE)"
-                         if methods[0] == "FullVB" else
-                         f"{gene_list[i_fig*Nr+i]} ({methods[0]})")
+                title = f"{gene_list[i_fig*Nr+i]} ({methods[0]})"
                 ax_phase[i] = plot_phase_axis(ax_phase[i],
                                               U[:, i_fig*Nr+i],
                                               S[:, i_fig*Nr+i],
@@ -1125,9 +1121,7 @@ def plot_phase_grid(Nr,
                         if labels is not None:
                             if labels.ndim == 2:
                                 labels = labels[:, idx]
-                        title = (f"{gene_list[idx]} (VeloVAE)"
-                                 if methods[0] == "FullVB" else
-                                 f"{gene_list[idx]} ({method})")
+                        title = f"{gene_list[idx]} ({method})"
                         ax_phase[i, M * j + k] = plot_phase_axis(ax_phase[i, M * j + k],
                                                                  U[:, idx],
                                                                  S[:, idx],
@@ -1524,7 +1518,7 @@ def plot_sig_grid(Nr,
             sapling most zeros in sparse expression profiles.
             Defaults to False.
         plot_loess (bool, optional):
-            Whether to plot a line fit for VeloVAE. Defaults to False.
+            Whether to plot a line fit. Defaults to False.
         color_map (_type_, optional):
             User-defined colormap for different cell types. Defaults to None.
         path (str, optional):
@@ -1556,7 +1550,7 @@ def plot_sig_grid(Nr,
                 if np.any(np.isnan(t)):
                     continue
                 that = That[methods[0]][:, idx] if That[methods[0]].ndim == 2 else That[methods[0]]
-                title = f"{gene_list[idx]} (VeloVAE)" if methods[0] == "FullVB" else f"{gene_list[idx]} ({methods[0]})"
+                title = f"{gene_list[idx]} ({methods[0]})"
                 plot_sig_axis(ax_sig[3*i],
                               t,
                               U[:, idx],
@@ -1580,13 +1574,12 @@ def plot_sig_grid(Nr,
 
                 try:
                     if ('VeloVAE' in methods[0])\
-                        or ('FullVB' in methods[0])\
-                            or (methods[0] in ['DeepVelo',
-                                               'Discrete PyroVelocity',
-                                               'PyroVelocity',
-                                               'VeloVI',
-                                               'cellDancer',
-                                               'TopoVelo']):
+                        or ('TopoVelo' in methods[0])\
+                        or (methods[0] in ['DeepVelo',
+                                           'Discrete PyroVelocity',
+                                           'PyroVelocity',
+                                           'VeloVI',
+                                           'cellDancer']):
                         K = min(10, max(len(that)//5000, 1))
                         
                         if frac > 0 and frac < 1:
@@ -1664,7 +1657,9 @@ def plot_sig_grid(Nr,
                 ax_sig[3*i].set_yticks([])
                 ax_sig[3*i+1].set_yticks([])
                 ax_sig[3*i+2].set_yticks([])
-
+                for r in range(3):
+                    ax_sig[3*i+r].tick_params(axis='both', which='major', labelsize=15)
+                    ax_sig[3*i+r].yaxis.set_major_formatter(matplotlib.ticker.FormatStrFormatter('%.2f'))
         else:
             legends = []
             for i in range(Nr):
@@ -1681,7 +1676,7 @@ def plot_sig_grid(Nr,
                             t = T[method]
                             that = That[method]
 
-                        title = f"{gene_list[idx]} (VeloVAE)" if method == "FullVB" else f"{gene_list[idx]} ({method})"
+                        title = f"{gene_list[idx]} ({method})"
                         plot_sig_axis(ax_sig[3*i, M*j+k],
                                       t,
                                       U[:, idx],
@@ -1707,13 +1702,12 @@ def plot_sig_grid(Nr,
                             legends = Legends[method]
                         try:
                             if ('VeloVAE' in method)\
-                                or ('FullVB' in method)\
-                                    or (methods[0] in ['DeepVelo',
-                                                       'Discrete PyroVelocity',
-                                                       'PyroVelocity',
-                                                       'VeloVI',
-                                                       'cellDancer',
-                                                       'TopoVelo']):
+                                or ('TopoVelo' in method)\
+                                or (method in ['DeepVelo',
+                                               'Discrete PyroVelocity',
+                                               'PyroVelocity',
+                                               'VeloVI',
+                                               'cellDancer']):
                                 # These methods don't have line prediction
                                 K = min(10, max(len(that)//5000, 1))
                                 if frac > 0 and frac < 1:
@@ -1788,9 +1782,13 @@ def plot_sig_grid(Nr,
                         ax_sig[3*i+2,  M*j+k].set_ylabel("S", fontsize=30, rotation=0)
                         ax_sig[3*i+2,  M*j+k].yaxis.set_label_coords(-0.03, 0.5)
 
-                        ax_sig[3*i,  M*j+k].set_xlabel("Time", fontsize=30)
-                        ax_sig[3*i+1,  M*j+k].set_xlabel("Time", fontsize=30)
-                        ax_sig[3*i+2,  M*j+k].set_xlabel("Time", fontsize=30)
+                        ax_sig[3*i,  M*j+k].set_xlabel("Time", fontsize=20)
+                        ax_sig[3*i+1,  M*j+k].set_xlabel("Time", fontsize=20)
+                        ax_sig[3*i+2,  M*j+k].set_xlabel("Time", fontsize=20)
+
+                        for r in range(3):
+                            ax_sig[3*i+r, M*j+k].tick_params(axis='both', which='major', labelsize=15)
+                            ax_sig[3*i+r, M*j+k].yaxis.set_major_formatter(matplotlib.ticker.FormatStrFormatter('%.2f'))
         if ax_sig.ndim == 1:
             handles, labels = ax_sig[0].get_legend_handles_labels()
         else:
@@ -1800,7 +1798,7 @@ def plot_sig_grid(Nr,
 
         l_indent = 1 - 0.02/Nr
         if legend_fontsize is None:
-            legend_fontsize = np.min([int(30*Nr), 300*Nr/len(Legends[methods[0]]), int(10*Nc)])
+            legend_fontsize = np.min([int(30*Nr), 300*Nr/len(Legends[methods[0]]), int(30*Nc)])
         lgd = fig_sig.legend(handles,
                              labels,
                              fontsize=legend_fontsize,
@@ -1809,6 +1807,7 @@ def plot_sig_grid(Nr,
                              loc='upper right')
 
         fig_sig.subplots_adjust(hspace=0.3, wspace=0.12)
+        plt.tight_layout()
 
         save = None if (path is None or figname is None) else f'{path}/{figname}_sig_{i_fig+1}.{format}'
         save_fig(fig_sig, save, (lgd,))
@@ -1849,7 +1848,7 @@ def plot_time_grid(T,
             Figure name for saving (including path). Defaults to "figures/time_grid.png".
     """
     if capture_time is not None:
-        methods = ["Capture Time"] + list(T.keys())
+        methods =  list(T.keys()) + ["Capture Time"]
     else:
         methods = list(T.keys())
     M = len(methods)
@@ -1873,9 +1872,7 @@ def plot_time_grid(T,
                                        c=t[::down_sample],
                                        cmap='plasma',
                                        edgecolors='none')
-                title = "VeloVAE" if method == "FullVB" else method
-                ax[2*row, col].set_title(title, fontsize=24)
-                ax[2*row, col].axis('off')
+                ax[2*row, col].set_title(method, fontsize=24)
             else:
                 ax[2*row].scatter(X_emb[::down_sample, 0],
                                   X_emb[::down_sample, 1],
@@ -1883,9 +1880,7 @@ def plot_time_grid(T,
                                   c=t[::down_sample],
                                   cmap='plasma',
                                   edgecolors='none')
-                title = "VeloVAE" if method == "FullVB" else method
-                ax[2*row].set_title(title, fontsize=24)
-                ax[2*row].axis('off')
+                ax[2*row].set_title(method, fontsize=24)
 
             # Plot the Time Variance in a Colormap
             var_t = std_t[method]**2
@@ -1893,30 +1888,28 @@ def plot_time_grid(T,
             if np.any(var_t > 0):
                 if M > 1:
                     ax[2*row+1, col].scatter(X_emb[::down_sample, 0],
-                                     X_emb[::down_sample, 1],
-                                     s=10.0,
-                                     c=var_t[::down_sample],
-                                     cmap='Reds',
-                                     edgecolors='none')
+                                             X_emb[::down_sample, 1],
+                                             s=10.0,
+                                             c=var_t[::down_sample],
+                                             cmap='Reds',
+                                             edgecolors='none')
                     norm1 = matplotlib.colors.Normalize(vmin=np.min(var_t), vmax=np.max(var_t))
                     sm1 = matplotlib.cm.ScalarMappable(norm=norm1, cmap='Reds')
                     cbar1 = fig_time.colorbar(sm1, ax=ax[2*row+1, col])
                     cbar1.ax.get_yaxis().labelpad = 15
                     cbar1.ax.set_ylabel('Time Variance', rotation=270, fontsize=12)
-                    ax[2*row+1, col].axis('off')
                 else:
                     ax[2*row+1].scatter(X_emb[::down_sample, 0],
-                                  X_emb[::down_sample, 1],
-                                  s=10.0,
-                                  c=var_t[::down_sample],
-                                  cmap='Reds',
-                                  edgecolors='none')
+                                        X_emb[::down_sample, 1],
+                                        s=10.0,
+                                        c=var_t[::down_sample],
+                                        cmap='Reds',
+                                        edgecolors='none')
                     norm1 = matplotlib.colors.Normalize(vmin=np.min(var_t), vmax=np.max(var_t))
                     sm1 = matplotlib.cm.ScalarMappable(norm=norm1, cmap='Reds')
                     cbar1 = fig_time.colorbar(sm1, ax=ax[2*row+1])
                     cbar1.ax.get_yaxis().labelpad = 15
                     cbar1.ax.set_ylabel('Time Variance', rotation=270, fontsize=12)
-                    ax[2*row+1].axis('off')
     else:
         fig_time, ax = plt.subplots(n_row, n_col, figsize=(8*n_col, 4*n_row), facecolor='white')
         for i, method in enumerate(methods):
@@ -1926,7 +1919,6 @@ def plot_time_grid(T,
             t = np.clip(t, None, np.quantile(t, q))
             t = t - t.min()
             t = t/t.max()
-            title = "VeloVAE" if method == "FullVB" else method
             if n_col > 1 and n_row > 1:
                 ax[row, col].scatter(X_emb[::down_sample, 0],
                                      X_emb[::down_sample, 1],
@@ -1934,7 +1926,7 @@ def plot_time_grid(T,
                                      c=t[::down_sample],
                                      cmap='plasma',
                                      edgecolors='none')
-                ax[row, col].set_title(title, fontsize=24)
+                ax[row, col].set_title(method, fontsize=24)
                 ax[row, col].axis('off')
             elif n_col > 1:
                 ax[col].scatter(X_emb[::down_sample, 0],
@@ -1943,7 +1935,7 @@ def plot_time_grid(T,
                                 c=t[::down_sample],
                                 cmap='plasma',
                                 edgecolors='none')
-                ax[col].set_title(title, fontsize=24)
+                ax[col].set_title(method, fontsize=24)
                 ax[col].axis('off')
             elif n_row > 1:
                 ax[row].scatter(X_emb[::down_sample, 0],
@@ -1952,7 +1944,7 @@ def plot_time_grid(T,
                                 c=t[::down_sample],
                                 cmap='plasma',
                                 edgecolors='none')
-                ax[row].set_title(title, fontsize=24)
+                ax[row].set_title(method, fontsize=24)
                 ax[row].axis('off')
             else:
                 ax.scatter(X_emb[::down_sample, 0],
@@ -1961,7 +1953,7 @@ def plot_time_grid(T,
                            c=t[::down_sample],
                            cmap='plasma',
                            edgecolors='none')
-                ax.set_title(title, fontsize=24)
+                ax.set_title(method, fontsize=24)
                 ax.axis('off')
     norm0 = matplotlib.colors.Normalize(vmin=0, vmax=1)
     sm0 = matplotlib.cm.ScalarMappable(norm=norm0, cmap='plasma')
@@ -2922,7 +2914,7 @@ def plot_rate_hist(adata, model, key, tprior='tprior', figsize=(18, 4), save="fi
     else:
         print('Warning: No multiple capture times detected! Assume the experiment lasts one day.')
         t_scale = 1 / (np.quantile(t, 0.99) - np.quantile(t, 0.01))
-    if "FullVB" in model:
+    if "Full VB" in model:
         std_alpha = np.exp(adata.var[f"{key}_logstd_alpha"].to_numpy())
         std_beta = np.exp(adata.var[f"{key}_logstd_beta"].to_numpy())
         std_gamma = np.exp(adata.var[f"{key}_logstd_gamma"].to_numpy())

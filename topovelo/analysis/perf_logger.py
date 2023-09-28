@@ -95,7 +95,7 @@ class PerfLogger:
             self.df.loc[x, data_name] = res_1d.loc[x]
 
         # Reshape the data in res_type to match the multi-row-index in self.df_type
-        methods = np.unique(res_type.columns.unique(0))
+        methods = res_type.columns.unique(0)
         res_reshape = pd.DataFrame(res_type.values.reshape(res_type.shape[0] * len(methods), -1),
                                    index=pd.MultiIndex.from_product([res_type.index, methods]),
                                    columns=pd.MultiIndex.from_product([[data_name], res_type.columns.unique(1)]))
@@ -118,10 +118,7 @@ class PerfLogger:
 
         # update number of models
         self.n_model = len(self.df.index.unique(1))
-        self.df.sort_index(inplace=True)
-        self.df_type.sort_index(inplace=True)
-        self.df_multi.sort_index(inplace=True)
-        self.df_multi_type.sort_index(inplace=True)
+        
         return
 
     def plot_summary(self, metrics=[], methods=None, figure_path=None, dpi=100):
@@ -182,7 +179,7 @@ class PerfLogger:
         
         return
 
-    def plot_transition_pairs(self, metrics=[], figure_path=None, bbox_to_anchor=(1.25, 1.0)):
+    def plot_transition_pairs(self, metrics=[], methods=None, figure_path=None, bbox_to_anchor=(1.25, 1.0), dpi=100):
         """Plot performance metrics for each transition pair given knowledge about cell type transition in a dataset.
 
         Args:
@@ -196,6 +193,8 @@ class PerfLogger:
                 . Defaults to (1.25, 1.0).
         """
         datasets = np.unique(self.df_type.columns.unique(0))
+        if methods is None:
+            methods = np.array(self.df.index.unique(1)).astype(str)
         for metric in metrics:
             if metric not in self.metrics_type:
                 continue
@@ -205,7 +204,8 @@ class PerfLogger:
                 if np.all(np.isnan(self.df_type.loc[metric, dataset].values)):
                     continue
                 colors = get_colors(self.df_type.loc[metric, dataset].shape[0])
-                ax = self.df_type.loc[metric, dataset].T.plot.bar(color=colors, figsize=(12, 6), fontsize=14)
+                df_plot = self.df_type.loc[metric, dataset].loc[methods].T
+                ax = df_plot.plot.bar(color=colors, figsize=(12, 6), fontsize=14)
                 ax.set_title(metric, fontsize=20)
                 if isinstance(bbox_to_anchor, tuple):
                     ax.legend(fontsize=16, loc=1, bbox_to_anchor=bbox_to_anchor)
@@ -216,47 +216,17 @@ class PerfLogger:
                 fig = ax.get_figure()
                 fig.tight_layout()
                 if figure_path is not None:
-                    fig.savefig(f'{figure_path}/perf_{fig_name}_{dataset}.png', bbox_inches='tight')
-        return
-
-    def plot(self, metrics=[], figure_path=None, bbox_to_anchor=(1.25, 1.0)):
-        """Generate bar plots showing all performance metrics.
-        Each plot has different datasets as x-axis labels and different bars represent methods.
-
-        Args:
-            figure_path (str, optional):
-                Path to the folder for saving figures.
-                If set to None, figures will not be saved.
-                Defaults to None.
-            bbox_to_anchor (tuple, optional):
-                Location of the legend. Defaults to (1.25, 1.0).
-        """
-        datasets = self.df.columns.unique(0)
-        for metric in metrics:
-            if metric not in self.metrics:
-                continue
-            colors = get_colors(self.df.loc[metric, :].shape[0])
-            fig_name = re.sub(r'\W+', ' ', metric.lower())
-            fig_name = '_'.join(fig_name.rstrip().split())
-            if np.all(np.isnan(self.df.loc[metric, :].values)):
-                continue
-            ax = self.df.loc[metric, :].T.plot.bar(color=colors, figsize=(12, 6), fontsize=14)
-            ax.set_xlabel("")
-            ax.set_xticklabels(datasets, rotation=0)
-            ax.set_title(metric, fontsize=20)
-            ax.grid()
-            if isinstance(bbox_to_anchor, tuple):
-                ax.legend(fontsize=16, loc=1, bbox_to_anchor=bbox_to_anchor)
-            fig = ax.get_figure()
-            fig.tight_layout()
-            if figure_path is not None:
-                fig.savefig(f'{figure_path}/perf_{fig_name}.png', bbox_inches='tight')
+                    fig.savefig(f'{figure_path}/perf_{fig_name}_{dataset}.png', bbox_inches='tight', dpi=dpi)
         return
 
     def plot_velocity_metrics(self,
+                              metrics=[],
                               dataset=None,
                               methods=None,
                               figure_path=None,
+                              figsize=(5, 6),
+                              markersize=6,
+                              legend_fontsize=8,
                               bbox_to_anchor=(0, 1, 1, 0.1),
                               dpi=100):
         """Generate markered line plots of K-CBDir and related test results.
@@ -277,27 +247,28 @@ class PerfLogger:
             bbox_to_anchor (tuple, optional):
                 Location of the legend. Defaults to (0, 1, 1, 0.1).
         """
-        if methods == None:
-            methods = list(self.df.index.unique(0))
+        if methods is None:
+            methods = np.array(self.df.index.unique(1)).astype(str)
         datasets = list(self.df.columns.unique(0))
-        models = list(self.df_multi.index.unique(1))
         steps = self.df_multi.columns.unique(1)
-        colors = get_colors(len(models))
-        for metric in self.multi_metrics:
+        colors = get_colors(len(methods))
+        if len(metrics) == 0:
+            metrics = self.multi_metrics
+        for metric in metrics:
             metric_name = re.sub(r'\W+', ' ', metric.lower())
             metric_name = '_'.join(metric_name.rstrip().split())
             for dataset in datasets:
                 data_name = '-'.join(dataset.rstrip().split())
                 fig_name = metric_name+"_"+data_name
-                for i, model in enumerate(models):
+                for i, model in enumerate(methods):
                     ax = self.df_multi.loc[(metric, model), dataset].plot(marker=MARKERS[i],
-                                                                          markersize=6,
-                                                                          figsize=(5, 6),
+                                                                          markersize=markersize,
+                                                                          figsize=figsize,
                                                                           color=colors[i],
                                                                           label=model)
                     ax.set_xlabel("")
                     ax.set_xticks(range(len(steps)), steps, rotation=0)
-                    ax.legend(fontsize=8, ncol=4, loc='center', bbox_to_anchor=bbox_to_anchor)
+                    ax.legend(fontsize=legend_fontsize, ncol=4, loc='center', bbox_to_anchor=bbox_to_anchor)
                 ax.grid()
                 ax.set_ylabel(metric, fontsize=15)
                 ax.tick_params(axis='both', which='major', labelsize=10)
@@ -307,6 +278,48 @@ class PerfLogger:
                     fig.savefig(f'{figure_path}/{fig_name}_{dataset}.png', bbox_inches='tight', dpi=dpi)
                 plt.show(fig)
                 plt.close()
+        return
+
+    def plot(self,
+             metrics=[], 
+             methods=None,
+             figure_path=None,
+             bbox_to_anchor=(1.25, 1.0),
+             dpi=100):
+        """Generate bar plots showing all performance metrics.
+        Each plot has different datasets as x-axis labels and different bars represent methods.
+
+        Args:
+            figure_path (str, optional):
+                Path to the folder for saving figures.
+                If set to None, figures will not be saved.
+                Defaults to None.
+            bbox_to_anchor (tuple, optional):
+                Location of the legend. Defaults to (1.25, 1.0).
+        """
+        datasets = self.df.columns.unique(0)
+        if methods is None:
+            methods = np.array(self.df.index.unique(1)).astype(str)
+        for metric in metrics:
+            if metric not in self.metrics:
+                continue
+            colors = get_colors(len(methods))
+            fig_name = re.sub(r'\W+', ' ', metric.lower())
+            fig_name = '_'.join(fig_name.rstrip().split())
+            if np.all(np.isnan(self.df.loc[metric, :].values)):
+                continue
+            df_plot = self.df.loc[metric].loc[methods].T
+            ax = df_plot.plot.bar(color=colors, figsize=(12, 6), fontsize=14)
+            ax.set_xlabel("")
+            ax.set_xticklabels(datasets, rotation=0)
+            ax.set_title(metric, fontsize=20)
+            ax.grid()
+            if isinstance(bbox_to_anchor, tuple):
+                ax.legend(fontsize=16, loc=1, bbox_to_anchor=bbox_to_anchor)
+            fig = ax.get_figure()
+            fig.tight_layout()
+            if figure_path is not None:
+                fig.savefig(f'{figure_path}/perf_{fig_name}.png', bbox_inches='tight', dpi=dpi)
         return
 
     def save(self, file_name=None):

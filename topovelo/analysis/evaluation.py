@@ -44,7 +44,7 @@ def get_velocity_metric(adata,
                         tkey,
                         cluster_key,
                         cluster_edges,
-                        graph=None,
+                        spatial_graph_key=None,
                         gene_mask=None,
                         embed='umap',
                         n_jobs=None):
@@ -65,6 +65,8 @@ def get_velocity_metric(adata,
             List of ground truth cell type transitions.
             Each transition is of the form (A, B) where A is a progenitor
             cell type and B is a descendant type.
+        spatial_graph_key (str, optional):
+            Key for spatial graph.
         gene_mask (:class:`np.ndarray`, optional):
             Boolean array to filter out velocity genes. Defaults to None.
         embed (str, optional):
@@ -91,8 +93,8 @@ def get_velocity_metric(adata,
     """
     mean_constcy_score = velocity_consistency(adata, vkey, gene_mask)
     mean_sp_constcy_score = np.nan
-    if graph is not None:
-        mean_sp_constcy_score = spatial_velocity_consistency(adata, vkey, graph, gene_mask)
+    if spatial_graph_key is not None:
+        mean_sp_constcy_score = spatial_velocity_consistency(adata, vkey, spatial_graph_key, gene_mask)
     if len(cluster_edges) > 0:
         try:
             from scvelo.tl import velocity_graph, velocity_embedding
@@ -108,11 +110,13 @@ def get_velocity_metric(adata,
                                                                    cluster_key,
                                                                    vkey,
                                                                    cluster_edges,
+                                                                   spatial_graph_key,
                                                                    x_emb=f"X_{embed}")
         cbdir, mean_cbdir = cross_boundary_correctness(adata,
                                                        cluster_key,
                                                        vkey,
                                                        cluster_edges,
+                                                       spatial_graph_key,
                                                        x_emb="Ms",
                                                        gene_mask=gene_mask)
         k_cbdir_embed, mean_k_cbdir_embed = gen_cross_boundary_correctness(adata,
@@ -120,6 +124,7 @@ def get_velocity_metric(adata,
                                                                            vkey,
                                                                            cluster_edges,
                                                                            tkey,
+                                                                           spatial_graph_key,
                                                                            dir_test=False,
                                                                            x_emb=f"X_{embed}",
                                                                            gene_mask=gene_mask)
@@ -129,6 +134,7 @@ def get_velocity_metric(adata,
                                                                vkey,
                                                                cluster_edges,
                                                                tkey,
+                                                               spatial_graph_key,
                                                                dir_test=False,
                                                                x_emb="Ms",
                                                                gene_mask=gene_mask)
@@ -138,6 +144,7 @@ def get_velocity_metric(adata,
                                                                                 vkey,
                                                                                 cluster_edges,
                                                                                 tkey,
+                                                                                spatial_graph_key,
                                                                                 x_emb=f"X_{embed}",
                                                                                 gene_mask=gene_mask)
 
@@ -147,6 +154,7 @@ def get_velocity_metric(adata,
                                                                     vkey,
                                                                     cluster_edges,
                                                                     tkey,
+                                                                    spatial_graph_key,
                                                                     x_emb="Ms",
                                                                     gene_mask=gene_mask)
         if not f'{key}_time' in adata.obs:
@@ -285,7 +293,7 @@ def get_metric(adata,
                key,
                vkey,
                tkey,
-               spatial_graph,
+               spatial_graph_key,
                cluster_key="clusters",
                gene_key='velocity_genes',
                cluster_edges=None,
@@ -303,6 +311,10 @@ def get_metric(adata,
             Key in .var or .varm for extracting the ODE parameters learned by the model.
         vkey (str):
             Key in .layers for extracting rna velocity.
+        tkey (str):
+            Key in .obs for extracting latent time
+        spatial_graph_key (str):
+            Key in .obsp for extracting the spatial graph
         cluster_key (str, optional):
             Key in .obs for extracting cell type annotation. Defaults to "clusters".
         gene_key (str, optional):
@@ -340,18 +352,18 @@ def get_metric(adata,
         (mse_train, mse_test,
          mae_train, mae_test,
          logp_train, logp_test) = get_err_cycle(adata, key, gene_mask)
-    elif method == 'VeloVAE' or method == 'FullVB' or method == 'TopoVelo':
+    elif 'VeloVAE' in method or 'TopoVelo' in method:
         (mse_train, mse_test,
          mae_train, mae_test,
-         logp_train, logp_test) = get_err_velovae(adata, key, gene_mask, 'FullVB' in method)
+         logp_train, logp_test) = get_err_velovae(adata, key, gene_mask, 'Full VB' in method)
     elif method == 'BrODE':
         (mse_train, mse_test,
          mae_train, mae_test,
          logp_train, logp_test) = get_err_brode(adata, key, gene_mask)
-    elif method == 'Discrete VeloVAE' or method == 'Discrete FullVB':
+    elif method == 'Discrete VeloVAE' or method == 'Discrete VeloVAE (Full VB)':
         (mse_train, mse_test,
          mae_train, mae_test,
-         logp_train, logp_test) = get_err_velovae(adata, key, gene_mask, 'FullVB' in method, True)
+         logp_train, logp_test) = get_err_velovae(adata, key, gene_mask, 'VeloVAE (Full VB)' in method, True)
     elif method == 'UniTVelo':
         (mse_train, mse_test,
          mae_train, mae_test,
@@ -405,7 +417,7 @@ def get_metric(adata,
                                                   tkey,
                                                   cluster_key,
                                                   cluster_edges,
-                                                  spatial_graph.A,
+                                                  spatial_graph_key,
                                                   gene_mask,
                                                   embed,
                                                   n_jobs)
@@ -475,7 +487,8 @@ def post_analysis(adata,
         methods (list[str]):
             Contains the methods to compare with.
             Now supports {'scVelo', 'UniTVelo', 'DeepVelo', 'cellDancer', 'VeloVI', 'PyroVelocity',
-            'VeloVAE', 'FullVB', 'Discrete VeloVAE', 'Discrete FullVB', 'BrODE', 'TopoVelo}.
+            'VeloVAE', 'VeloVAE (Full VB)', 'Discrete VeloVAE', 'Discrete VeloVAE (Full VB)', 'BrODE',
+            'TopoVelo (GCN)', 'TopoVelo (GAT)'}.
         keys (list[str]):
             Used for extracting ODE parameters from .var or .varm from anndata
             It should be of the same length as methods.
@@ -614,14 +627,17 @@ def post_analysis(adata,
     # Optionally compute a spatial KNN graph,
     # used for spatial velocity consistency and optionally velocity stream
     try:
-        spatial_graph = adata.obsp[spatial_graph_key]
         nn = None
-    except KeyError:
+        assert spatial_graph_key in adata.obsp
+    except AssertionError:
+        print(f'Warning: spatial graph with key {spatial_graph_key} not found.')
         if spatial_key is not None:
+            print(f'Computing a spatial graph using KNN on {spatial_key}')
             X_pos = adata.obsm[spatial_key]
             nn = NearestNeighbors(n_neighbors=num_spatial_neighbors)
             nn.fit(X_pos)
-            spatial_graph = nn.kneighbors_graph(mode='connectivity')
+            adata.obsp['spatial_graph'] = nn.kneighbors_graph(mode='connectivity')
+            spatial_graph_key = 'spatial_graph'
     if spatial_velocity_graph and 'stream' in plot_type:
         if nn is None:
             X_pos = adata.obsm[spatial_key]
@@ -640,7 +656,7 @@ def post_analysis(adata,
                                                              keys[i],
                                                              vkeys[i],
                                                              tkeys[i],
-                                                             spatial_graph,
+                                                             spatial_graph_key,
                                                              cluster_key,
                                                              gene_key,
                                                              cluster_edges,
@@ -679,16 +695,14 @@ def post_analysis(adata,
                 t_i, Uhat_i, Shat_i = get_pred_cycle_demo(adata, keys[i], genes, nplot)
                 Yhat[method_] = None
                 V[method_] = adata.layers[f"{keys[i]}_velocity"][:, gene_indices]
-            elif method in ['VeloVAE', 'FullVB', 'Discrete VeloVAE', 'Discrete FullVB', 'TopoVelo']:
-                Uhat_i, Shat_i = get_pred_velovae_demo(adata, keys[i], genes, 'FullVB' in method, 'Discrete' in method)
+            elif 'VeloVAE' in method or 'TopoVelo' in method:
+                Uhat_i, Shat_i = get_pred_velovae_demo(adata, keys[i], genes, 'Full VB' in method, 'Discrete' in method)
                 V[method_] = adata.layers[f"{keys[i]}_velocity"][:, gene_indices]
                 t_i = adata.obs[f'{keys[i]}_time'].to_numpy()
                 Yhat[method_] = cell_labels
             elif method == 'BrODE':
                 t_i, y_i, Uhat_i, Shat_i = get_pred_brode_demo(adata, keys[i], genes, N=100)
                 V[method_] = adata.layers[f"{keys[i]}_velocity"][:, gene_indices]
-                #t_i = adata.obs[f'{keys[i]}_time'].to_numpy()
-                #Yhat[method_] = cell_labels
                 Yhat[method_] = y_i
             elif method == "UniTVelo":
                 t_i, Uhat_i, Shat_i = get_pred_utv_demo(adata, genes, nplot)
@@ -761,9 +775,13 @@ def post_analysis(adata,
             else:
                 T[method_] = adata.obs[f"{keys[i]}_time"].to_numpy()
         k = len(methods)+(capture_time is not None)
-        n_col = max(int(np.sqrt(k*2)), 1)
-        n_row = k // n_col
-        n_row += (n_row*n_col < k)
+        if k > 5:
+            n_col = max(int(np.sqrt(k*2)), 1)
+            n_row = k // n_col
+            n_row += (n_row*n_col < k)
+        else:
+            n_row = 1
+            n_col = k
         plot_time_grid(T,
                        X_embed,
                        capture_time,
@@ -867,7 +885,7 @@ def post_analysis(adata,
                                           show=True,
                                           save=(None if figure_path is None else
                                                 f'{figure_path}/{test_id}_{keys[i]}_stream.png'))
-                if methods[i] == 'TopoVelo':
+                if 'TopoVelo' in methods[i]:
                     adata.uns[f"{vkey}_params"]["embeddings"].append(f'{keys[i]}_xy')
                     # adata.obsm[f"{keys[i]}_true_velocity_{embed}"] = adata.obsm[f"{keys[i]}_true_velocity_spatial"]
                     velocity_embedding_stream(adata,
