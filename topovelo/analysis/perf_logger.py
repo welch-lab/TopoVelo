@@ -35,7 +35,8 @@ class PerfLogger:
                         "Time Score",
                         "In-Cluster Coherence",
                         "Velocity Consistency",
-                        "Spatial Consistency",
+                        "Spatial Velocity Consistency",
+                        "Spatial Time Consistency",
                         "Time Correlation"]
         self.multi_metrics = ["K-CBDir",
                               "K-CBDir (Embed)",
@@ -118,7 +119,7 @@ class PerfLogger:
 
         # update number of models
         self.n_model = len(self.df.index.unique(1))
-        
+
         return
 
     def plot_summary(self, metrics=[], methods=None, figure_path=None, dpi=100):
@@ -169,14 +170,14 @@ class PerfLogger:
             ax.set_title(metric)
             ax.set_xticks(range(1, n_model+1), methods, rotation=0)
             ax.tick_params(axis='both', which='major', labelsize=15)
-            ax.grid()
+            # ax.grid()
             fig = ax.get_figure()
             fig.tight_layout()
             if figure_path is not None:
                 fig_name = re.sub(r'\W+', ' ', metric.lower())
                 fig_name = '_'.join(fig_name.rstrip().split())
                 fig.savefig(f'{figure_path}/{metric}_summary.png', dpi=dpi, bbox_inches='tight')
-        
+
         return
 
     def plot_transition_pairs(self, metrics=[], methods=None, figure_path=None, bbox_to_anchor=(1.25, 1.0), dpi=100):
@@ -192,7 +193,7 @@ class PerfLogger:
             bbox_to_anchor (tuple, optional):
                 . Defaults to (1.25, 1.0).
         """
-        datasets = np.unique(self.df_type.columns.unique(0))
+        datasets = self.df_type.columns.unique(0)
         if methods is None:
             methods = np.array(self.df.index.unique(1)).astype(str)
         for metric in metrics:
@@ -212,22 +213,59 @@ class PerfLogger:
                 transition_pairs = self.df_type[dataset].columns.unique(0)
                 ax.set_xticklabels(transition_pairs, rotation=0)
                 ax.set_xlabel("")
-                ax.grid()
+                # ax.grid()
                 fig = ax.get_figure()
                 fig.tight_layout()
                 if figure_path is not None:
                     fig.savefig(f'{figure_path}/perf_{fig_name}_{dataset}.png', bbox_inches='tight', dpi=dpi)
         return
 
+    def _plot_velocity_metrics_ax(self,
+                                  metric,
+                                  dataset,
+                                  methods,
+                                  show_legend=True,
+                                  ax=None,
+                                  **kwargs):
+        colors = get_colors(len(methods))
+        steps = self.df_multi.columns.unique(1)
+        for i, model in enumerate(methods):
+            self.df_multi.loc[(metric, model), dataset].plot(marker=MARKERS[i],
+                                                             markersize=kwargs['markersize'],
+                                                             color=colors[i],
+                                                             label=model,
+                                                             ax=ax,
+                                                             figsize=kwargs['figsize'])
+        
+        ax.set_xticks(range(len(steps)), range(1, len(steps)+1), rotation=0)
+        if show_legend:
+            cols = 1 if 'ncols' not in kwargs else kwargs['ncols']
+            if 'bbox_to_anchor' in kwargs:
+                ax.legend(fontsize=kwargs['legend_fontsize'],
+                            ncol=cols,
+                            loc='center',
+                            bbox_to_anchor=kwargs['bbox_to_anchor'])
+            else:
+                ax.legend(fontsize=kwargs['legend_fontsize'], ncol=cols)
+        ax.set_title(dataset, fontsize=kwargs['title_fontsize'])
+        # ax.grid()
+        ax.set_xlabel("Step Size", fontsize=kwargs['ylabel_fontsize'])
+        ax.set_ylabel(metric, fontsize=kwargs['ylabel_fontsize'], labelpad=kwargs['labelpad'])
+        ax.tick_params(axis='both', which='major', labelsize=kwargs['tick_fontsize'])
+        return ax
+
     def plot_velocity_metrics(self,
                               metrics=[],
-                              dataset=None,
-                              methods=None,
+                              datasets=[],
+                              methods=[],
                               figure_path=None,
                               figsize=(5, 6),
                               markersize=6,
+                              title_fontsize=20,
                               legend_fontsize=8,
-                              bbox_to_anchor=(0, 1, 1, 0.1),
+                              ylabel_fontsize=15,
+                              labelpad=10,
+                              bbox_to_anchor=(0, 1, 1, 0.2),
                               dpi=100):
         """Generate markered line plots of K-CBDir and related test results.
         Each plot only considers one single dataset.
@@ -247,31 +285,30 @@ class PerfLogger:
             bbox_to_anchor (tuple, optional):
                 Location of the legend. Defaults to (0, 1, 1, 0.1).
         """
-        if methods is None:
+        if len(datasets) == 0:
+            datasets = list(self.df.columns.unique(0))
+        if len(methods) == 0:
             methods = np.array(self.df.index.unique(1)).astype(str)
-        datasets = list(self.df.columns.unique(0))
-        steps = self.df_multi.columns.unique(1)
-        colors = get_colors(len(methods))
         if len(metrics) == 0:
             metrics = self.multi_metrics
+
         for metric in metrics:
             metric_name = re.sub(r'\W+', ' ', metric.lower())
             metric_name = '_'.join(metric_name.rstrip().split())
             for dataset in datasets:
                 data_name = '-'.join(dataset.rstrip().split())
                 fig_name = metric_name+"_"+data_name
-                for i, model in enumerate(methods):
-                    ax = self.df_multi.loc[(metric, model), dataset].plot(marker=MARKERS[i],
-                                                                          markersize=markersize,
-                                                                          figsize=figsize,
-                                                                          color=colors[i],
-                                                                          label=model)
-                    ax.set_xlabel("")
-                    ax.set_xticks(range(len(steps)), steps, rotation=0)
-                    ax.legend(fontsize=legend_fontsize, ncol=4, loc='center', bbox_to_anchor=bbox_to_anchor)
-                ax.grid()
-                ax.set_ylabel(metric, fontsize=15)
-                ax.tick_params(axis='both', which='major', labelsize=10)
+                ax = self._plot_velocity_metrics_ax(metric,
+                                                    dataset,
+                                                    methods,
+                                                    figsize,
+                                                    figsize=figsize,
+                                                    markersize=markersize,
+                                                    title_fontsize=title_fontsize,
+                                                    legend_fontsize=legend_fontsize,
+                                                    ylabel_fontsize=ylabel_fontsize,
+                                                    labelpad=labelpad,
+                                                    bbox_to_anchor=bbox_to_anchor)
                 fig = ax.get_figure()
                 fig.tight_layout()
                 if figure_path is not None:
@@ -280,13 +317,47 @@ class PerfLogger:
                 plt.close()
         return
 
-    def plot(self,
-             metrics=[], 
-             methods=None,
-             figure_path=None,
-             bbox_to_anchor=(1.25, 1.0),
-             dpi=100):
-        """Generate bar plots showing all performance metrics.
+    def _plot_metrics_ax(self,
+                         metric,
+                         datasets,
+                         methods,
+                         show_legend=True,
+                         ax=None,
+                         **kwargs):
+        colors = get_colors(len(methods))
+        df_plot = self.df.loc[metric].loc[methods].T
+        ax = df_plot.plot.bar(color=colors,
+                              figsize=kwargs['figsize'],
+                              fontsize=kwargs['bar_fontsize'],
+                              legend=show_legend,
+                              ax=ax)
+        ax.set_xlabel("")
+        ax.set_xticklabels(datasets, rotation=0)
+        ax.set_title(metric, fontsize=kwargs['title_fontsize'])
+        # ax.grid()
+        ax.tick_params(axis='both', which='major', labelsize=kwargs['tick_fontsize'])
+        if show_legend:
+            ncols = 1 if 'ncols' not in kwargs else kwargs['ncols']
+            if 'bbox_to_anchor' in kwargs:
+                loc = 'center' if len(kwargs['bbox_to_anchor']) == 4 else 1
+                ax.legend(fontsize=kwargs['legend_fontsize'], loc=loc, ncols=ncols, bbox_to_anchor=kwargs['bbox_to_anchor'])
+            else:
+                ax.legend(fontsize=kwargs['legend_fontsize'], ncols=ncols)
+        return ax
+
+    def plot_metrics(self,
+                     metrics=[],
+                     datasets=[],
+                     methods=[],
+                     figure_path=None,
+                     figsize=(12, 6),
+                     title_fontsize=20,
+                     legend_fontsize=16,
+                     bar_fontsize=14,
+                     tick_fontsize=15,
+                     bbox_to_anchor=(1.25, 1.0),
+                     dpi=100):
+        """Generate bar plots showing all scalar performance metrics.
         Each plot has different datasets as x-axis labels and different bars represent methods.
 
         Args:
@@ -297,29 +368,173 @@ class PerfLogger:
             bbox_to_anchor (tuple, optional):
                 Location of the legend. Defaults to (1.25, 1.0).
         """
-        datasets = self.df.columns.unique(0)
-        if methods is None:
+        if len(datasets) == 0:
+            datasets = self.df.columns.unique(0)
+        if len(methods) == 0:
             methods = np.array(self.df.index.unique(1)).astype(str)
+        if len(metrics) == 0:
+            metrics = self.metrics
+
         for metric in metrics:
             if metric not in self.metrics:
                 continue
-            colors = get_colors(len(methods))
             fig_name = re.sub(r'\W+', ' ', metric.lower())
             fig_name = '_'.join(fig_name.rstrip().split())
             if np.all(np.isnan(self.df.loc[metric, :].values)):
                 continue
-            df_plot = self.df.loc[metric].loc[methods].T
-            ax = df_plot.plot.bar(color=colors, figsize=(12, 6), fontsize=14)
-            ax.set_xlabel("")
-            ax.set_xticklabels(datasets, rotation=0)
-            ax.set_title(metric, fontsize=20)
-            ax.grid()
-            if isinstance(bbox_to_anchor, tuple):
-                ax.legend(fontsize=16, loc=1, bbox_to_anchor=bbox_to_anchor)
+            ax = self._plot_metrics_ax(metric,
+                                       datasets,
+                                       methods,
+                                       figsize=figsize,
+                                       title_fontsize=title_fontsize,
+                                       legend_fontsize=legend_fontsize,
+                                       bar_fontsize=bar_fontsize,
+                                       tick_fontsize=tick_fontsize,
+                                       bbox_to_anchor=bbox_to_anchor)
             fig = ax.get_figure()
             fig.tight_layout()
             if figure_path is not None:
                 fig.savefig(f'{figure_path}/perf_{fig_name}.png', bbox_inches='tight', dpi=dpi)
+        return
+
+    def _decompose_num(self, n, max_ratio = 4):
+        # max_ratio defines the upper limit of ncols/nrows 
+        if n <= 4:
+            return [n]
+        ncols = int(np.ceil(np.sqrt(n)))
+        # Find any divider of n fulfilling the max_ratio criterium
+        for i in range(int(np.floor(np.sqrt(n))), 0, -1):
+            if n % i == 0 and (n // i) / i <= max_ratio:
+                return [n//i]*i
+        # If on such i exists, we cannot divide n subfigures into a rectangular grid
+        r = n % ncols
+        d = n // ncols
+        if r <= ncols // 2:
+            out = [ncols]*d
+            for i in range(1, r+1):
+                out[-i] += 1
+        else:
+            out = [ncols]*(d+1)
+            out[-1] = out[0] - 1
+            if r < ncols - 1:
+                for i in range(2, ncols - r):
+                    out[-i] -= 1
+
+        return out
+
+    def _auto_grid_size(self, datasets, metrics):
+        n_scalar = np.sum([metric in self.metrics for metric in metrics])
+        n_multi = len(metrics) - n_scalar
+        n_dataset = len(datasets)
+        ncols_scalar, ncols_multi = self._decompose_num(n_scalar), self._decompose_num(n_dataset*n_multi)
+        nrows = len(ncols_scalar) + len(ncols_multi)
+        return n_scalar, nrows, ncols_scalar, ncols_multi
+
+    def plot(self,
+             metrics,
+             legend_metric,
+             datasets=[],
+             methods=[],
+             grid_size_params=None,
+             figure_path=None,
+             figure_name='perf',
+             figsize=(7.5, 5),
+             markersize=3,
+             title_fontsize=8,
+             legend_fontsize=5,
+             bar_fontsize=6,
+             ylabel_fontsize=6,
+             labelpad=5,
+             tick_fontsize=6,
+             ncols_legend=None,
+             hspace=0.3,
+             wspace=0.12,
+             bbox_to_anchor=(0, 1, 1, 0.8),
+             dpi=300,
+             save_format='png'):
+        if len(datasets) == 0:
+            datasets = self.df.columns.unique(0)
+
+        # Automatically determine the grid size
+        if grid_size_params is None:
+            n_scalar, nrows, ncols_scalar, ncols_multi = self._auto_grid_size(datasets, metrics)
+        else:
+            ncols_scalar = grid_size_params['ncols_scalar']
+            n_scalar = len(ncols_scalar)
+            ncols_multi = grid_size_params['ncols_multi']
+            nrows = len(ncols_scalar) + len(ncols_multi)
+
+        fig = plt.figure(figsize=figsize, facecolor='white')  # (nrows*figsize[0], max_ncol*figsize[1])
+
+        counter_scalar, ptr_scalar = 1, 0
+        counter_multi, ptr_multi = 1, 0
+        for i, metric in enumerate(metrics):
+            if metric in self.metrics:
+                if len(methods) == 0:
+                    methods_ = np.array(self.df.loc[metric].index.unique(0)).astype(str)
+                else:
+                    methods_ = methods
+                idx = ptr_scalar*ncols_scalar[ptr_scalar] + counter_scalar
+                ax = fig.add_subplot(nrows, ncols_scalar[ptr_scalar], idx)
+                self._plot_metrics_ax(metric,
+                                      datasets,
+                                      methods_,
+                                      show_legend=(metric == legend_metric),
+                                      ax=ax,
+                                      figsize=(figsize[0], figsize[1]),
+                                      title_fontsize=title_fontsize,
+                                      legend_fontsize=legend_fontsize,
+                                      bar_fontsize=bar_fontsize,
+                                      tick_fontsize=tick_fontsize)
+                if (metric == legend_metric):
+                    handles, labels = ax.get_legend_handles_labels()
+                    ax.get_legend().remove()
+                counter_scalar += 1
+                if counter_scalar > ncols_scalar[ptr_scalar]:
+                    ptr_scalar += 1
+                    counter_scalar = 1
+            elif metric in self.multi_metrics:
+                if len(methods) == 0:
+                    methods_ = np.array(self.df_multi.loc[metric].index.unique(0)).astype(str)
+                else:
+                    methods_ = methods
+                for dataset in datasets:
+                    idx = (n_scalar + ptr_multi)*ncols_multi[ptr_multi] + counter_multi
+                    ax = fig.add_subplot(nrows, ncols_multi[ptr_multi], idx)
+                    self._plot_velocity_metrics_ax(metric,
+                                                   dataset,
+                                                   methods_,
+                                                   show_legend=(metric == legend_metric),
+                                                   ax=ax,
+                                                   figsize=(figsize[0], figsize[1]),
+                                                   markersize=markersize,
+                                                   title_fontsize=title_fontsize,
+                                                   legend_fontsize=legend_fontsize,
+                                                   ylabel_fontsize=ylabel_fontsize,
+                                                   labelpad=labelpad,
+                                                   bar_fontsize=bar_fontsize,
+                                                   tick_fontsize=tick_fontsize)
+                    # _fig = ax.get_figure()
+                    # print(_fig.get_size_inches())
+                    if (metric == legend_metric):
+                        handles, labels = ax.get_legend_handles_labels()
+                        ax.get_legend().remove()
+                    counter_multi += 1
+                    if counter_multi > ncols_multi[ptr_multi]:
+                        ptr_multi += 1
+                        counter_multi = 1
+        loc = 'center' if len(bbox_to_anchor) == 4 else 1
+        if len(methods) == 0:
+            if legend_metric in self.multi_metrics:
+                methods = np.array(self.df_multi.loc[legend_metric].index.unique(0)).astype(str)
+            else:
+                methods = np.array(self.df.loc[legend_metric].index.unique(0)).astype(str)
+        ncols_legend = np.max(self._decompose_num(len(methods))) if ncols_legend is None else ncols_legend
+        fig.legend(handles, labels, bbox_to_anchor=bbox_to_anchor, loc=loc, ncol=ncols_legend, fontsize=legend_fontsize)
+        fig.tight_layout()
+        fig.subplots_adjust(hspace=hspace, wspace=wspace)
+        if figure_path is not None:
+            fig.savefig(f'{figure_path}/{figure_name}.{save_format}', bbox_inches='tight', dpi=dpi)
         return
 
     def save(self, file_name=None):

@@ -298,7 +298,7 @@ def plot_phase(u, s,
     save_fig(fig, save, (lgd,))
 
 
-def plot_cluster(X_embed, cell_labels, color_map=None, embed='umap', show_legend=False, save=None):
+def plot_cluster(X_embed, cell_labels, figsize=(6, 4), color_map=None, embed=None, show_legend=False, save=None):
     """Plot the predicted cell types from the encoder
 
     Args:
@@ -316,7 +316,7 @@ def plot_cluster(X_embed, cell_labels, color_map=None, embed='umap', show_legend
             Figure name for saving (including path). Defaults to None.
     """
     cell_types = np.unique(cell_labels)
-    fig, ax = plt.subplots(figsize=(8, 6), facecolor='white')
+    fig, ax = plt.subplots(figsize=figsize, facecolor='white')
     x = X_embed[:, 0]
     y = X_embed[:, 1]
     x_range = x.max()-x.min()
@@ -329,12 +329,12 @@ def plot_cluster(X_embed, cell_labels, color_map=None, embed='umap', show_legend
         xbar, ybar = np.mean(x[mask]), np.mean(y[mask])
         ax.plot(x[mask], y[mask], '.', color=colors[i % len(colors)])
         n_char = len(typei)
-        txt = ax.text(xbar - x_range*4e-3*n_char, ybar - y_range*4e-3, typei, fontsize=max(30, 200//n_char_max), color='k')
+        txt = ax.text(xbar - x_range*4e-3*n_char, ybar - y_range*4e-3, typei, fontsize=max(15, 100//n_char_max), color='k')
         txt.set_bbox(dict(facecolor='white', alpha=0.5, edgecolor='black'))
-
-    ax.set_xlabel(f'{embed} 1')
-    ax.set_ylabel(f'{embed} 2')
-
+    if embed is not None:
+        ax.set_xlabel(f'{embed} 1')
+        ax.set_ylabel(f'{embed} 2')
+    ax.set_axis_off()
     save_fig(fig, save)
 
 
@@ -931,7 +931,7 @@ def plot_phase_grid(Nr,
                     color_map=None,
                     path='figures',
                     figname=None,
-                    format='png',
+                    save_format='png',
                     **kwargs):
     """Plot the phase portrait of a list of genes in an [Nr x Nc] grid.
     Cells are colored according to their dynamical state or cell type.
@@ -986,7 +986,7 @@ def plot_phase_grid(Nr,
             Path to the saved figure. Defaults to 'figures'.
         figname (_type_, optional):
             Name of the saved figure, without format at the end. Defaults to None.
-        format (str, optional):
+        save_format (str, optional):
             Figure format. Defaults to 'png'.
 
     """
@@ -1172,7 +1172,7 @@ def plot_phase_grid(Nr,
         fig_phase.subplots_adjust(hspace=0.3, wspace=0.12)
         fig_phase.tight_layout()
 
-        save = None if (path is None or figname is None) else f'{path}/{figname}_phase_{i_fig+1}.{format}'
+        save = None if (path is None or figname is None) else f'{path}/{figname}_phase_{i_fig+1}.{save_format}'
         save_fig(fig_phase, save, (lgd,))
 
 
@@ -1450,7 +1450,7 @@ def plot_sig_grid(Nr,
                   color_map=None,
                   path='figures',
                   figname=None,
-                  format='png'):
+                  save_format='png'):
     """Plot u/s of a list of genes vs. time in an [Nr x Nc] grid of subplots.
     Cells are colored according to their dynamical state or cell type.
 
@@ -1528,7 +1528,7 @@ def plot_sig_grid(Nr,
             Because there can be multiple figures generated in this function.
             We will append a number to figname when saving the figures.
             Figures will not be saved if set to None. Defaults to None.
-        format (str, optional):
+        save_format (str, optional):
             Figure format, could be png, pdf, svg, eps and ps. Defaults to 'png'.
 
     """
@@ -1809,7 +1809,7 @@ def plot_sig_grid(Nr,
         fig_sig.subplots_adjust(hspace=0.3, wspace=0.12)
         plt.tight_layout()
 
-        save = None if (path is None or figname is None) else f'{path}/{figname}_sig_{i_fig+1}.{format}'
+        save = None if (path is None or figname is None) else f'{path}/{figname}_sig_{i_fig+1}.{save_format}'
         save_fig(fig_sig, save, (lgd,))
 
 
@@ -1864,23 +1864,29 @@ def plot_time_grid(T,
             t = capture_time if method == "Capture Time" else T[method]
             t = np.clip(t, None, np.quantile(t, q))
             t = t - t.min()
-            t = t/t.max()
+            t = t/(t.max() + (t.max() == 0))
             if n_col > 1:
                 ax[2*row, col].scatter(X_emb[::down_sample, 0],
                                        X_emb[::down_sample, 1],
                                        s=10.0,
                                        c=t[::down_sample],
-                                       cmap='plasma',
+                                       cmap='plasma_r',
                                        edgecolors='none')
-                ax[2*row, col].set_title(method, fontsize=24)
+                if method == "Capture Time":
+                    ax[2*row, col].set_title("Expected Temporal Order", fontsize=24)
+                else:
+                    ax[2*row, col].set_title(method, fontsize=24)
             else:
                 ax[2*row].scatter(X_emb[::down_sample, 0],
                                   X_emb[::down_sample, 1],
                                   s=10.0,
                                   c=t[::down_sample],
-                                  cmap='plasma',
+                                  cmap='plasma_r',
                                   edgecolors='none')
-                ax[2*row].set_title(method, fontsize=24)
+                if method == "Capture Time":
+                    ax[2*row].set_title("Expected Temporal Order", fontsize=24)
+                else:
+                    ax[2*row].set_title(method, fontsize=24)
 
             # Plot the Time Variance in a Colormap
             var_t = std_t[method]**2
@@ -1918,45 +1924,57 @@ def plot_time_grid(T,
             t = capture_time if method == "Capture Time" else T[method]
             t = np.clip(t, None, np.quantile(t, q))
             t = t - t.min()
-            t = t/t.max()
+            t = t/(t.max() + (t.max() == 0))
             if n_col > 1 and n_row > 1:
                 ax[row, col].scatter(X_emb[::down_sample, 0],
                                      X_emb[::down_sample, 1],
                                      s=10.0,
                                      c=t[::down_sample],
-                                     cmap='plasma',
+                                     cmap='plasma_r',
                                      edgecolors='none')
-                ax[row, col].set_title(method, fontsize=24)
+                if method == "Capture Time":
+                    ax[row, col].set_title("Expected Temporal Order", fontsize=24)
+                else:
+                    ax[row, col].set_title(method, fontsize=24)
                 ax[row, col].axis('off')
             elif n_col > 1:
                 ax[col].scatter(X_emb[::down_sample, 0],
                                 X_emb[::down_sample, 1],
                                 s=10.0,
                                 c=t[::down_sample],
-                                cmap='plasma',
+                                cmap='plasma_r',
                                 edgecolors='none')
-                ax[col].set_title(method, fontsize=24)
+                if method == "Capture Time":
+                    ax[col].set_title("Expected Temporal Order", fontsize=24)
+                else:
+                    ax[col].set_title(method, fontsize=24)
                 ax[col].axis('off')
             elif n_row > 1:
                 ax[row].scatter(X_emb[::down_sample, 0],
                                 X_emb[::down_sample, 1],
                                 s=10.0,
                                 c=t[::down_sample],
-                                cmap='plasma',
+                                cmap='plasma_r',
                                 edgecolors='none')
-                ax[row].set_title(method, fontsize=24)
+                if method == "Capture Time":
+                    ax[row].set_title("Expected Temporal Order", fontsize=24)
+                else:
+                    ax[row].set_title(method, fontsize=24)
                 ax[row].axis('off')
             else:
                 ax.scatter(X_emb[::down_sample, 0],
                            X_emb[::down_sample, 1],
                            s=10.0,
                            c=t[::down_sample],
-                           cmap='plasma',
+                           cmap='plasma_r',
                            edgecolors='none')
-                ax.set_title(method, fontsize=24)
+                if method == "Capture Time":
+                    ax.set_title("Expected Temporal Order", fontsize=24)
+                else:
+                    ax.set_title(method, fontsize=24)
                 ax.axis('off')
     norm0 = matplotlib.colors.Normalize(vmin=0, vmax=1)
-    sm0 = matplotlib.cm.ScalarMappable(norm=norm0, cmap='plasma')
+    sm0 = matplotlib.cm.ScalarMappable(norm=norm0, cmap='plasma_r')
     cbar0 = fig_time.colorbar(sm0, ax=ax, location="right") if M > 1 else fig_time.colorbar(sm0, ax=ax)
     cbar0.ax.get_yaxis().labelpad = 20
     cbar0.ax.set_ylabel('Cell Time', rotation=270, fontsize=24)
@@ -2027,7 +2045,7 @@ def plot_rate_grid(adata,
                    color_map=None,
                    path="figures",
                    figname="genes",
-                   format="png"):
+                   save_format="png"):
     """Plot cell-type-specific rate parameters inferred from branching ODE.
 
     Args:
@@ -2057,7 +2075,7 @@ def plot_rate_grid(adata,
             Path to the folder for saving the figure. Defaults to "figures".
         figname (str, optional):
             Name of the saved figure. Defaults to "genes".
-        format (str, optional):
+        save_format (str, optional):
             Figure format, could be png, pdf, svg, eps and ps. Defaults to 'png'. Defaults to "png".
 
     """
@@ -2171,7 +2189,7 @@ def plot_rate_grid(adata,
                          bbox_to_anchor=(-0.03/Nc, l_indent),
                          loc='upper right')
 
-        save = None if figname is None else f'{path}/{figname}_brode_rates_{i_fig+1}.{format}'
+        save = None if figname is None else f'{path}/{figname}_brode_rates_{i_fig+1}.{save_format}'
         save_fig(fig, save, (lgd,))
     return
 

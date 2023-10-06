@@ -651,7 +651,7 @@ def assign_gene_mode_auto(adata,
     C = 1+Cs*0.5+Cu*0.5
     C[np.isnan(C)] = 0.0
     # Spectral clustering
-    spc = SpectralClustering(get_nclusters(C, n_cluster_thred),
+    spc = SpectralClustering(get_nclusters(C, n_cluster_thred=n_cluster_thred),
                              affinity='precomputed',
                              assign_labels='discretize',
                              random_state=42)

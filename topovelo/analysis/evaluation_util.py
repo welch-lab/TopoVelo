@@ -42,8 +42,8 @@ def cell_state(adata, method, key, gene_indices=None, **kwargs):
             AnnData Object
         method (str):
             Model name.
-            Now supports 'scVelo', 'Vanilla VAE', 'VeloVAE', 'VeloVAE (Full VB)',
-            'Discrete VeloVAE', 'Discrete VeloVAE (Full VB)' and 'VeloVI'.
+            Now supports 'scVelo', 'Vanilla VAE', 'VeloVAE', 'VeloVAE (Rate Prior)',
+            'Discrete VeloVAE', 'Discrete VeloVAE (Rate Prior)' and 'VeloVI'.
         key (str):
             Key for extracting model outputs.
         gene_indices (:class:`numpy.ndarray`, optional):
@@ -67,7 +67,7 @@ def cell_state(adata, method, key, gene_indices=None, **kwargs):
         toff = toff[gene_indices]
         ton = ton[gene_indices]
         cell_state = (t.reshape(-1, 1) > toff) + (t.reshape(-1, 1) < ton)*2
-    elif method in ['VeloVAE', 'VeloVAE (Full VB)', 'Discrete VeloVAE', 'Discrete VeloVAE (Full VB)']:
+    elif method in ['VeloVAE', 'VeloVAE (Rate Prior)', 'Discrete VeloVAE', 'Discrete VeloVAE (Rate Prior)']:
         rho = adata.layers[f"{key}_rho"][:, gene_indices]
         t = adata.obs[f"{key}_time"].to_numpy()
         mask_induction = rho > 0.01
@@ -1687,6 +1687,36 @@ def spatial_velocity_consistency(adata, vkey, spatial_graph_key, gene_mask=None)
         consistency_score.append(_pearson_corr(velocities[ith], velocities[nbs_i]).mean())
     # adata.obs[f'{vkey}_consistency'] = consistency_score
     return np.mean(consistency_score)
+
+
+def global_moran_I(vals, nbs):
+    # nbs: adjacency list
+    mean = vals.mean()
+    N = len(vals)
+    W = np.sum([len(x) for x in nbs])
+    num = np.sum([np.sum((vals[i]-mean)*(vals[nbs[i]]-mean)) for i in range(len(nbs))])
+    denom = np.sum((vals-mean)**2)
+    return (N / W)*(num / denom)
+
+
+def spatial_time_consistency(adata,
+                             tkey,
+                             spatial_graph_key):
+    """Computes local Moran's I as a measure of spatial consistency.
+
+    Args:
+        adata (:class:`anndata.AnnData`):
+            Anndata object.
+        tkey (str):
+            Key for latent time.
+        spatial_graph_key (spatial_graph_key):
+            Key for spatial graph.
+    """
+    graph = adata.obsp[spatial_graph_key]
+    nbs = [np.where(graph[i].A > 0)[1] for i in range(graph.shape[0])]
+
+    t = adata.obs[tkey].to_numpy()
+    return global_moran_I(t, nbs)
 
 ##########################################################################
 # End of Reference
