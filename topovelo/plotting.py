@@ -1821,7 +1821,9 @@ def plot_time_grid(T,
                    q=0.99,
                    W=6,
                    H=3,
+                   dot_size=10,
                    grid_size=None,
+                   color_map='plasma_r',
                    save="figures/time_grid.png"):
     """Plot the latent time of different methods.
 
@@ -1868,9 +1870,9 @@ def plot_time_grid(T,
             if n_col > 1:
                 ax[2*row, col].scatter(X_emb[::down_sample, 0],
                                        X_emb[::down_sample, 1],
-                                       s=10.0,
+                                       s=dot_size,
                                        c=t[::down_sample],
-                                       cmap='plasma_r',
+                                       cmap=color_map,
                                        edgecolors='none')
                 if method == "Capture Time":
                     ax[2*row, col].set_title("Expected Temporal Order", fontsize=24)
@@ -1879,9 +1881,9 @@ def plot_time_grid(T,
             else:
                 ax[2*row].scatter(X_emb[::down_sample, 0],
                                   X_emb[::down_sample, 1],
-                                  s=10.0,
+                                  s=dot_size,
                                   c=t[::down_sample],
-                                  cmap='plasma_r',
+                                  cmap=color_map,
                                   edgecolors='none')
                 if method == "Capture Time":
                     ax[2*row].set_title("Expected Temporal Order", fontsize=24)
@@ -1895,7 +1897,7 @@ def plot_time_grid(T,
                 if M > 1:
                     ax[2*row+1, col].scatter(X_emb[::down_sample, 0],
                                              X_emb[::down_sample, 1],
-                                             s=10.0,
+                                             s=dot_size,
                                              c=var_t[::down_sample],
                                              cmap='Reds',
                                              edgecolors='none')
@@ -1907,7 +1909,7 @@ def plot_time_grid(T,
                 else:
                     ax[2*row+1].scatter(X_emb[::down_sample, 0],
                                         X_emb[::down_sample, 1],
-                                        s=10.0,
+                                        s=dot_size,
                                         c=var_t[::down_sample],
                                         cmap='Reds',
                                         edgecolors='none')
@@ -1928,9 +1930,9 @@ def plot_time_grid(T,
             if n_col > 1 and n_row > 1:
                 ax[row, col].scatter(X_emb[::down_sample, 0],
                                      X_emb[::down_sample, 1],
-                                     s=10.0,
+                                     s=dot_size,
                                      c=t[::down_sample],
-                                     cmap='plasma_r',
+                                     cmap=color_map,
                                      edgecolors='none')
                 if method == "Capture Time":
                     ax[row, col].set_title("Expected Temporal Order", fontsize=24)
@@ -1940,9 +1942,9 @@ def plot_time_grid(T,
             elif n_col > 1:
                 ax[col].scatter(X_emb[::down_sample, 0],
                                 X_emb[::down_sample, 1],
-                                s=10.0,
+                                s=dot_size,
                                 c=t[::down_sample],
-                                cmap='plasma_r',
+                                cmap=color_map,
                                 edgecolors='none')
                 if method == "Capture Time":
                     ax[col].set_title("Expected Temporal Order", fontsize=24)
@@ -1952,9 +1954,9 @@ def plot_time_grid(T,
             elif n_row > 1:
                 ax[row].scatter(X_emb[::down_sample, 0],
                                 X_emb[::down_sample, 1],
-                                s=10.0,
+                                s=dot_size,
                                 c=t[::down_sample],
-                                cmap='plasma_r',
+                                cmap=color_map,
                                 edgecolors='none')
                 if method == "Capture Time":
                     ax[row].set_title("Expected Temporal Order", fontsize=24)
@@ -1964,9 +1966,9 @@ def plot_time_grid(T,
             else:
                 ax.scatter(X_emb[::down_sample, 0],
                            X_emb[::down_sample, 1],
-                           s=10.0,
+                           s=dot_size,
                            c=t[::down_sample],
-                           cmap='plasma_r',
+                           cmap=color_map,
                            edgecolors='none')
                 if method == "Capture Time":
                     ax.set_title("Expected Temporal Order", fontsize=24)
@@ -1974,7 +1976,7 @@ def plot_time_grid(T,
                     ax.set_title(method, fontsize=24)
                 ax.axis('off')
     norm0 = matplotlib.colors.Normalize(vmin=0, vmax=1)
-    sm0 = matplotlib.cm.ScalarMappable(norm=norm0, cmap='plasma_r')
+    sm0 = matplotlib.cm.ScalarMappable(norm=norm0, cmap=color_map)
     cbar0 = fig_time.colorbar(sm0, ax=ax, location="right") if M > 1 else fig_time.colorbar(sm0, ax=ax)
     cbar0.ax.get_yaxis().labelpad = 20
     cbar0.ax.set_ylabel('Cell Time', rotation=270, fontsize=24)
