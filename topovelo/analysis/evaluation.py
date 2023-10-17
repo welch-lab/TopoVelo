@@ -211,8 +211,8 @@ def gather_stats(**kwargs):
         'LL Train': np.nan,
         'LL Test': np.nan,
         'Training Time': np.nan,
-        'CBDir (Embed)': np.nan,
         'CBDir': np.nan,
+        'CBDir (Gene Space)': np.nan,
         'Time Score': np.nan,
         'In-Cluster Coherence': np.nan,
         'Velocity Consistency': np.nan,
@@ -235,9 +235,9 @@ def gather_stats(**kwargs):
     if 'corr' in kwargs:
         stats['Time Correlation'] = kwargs['corr']
     if 'mean_cbdir_embed' in kwargs:
-        stats['CBDir (Embed)'] = kwargs['mean_cbdir_embed']
+        stats['CBDir'] = kwargs['mean_cbdir_embed']
     if 'mean_cbdir' in kwargs:
-        stats['CBDir'] = kwargs['mean_cbdir']
+        stats['CBDir (Gene Space)'] = kwargs['mean_cbdir']
     if 'mean_tscore' in kwargs:
         stats['Time Score'] = kwargs['mean_tscore']
     if 'mean_iccoh' in kwargs:
@@ -256,8 +256,8 @@ def gather_type_stats(**kwargs):
     type_dfs = []
     metrics = []
     index_map = {
-        'cbdir': 'CBDir',
-        'cbdir_embed': 'CBDir (Embed)',
+        'cbdir': 'CBDir (Gene Space)',
+        'cbdir_embed': 'CBDir',
         'tscore': 'Time Score'
     }
     for key in kwargs:
@@ -274,12 +274,12 @@ def gather_type_stats(**kwargs):
 
 def gather_multistats(**kwargs):
     metrics = {
-        'kcbdir': 'K-CBDir',
-        'kcbdir_embed': 'K-CBDir (Embed)',
-        'acc': 'Mann-Whitney Test',
-        'acc_embed': 'Mann-Whitney Test (Embed)',
-        'mwtest': 'Mann-Whitney Test Stats',
-        'mwtest_embed': 'Mann-Whitney Test Stats (Embed)'
+        'kcbdir': 'K-CBDir (Gene Space)',
+        'kcbdir_embed': 'K-CBDir',
+        'acc': 'Mann-Whitney Test (Gene Space)',
+        'acc_embed': 'Mann-Whitney Test',
+        'mwtest': 'Mann-Whitney Test Stats (Gene Space)',
+        'mwtest_embed': 'Mann-Whitney Test Stats'
     }
     multi_stats = pd.DataFrame()
     for key in kwargs:
@@ -290,14 +290,15 @@ def gather_multistats(**kwargs):
 
 def gather_type_multistats(**kwargs):
     metrics = {
-        'kcbdir': 'K-CBDir',
-        'kcbdir_embed': 'K-CBDir (Embed)',
-        'acc': 'Mann-Whitney Test',
-        'acc_embed': 'Mann-Whitney Test (Embed)',
-        'mwtest': 'Mann-Whitney Test Stats',
-        'mwtest_embed': 'Mann-Whitney Test Stats (Embed)'
+        'kcbdir': 'K-CBDir (Gene Space)',
+        'kcbdir_embed': 'K-CBDir',
+        'acc': 'Mann-Whitney Test (Gene Space)',
+        'acc_embed': 'Mann-Whitney Test',
+        'mwtest': 'Mann-Whitney Test Stats (Gene Space)',
+        'mwtest_embed': 'Mann-Whitney Test Stats'
     }
-    multi_stats = pd.DataFrame(columns=pd.MultiIndex.from_product([[], []], names=['Transition', 'Step']))
+    multi_stats = pd.DataFrame(index=pd.Index(list(kwargs.keys())),
+                               columns=pd.MultiIndex.from_product([[], []], names=['Transition', 'Step']))
     for key in kwargs:
         for transition in kwargs[key]:
             for i, val in enumerate(kwargs[key][transition]):
@@ -429,15 +430,15 @@ def get_metric(adata,
      tscore, mean_tscore,
      mean_consistency_score,
      mean_sp_vel_consistency) = get_velocity_metric(adata,
-                                                  key,
-                                                  vkey,
-                                                  tkey,
-                                                  cluster_key,
-                                                  cluster_edges,
-                                                  spatial_graph_key,
-                                                  gene_mask,
-                                                  embed,
-                                                  n_jobs)
+                                                    key,
+                                                    vkey,
+                                                    tkey,
+                                                    cluster_key,
+                                                    cluster_edges,
+                                                    spatial_graph_key,
+                                                    gene_mask,
+                                                    embed,
+                                                    n_jobs)
     mean_sp_time_consistency = spatial_time_consistency(adata, tkey, spatial_graph_key)
     stats = gather_stats(mse_train=mse_train,
                          mse_test=mse_test,
@@ -487,6 +488,8 @@ def post_analysis(adata,
                   nplot=500,
                   frac=0.0,
                   embed="umap",
+                  time_colormap='plasma',
+                  dot_size=50,
                   grid_size=(1, 1),
                   sparsity_correction=True,
                   stream_figsize=None,
@@ -664,6 +667,7 @@ def post_analysis(adata,
             nn.fit(X_pos)
         adata.obsp['connectivities'] = nn.kneighbors_graph(mode='connectivity')
         adata.obsp['distances'] = nn.kneighbors_graph(mode='distance')
+        
 
     # Compute metrics and generate plots for each method
     for i, method in enumerate(methods):
@@ -806,8 +810,10 @@ def post_analysis(adata,
                        X_embed,
                        capture_time,
                        None,
+                       dot_size=dot_size,
                        down_sample=min(10, max(1, adata.n_obs//5000)),
                        grid_size=(n_row, n_col),
+                       color_map=time_colormap,
                        save=(None if figure_path is None else
                              f"{figure_path}/{test_id}_time.{save_format}"))
 
@@ -902,6 +908,7 @@ def post_analysis(adata,
                                           title="",
                                           figsize=stream_figsize,
                                           palette=colors,
+                                          size=dot_size,
                                           legend_fontsize=np.clip(15 - np.clip(len(colors)-10, 0, None), 8, None),
                                           legend_loc=stream_legend_loc,
                                           cutoff_perc=0.0,
@@ -910,16 +917,17 @@ def post_analysis(adata,
                                           save=(None if figure_path is None else
                                                 f'{figure_path}/{test_id}_{keys[i]}.png'))
                 if 'TopoVelo' in methods[i]:
-                    adata.uns[f"{vkey}_params"]["embeddings"].append(f'{keys[i]}_xy')
-                    # adata.obsm[f"{keys[i]}_true_velocity_{embed}"] = adata.obsm[f"{keys[i]}_true_velocity_spatial"]
+                    # adata.uns[f"{vkey}_params"]["embeddings"].append(f'{keys[i]}_xy')
+                    adata.obsm[f"{vkey}_dec_{embed}"] = adata.obsm[f"{keys[i]}_velocity_{keys[i]}_xy"]
                     velocity_embedding_stream(adata,
-                                              basis=f'{keys[i]}_xy',
-                                              vkey=vkey,
+                                              basis=embed,
+                                              vkey=f"{vkey}_dec",
                                               recompute=False,
                                               color=cluster_key,
                                               title="",
                                               figsize=stream_figsize,
                                               palette=colors,
+                                              size=dot_size,
                                               legend_fontsize=np.clip(15 - np.clip(len(colors)-10, 0, None), 8, None),
                                               legend_loc=stream_legend_loc,
                                               cutoff_perc=0.0,

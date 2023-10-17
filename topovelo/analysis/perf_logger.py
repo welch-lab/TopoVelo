@@ -30,20 +30,20 @@ class PerfLogger:
                         "MAE Test",
                         "LL Train",
                         "LL Test",
+                        "CBDir (Gene Space)",
                         "CBDir",
-                        "CBDir (Embed)",
                         "Time Score",
                         "In-Cluster Coherence",
                         "Velocity Consistency",
                         "Spatial Velocity Consistency",
                         "Spatial Time Consistency",
                         "Time Correlation"]
-        self.multi_metrics = ["K-CBDir",
-                              "K-CBDir (Embed)",
+        self.multi_metrics = ["K-CBDir (Gene Space)",
+                              "K-CBDir",
+                              "Mann-Whitney Test (Gene Space)",
                               "Mann-Whitney Test",
-                              "Mann-Whitney Test (Embed)",
-                              "Mann-Whitney Test Stats",
-                              "Mann-Whitney Test Stats (Embed)"]
+                              "Mann-Whitney Test Stats (Gene Space)",
+                              "Mann-Whitney Test Stats"]
         self.metrics_type = ["CBDir",
                              "CBDir (Embed)",
                              "Time Score"]
@@ -90,17 +90,21 @@ class PerfLogger:
                 Column index has 3 levels (method, transition pair and number of steps)
         """
         self.n_dataset += 1
+        methods = res.columns.unique(0)
+
         # Collapse the dataframe to 1D series with multi-index
         res_1d = pd.Series(res.values.flatten(), index=pd.MultiIndex.from_product([res.index, res.columns]))
         for x in res_1d.index:
             self.df.loc[x, data_name] = res_1d.loc[x]
 
         # Reshape the data in res_type to match the multi-row-index in self.df_type
-        methods = res_type.columns.unique(0)
-        res_reshape = pd.DataFrame(res_type.values.reshape(res_type.shape[0] * len(methods), -1),
-                                   index=pd.MultiIndex.from_product([res_type.index, methods]),
-                                   columns=pd.MultiIndex.from_product([[data_name], res_type.columns.unique(1)]))
-        self.df_type = pd.concat([self.df_type, res_reshape], axis=1)
+        if res_type.shape[1] > 0:
+            res_reshape = pd.DataFrame(res_type.values.reshape(res_type.shape[0] * len(methods), -1),
+                                    index=pd.MultiIndex.from_product([res_type.index, methods]),
+                                    columns=pd.MultiIndex.from_product([[data_name], res_type.columns.unique(1)]))
+            self.df_type = pd.concat([self.df_type, res_reshape], axis=1)
+        else:
+            print('Warning: no cell type transition pair found. Skipped insertion to df_type.')
 
         # Multi-dimensional metrics
         res_reshape = pd.DataFrame(multi_res.values.reshape(multi_res.shape[0] * len(methods), -1),
@@ -110,12 +114,15 @@ class PerfLogger:
         self.df_multi = pd.concat([self.df_multi, res_reshape], axis=1)
 
         # Multi-dimensional metrics for each transition pair
-        res_reshape = pd.DataFrame(multi_res_type.values.reshape(multi_res_type.shape[0] * len(methods), -1),
-                                   index=pd.MultiIndex.from_product([multi_res_type.index, methods]),
-                                   columns=pd.MultiIndex.from_product([[data_name],
-                                                                       multi_res_type.columns.unique(1),
-                                                                       multi_res_type.columns.unique(2)]))
-        self.df_multi_type = pd.concat([self.df_multi_type, res_reshape], axis=1)
+        if multi_res_type.shape[1] > 0:
+            res_reshape = pd.DataFrame(multi_res_type.values.reshape(multi_res_type.shape[0] * len(methods), -1),
+                                       index=pd.MultiIndex.from_product([multi_res_type.index, methods]),
+                                       columns=pd.MultiIndex.from_product([[data_name],
+                                                                          multi_res_type.columns.unique(1),
+                                                                          multi_res_type.columns.unique(2)]))
+            self.df_multi_type = pd.concat([self.df_multi_type, res_reshape], axis=1)
+        else:
+            print('Warning: no cell type transition pair found. Skipped insertion to df_multi_type.')
 
         # update number of models
         self.n_model = len(self.df.index.unique(1))
@@ -230,23 +237,24 @@ class PerfLogger:
         colors = get_colors(len(methods))
         steps = self.df_multi.columns.unique(1)
         for i, model in enumerate(methods):
-            self.df_multi.loc[(metric, model), dataset].plot(marker=MARKERS[i],
-                                                             markersize=kwargs['markersize'],
-                                                             color=colors[i],
-                                                             label=model,
-                                                             ax=ax,
-                                                             figsize=kwargs['figsize'])
+            ax = self.df_multi.loc[(metric, model), dataset].plot(marker=MARKERS[i],
+                                                                  markersize=kwargs['markersize'],
+                                                                  color=colors[i],
+                                                                  label=model,
+                                                                  ax=ax,
+                                                                  linewidth=kwargs['linewidth'],
+                                                                  figsize=kwargs['figsize'])
         
         ax.set_xticks(range(len(steps)), range(1, len(steps)+1), rotation=0)
         if show_legend:
-            cols = 1 if 'ncols' not in kwargs else kwargs['ncols']
+            ncols = 1 if 'ncols' not in kwargs else kwargs['ncols']
             if 'bbox_to_anchor' in kwargs:
                 ax.legend(fontsize=kwargs['legend_fontsize'],
-                            ncol=cols,
+                            ncol=ncols,
                             loc='center',
                             bbox_to_anchor=kwargs['bbox_to_anchor'])
             else:
-                ax.legend(fontsize=kwargs['legend_fontsize'], ncol=cols)
+                ax.legend(fontsize=kwargs['legend_fontsize'], ncol=ncols)
         ax.set_title(dataset, fontsize=kwargs['title_fontsize'])
         # ax.grid()
         ax.set_xlabel("Step Size", fontsize=kwargs['ylabel_fontsize'])
@@ -261,10 +269,13 @@ class PerfLogger:
                               figure_path=None,
                               figsize=(5, 6),
                               markersize=6,
+                              linewidth=1.0,
                               title_fontsize=20,
                               legend_fontsize=8,
+                              tick_fontsize=12,
                               ylabel_fontsize=15,
                               labelpad=10,
+                              legend_ncols=None,
                               bbox_to_anchor=(0, 1, 1, 0.2),
                               dpi=100):
         """Generate markered line plots of K-CBDir and related test results.
@@ -291,6 +302,8 @@ class PerfLogger:
             methods = np.array(self.df.index.unique(1)).astype(str)
         if len(metrics) == 0:
             metrics = self.multi_metrics
+        if legend_ncols is None:
+            legend_ncols = len(methods)
 
         for metric in metrics:
             metric_name = re.sub(r'\W+', ' ', metric.lower())
@@ -304,10 +317,13 @@ class PerfLogger:
                                                     figsize,
                                                     figsize=figsize,
                                                     markersize=markersize,
+                                                    linewidth=linewidth,
                                                     title_fontsize=title_fontsize,
                                                     legend_fontsize=legend_fontsize,
+                                                    tick_fontsize=tick_fontsize,
                                                     ylabel_fontsize=ylabel_fontsize,
                                                     labelpad=labelpad,
+                                                    ncols=legend_ncols,
                                                     bbox_to_anchor=bbox_to_anchor)
                 fig = ax.get_figure()
                 fig.tight_layout()
@@ -328,7 +344,6 @@ class PerfLogger:
         df_plot = self.df.loc[metric].loc[methods].T
         ax = df_plot.plot.bar(color=colors,
                               figsize=kwargs['figsize'],
-                              fontsize=kwargs['bar_fontsize'],
                               legend=show_legend,
                               ax=ax)
         ax.set_xlabel("")
@@ -353,7 +368,6 @@ class PerfLogger:
                      figsize=(12, 6),
                      title_fontsize=20,
                      legend_fontsize=16,
-                     bar_fontsize=14,
                      tick_fontsize=15,
                      bbox_to_anchor=(1.25, 1.0),
                      dpi=100):
@@ -388,7 +402,6 @@ class PerfLogger:
                                        figsize=figsize,
                                        title_fontsize=title_fontsize,
                                        legend_fontsize=legend_fontsize,
-                                       bar_fontsize=bar_fontsize,
                                        tick_fontsize=tick_fontsize,
                                        bbox_to_anchor=bbox_to_anchor)
             fig = ax.get_figure()
@@ -397,7 +410,7 @@ class PerfLogger:
                 fig.savefig(f'{figure_path}/perf_{fig_name}.png', bbox_inches='tight', dpi=dpi)
         return
 
-    def _decompose_num(self, n, max_ratio = 4):
+    def _decompose_num(self, n, max_ratio=4):
         # max_ratio defines the upper limit of ncols/nrows 
         if n <= 4:
             return [n]
@@ -440,9 +453,9 @@ class PerfLogger:
              figure_name='perf',
              figsize=(7.5, 5),
              markersize=3,
+             linewidth=1.0,
              title_fontsize=8,
              legend_fontsize=5,
-             bar_fontsize=6,
              ylabel_fontsize=6,
              labelpad=5,
              tick_fontsize=6,
@@ -484,7 +497,6 @@ class PerfLogger:
                                       figsize=(figsize[0], figsize[1]),
                                       title_fontsize=title_fontsize,
                                       legend_fontsize=legend_fontsize,
-                                      bar_fontsize=bar_fontsize,
                                       tick_fontsize=tick_fontsize)
                 if (metric == legend_metric):
                     handles, labels = ax.get_legend_handles_labels()
@@ -498,7 +510,7 @@ class PerfLogger:
                     methods_ = np.array(self.df_multi.loc[metric].index.unique(0)).astype(str)
                 else:
                     methods_ = methods
-                for dataset in datasets:
+                for j, dataset in enumerate(datasets):
                     idx = (n_scalar + ptr_multi)*ncols_multi[ptr_multi] + counter_multi
                     ax = fig.add_subplot(nrows, ncols_multi[ptr_multi], idx)
                     self._plot_velocity_metrics_ax(metric,
@@ -508,12 +520,14 @@ class PerfLogger:
                                                    ax=ax,
                                                    figsize=(figsize[0], figsize[1]),
                                                    markersize=markersize,
+                                                   linewidth=linewidth,
                                                    title_fontsize=title_fontsize,
                                                    legend_fontsize=legend_fontsize,
                                                    ylabel_fontsize=ylabel_fontsize,
                                                    labelpad=labelpad,
-                                                   bar_fontsize=bar_fontsize,
                                                    tick_fontsize=tick_fontsize)
+                    if j > 0:
+                        ax.set_ylabel('')
                     # _fig = ax.get_figure()
                     # print(_fig.get_size_inches())
                     if (metric == legend_metric):
