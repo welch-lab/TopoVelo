@@ -341,7 +341,7 @@ class VanillaVAE():
         else:
             print('Using informative time prior.')
             t = adata.obs[tprior].to_numpy()
-            t = t/t.max()*tmax
+            t = (t-t.min())/(t.max()-t.min())*tmax
             t_cap = np.sort(np.unique(t))
             std_t = np.zeros((len(t)))
             std_t[t == t_cap[0]] = (t_cap[1] - t_cap[0])*(0.5+0.5*self.config["time_overlap"])

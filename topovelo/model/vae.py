@@ -19,7 +19,7 @@ from ..plotting import plot_train_loss, plot_test_loss
 
 from .model_util import hist_equal, init_params, get_ts_global, reinit_params
 from .model_util import convert_time, get_gene_index
-from .model_util import pred_su, ode_numpy, knnx0_index, get_x0, spatial_x1_index, get_x1_spatial
+from .model_util import pred_su, ode_numpy, knnx0_index, get_x0, spatial_x1_index, get_x1_spatial, knnx0_index_batch
 from .model_util import elbo_collapsed_categorical
 from .model_util import assign_gene_mode, find_dirichlet_param, assign_gene_mode_tprior
 from .model_util import get_cell_scale, get_dispersion
@@ -474,10 +474,10 @@ class decoder(nn.Module):
                     si = s[self.batch[self.train_idx] == i]
                     filt = (si > 0) * (ui > 0)
                     # for debug purpose
-                    plt.figure()
-                    plt.hist(np.mean(filt, 0), bins=[0, 1e-4, 1e-3, 1e-2, 0.1, 1.0])
-                    plt.xscale('log')
-                    plt.show()
+                    # plt.figure()
+                    # plt.hist(np.mean(filt, 0), bins=[0, 1e-4, 1e-3, 1e-2, 0.1, 1.0])
+                    # plt.xscale('log')
+                    # plt.show()
 
                     ui[~filt] = np.nan
                     si[~filt] = np.nan
@@ -551,6 +551,7 @@ class decoder(nn.Module):
             t_prior = adata.obs[self.init_key].to_numpy()
             t_prior = t_prior[self.train_idx]
             std_t = (np.std(t_prior)+1e-3)*0.05
+            std_t = std_t*(self.tmax/(t_prior.max() - t_prior.min()))
             self.t_init = np.random.uniform(t_prior-std_t, t_prior+std_t)
             self.t_init -= self.t_init.min()
             self.t_init = self.t_init
@@ -917,6 +918,7 @@ class VAE(VanillaVAE):
                  n_head=5,
                  batch_key=None,
                  ref_batch=None,
+                 slice_key=None,
                  init_method="steady",
                  init_key=None,
                  tprior=None,
@@ -925,6 +927,7 @@ class VAE(VanillaVAE):
                  init_ton_zero=True,
                  filter_gene=False,
                  count_distribution="Poisson",
+                 time_overlap=0.05,
                  std_z_prior=0.01,
                  xavier_gain=0.05,
                  checkpoints=[None, None],
@@ -1016,7 +1019,7 @@ class VAE(VanillaVAE):
             "tprior": tprior,
             "std_z_prior": std_z_prior,
             "tail": 0.01,
-            "time_overlap": 0.05,
+            "time_overlap": time_overlap,
             "n_neighbors": 10,
             "dt": (0.03, 0.06),
             "n_bin": None,
@@ -1068,6 +1071,7 @@ class VAE(VanillaVAE):
 
         self.set_device(device)
         self.encode_batch(adata)
+        self.encode_slice(adata, slice_key)
 
         self.dim_z = dim_z
         self.enable_cvae = dim_cond > 0
@@ -1210,6 +1214,13 @@ class VAE(VanillaVAE):
             print('Warning: number of batch classes is larger than half of dim_z. Consider increasing dim_z.')
         if self.enable_cvae and 10*self.n_batch < self.config['dim_z']:
             print('Warning: number of batch classes is smaller than 1/10 of dim_z. Consider decreasing dim_z.')
+
+    def encode_slice(self, adata, slice_key):
+        self.slice_label = None
+        self.slices = None
+        if slice_key in adata.obs:
+            self.slice_label = adata.obs[slice_key].to_numpy()
+            self.slices = np.unique(self.slice_label)
 
     def _pick_loss_func(self, adata, count_distribution):
         ##############################################################
@@ -2060,16 +2071,30 @@ class VAE(VanillaVAE):
             s0_init = np.mean(self.graph_data.data.x[init_mask][:, G:].detach().cpu().numpy(), 0)
         xy = self.graph_data.xy.detach().cpu().numpy()
         if self.x0_index is None:
-            self.x0_index = knnx0_index(t[self.train_idx],
-                                        z[self.train_idx],
-                                        xy[self.train_idx],
-                                        t,
-                                        z,
-                                        xy,
-                                        dt,
-                                        self.config["n_neighbors"],
-                                        self.config["radius"],
-                                        hist_eq=True)
+            if self.slice_label is None:
+                self.x0_index = knnx0_index(t[self.train_idx],
+                                            z[self.train_idx],
+                                            xy[self.train_idx],
+                                            t,
+                                            z,
+                                            xy,
+                                            dt,
+                                            self.config["n_neighbors"],
+                                            self.config["radius"],
+                                            hist_eq=True)
+            else:
+                self.x0_index = knnx0_index_batch(t[self.train_idx],
+                                                  z[self.train_idx],
+                                                  xy[self.train_idx],
+                                                  self.slice_label[self.train_idx],
+                                                  t,
+                                                  z,
+                                                  xy,
+                                                  self.slice_label,
+                                                  dt,
+                                                  self.config["n_neighbors"],
+                                                  self.config["radius"],
+                                                  hist_eq=True)
         u0, s0, xy0, t0 = get_x0(out["uhat"][self.train_idx],
                                  out["shat"][self.train_idx],
                                  xy[self.train_idx],
@@ -2078,14 +2103,28 @@ class VAE(VanillaVAE):
                                  self.x0_index,
                                  u0_init,
                                  s0_init)
-        if self.config["vel_continuity_loss"]:
-            if self.x1_index is None:
+        if self.config["vel_continuity_loss"] and self.x1_index is None:
+            if self.slice_label is None:
                 self.x1_index = knnx0_index(t[self.train_idx],
                                             z[self.train_idx],
                                             xy[self.train_idx],
                                             t,
                                             z,
                                             xy,
+                                            dt,
+                                            self.config["n_neighbors"],
+                                            self.config["radius"],
+                                            forward=True,
+                                            hist_eq=True)
+            else:
+                self.x1_index = knnx0_index(t[self.train_idx],
+                                            z[self.train_idx],
+                                            xy[self.train_idx],
+                                            self.slice_label[self.train_idx],
+                                            t,
+                                            z,
+                                            xy,
+                                            self.slice_label,
                                             dt,
                                             self.config["n_neighbors"],
                                             self.config["radius"],
@@ -2491,6 +2530,7 @@ class VAE(VanillaVAE):
             ls_scale = self.ls_scale.exp()
             y_onehot = (F.one_hot(self.graph_data.batch, self.n_batch).float()
                         if self.enable_cvae else None)
+
             p_t = self.p_t[:, sample_idx, :].cpu()
             p_z = self.p_z[:, sample_idx, :].cpu()
             (mu_tx, std_tx,
@@ -2758,27 +2798,41 @@ class VAE(VanillaVAE):
         """
         self.set_mode('eval')
         os.makedirs(file_path, exist_ok=True)
-        if self.is_full_vb:
-            adata.var[f"{key}_logmu_alpha"] = self.decoder.alpha[0].detach().cpu().numpy()
-            adata.var[f"{key}_logmu_beta"] = self.decoder.beta[0].detach().cpu().numpy()
-            adata.var[f"{key}_logmu_gamma"] = self.decoder.gamma[0].detach().cpu().numpy()
-            adata.var[f"{key}_logstd_alpha"] = self.decoder.alpha[1].detach().cpu().exp().numpy()
-            adata.var[f"{key}_logstd_beta"] = self.decoder.beta[1].detach().cpu().exp().numpy()
-            adata.var[f"{key}_logstd_gamma"] = self.decoder.gamma[1].detach().cpu().exp().numpy()
-        else:
-            adata.var[f"{key}_alpha"] = np.exp(self.decoder.alpha.detach().cpu().numpy())
-            adata.var[f"{key}_beta"] = np.exp(self.decoder.beta.detach().cpu().numpy())
-            adata.var[f"{key}_gamma"] = np.exp(self.decoder.gamma.detach().cpu().numpy())
-
-        adata.var[f"{key}_ton"] = self.decoder.ton.exp().detach().cpu().numpy()
         if self.enable_cvae:
+            if self.is_full_vb:
+                adata.varm[f"{key}_logmu_alpha"] = self.decoder.alpha[:, 0, :].detach().cpu().numpy().T
+                adata.varm[f"{key}_logmu_beta"] = self.decoder.beta[:, 0, :].detach().cpu().numpy().T
+                adata.varm[f"{key}_logmu_gamma"] = self.decoder.gamma[:, 0, :].detach().cpu().numpy().T
+                adata.varm[f"{key}_logstd_alpha"] = self.decoder.alpha[:, 1, :].detach().cpu().exp().numpy().T
+                adata.varm[f"{key}_logstd_beta"] = self.decoder.beta[:, 1, :].detach().cpu().exp().numpy().T
+                adata.varm[f"{key}_logstd_gamma"] = self.decoder.gamma[:, 1, :].detach().cpu().exp().numpy().T
+            else:
+                adata.varm[f"{key}_alpha"] = np.exp(self.decoder.alpha.detach().cpu().numpy()).T
+                adata.varm[f"{key}_beta"] = np.exp(self.decoder.beta.detach().cpu().numpy()).T
+                adata.varm[f"{key}_gamma"] = np.exp(self.decoder.gamma.detach().cpu().numpy()).T
+            adata.varm[f"{key}_ton"] = self.decoder.ton.exp().detach().cpu().numpy().T
             adata.varm[f"{key}_scaling_u"] = np.exp(self.decoder.scaling_u.detach().cpu().numpy()).T
             adata.varm[f"{key}_scaling_s"] = np.exp(self.decoder.scaling_s.detach().cpu().numpy()).T
+            adata.var[f"{key}_sigma_u"] = np.exp(self.decoder.sigma_u.detach().cpu().numpy()).T
+            adata.var[f"{key}_sigma_s"] = np.exp(self.decoder.sigma_s.detach().cpu().numpy()).T
         else:
+            if self.is_full_vb:
+                adata.var[f"{key}_logmu_alpha"] = self.decoder.alpha[0].detach().cpu().numpy()
+                adata.var[f"{key}_logmu_beta"] = self.decoder.beta[0].detach().cpu().numpy()
+                adata.var[f"{key}_logmu_gamma"] = self.decoder.gamma[0].detach().cpu().numpy()
+                adata.var[f"{key}_logstd_alpha"] = self.decoder.alpha[1].detach().cpu().exp().numpy()
+                adata.var[f"{key}_logstd_beta"] = self.decoder.beta[1].detach().cpu().exp().numpy()
+                adata.var[f"{key}_logstd_gamma"] = self.decoder.gamma[1].detach().cpu().exp().numpy()
+            else:
+                adata.var[f"{key}_alpha"] = np.exp(self.decoder.alpha.detach().cpu().numpy())
+                adata.var[f"{key}_beta"] = np.exp(self.decoder.beta.detach().cpu().numpy())
+                adata.var[f"{key}_gamma"] = np.exp(self.decoder.gamma.detach().cpu().numpy())
+
+            adata.var[f"{key}_ton"] = self.decoder.ton.exp().detach().cpu().numpy()
             adata.var[f"{key}_scaling_u"] = np.exp(self.decoder.scaling_u.detach().cpu().numpy())
             adata.var[f"{key}_scaling_s"] = np.exp(self.decoder.scaling_s.detach().cpu().numpy())
-        adata.var[f"{key}_sigma_u"] = np.exp(self.decoder.sigma_u.detach().cpu().numpy())
-        adata.var[f"{key}_sigma_s"] = np.exp(self.decoder.sigma_s.detach().cpu().numpy())
+            adata.var[f"{key}_sigma_u"] = np.exp(self.decoder.sigma_u.detach().cpu().numpy())
+            adata.var[f"{key}_sigma_s"] = np.exp(self.decoder.sigma_s.detach().cpu().numpy())
         adata.varm[f"{key}_mode"] = F.softmax(self.decoder.logit_pw, 1).detach().cpu().numpy()
 
         out, elbo = self.pred_all(self.cell_labels,

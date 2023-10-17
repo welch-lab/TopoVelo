@@ -1308,6 +1308,46 @@ def get_x0(U,
     return u0, s0, xy0, t0
 
 
+def knnx0_index_batch(t,
+                      z,
+                      xy,
+                      batch_label,
+                      t_query,
+                      z_query,
+                      xy_query,
+                      batch_label_query,
+                      dt,
+                      k,
+                      radius,
+                      adaptive=0.0,
+                      std_t=None,
+                      forward=False,
+                      hist_eq=False):
+    neighbor_index = [[] for i in range(len(t_query))]
+    unique_batches = np.unique(batch_label)
+    for batch in unique_batches:
+        batch_idx = np.where(batch_label == batch)[0]
+        batch_idx_query = np.where(batch_label_query == batch)[0]
+        batch_neighbor_index = knnx0_index(t[batch_idx],
+                                           z[batch_idx],
+                                           xy[batch_idx],
+                                           t_query[batch_idx_query],
+                                           z_query[batch_idx_query],
+                                           xy_query[batch_idx_query],
+                                           dt,
+                                           k,
+                                           radius,
+                                           adaptive=adaptive,
+                                           std_t=std_t,
+                                           forward=forward,
+                                           hist_eq=hist_eq)
+        # Convert the index back
+        for i, idx in enumerate(batch_idx_query):
+            neighbor_index[idx] = batch_idx[batch_neighbor_index[i]]
+    
+    return neighbor_index
+
+
 def get_kstep_nbs(nbs, k, t, dt):
     # nbs: adjacency list
     nbs_k = []

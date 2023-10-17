@@ -115,13 +115,29 @@ def rna_velocity_vae(adata,
     S : `numpy array`
         predicted s values
     """
-    alpha = np.exp(adata.var[f"{key}_logmu_alpha"].to_numpy()) if full_vb\
-        else adata.var[f"{key}_alpha"].to_numpy()
-    rho = adata.layers[f"{key}_rho"]
-    beta = np.exp(adata.var[f"{key}_logmu_beta"].to_numpy()) if full_vb\
-        else adata.var[f"{key}_beta"].to_numpy()
-    gamma = np.exp(adata.var[f"{key}_logmu_gamma"].to_numpy()) if full_vb\
-        else adata.var[f"{key}_gamma"].to_numpy()
+    if batch_key is None:
+        alpha = np.exp(adata.var[f"{key}_logmu_alpha"].to_numpy()) if full_vb\
+            else adata.var[f"{key}_alpha"].to_numpy()
+        rho = adata.layers[f"{key}_rho"]
+        beta = np.exp(adata.var[f"{key}_logmu_beta"].to_numpy()) if full_vb\
+            else adata.var[f"{key}_beta"].to_numpy()
+        gamma = np.exp(adata.var[f"{key}_logmu_gamma"].to_numpy()) if full_vb\
+            else adata.var[f"{key}_gamma"].to_numpy()
+    else:
+        _alpha = np.exp(adata.varm[f"{key}_logmu_alpha"]) if full_vb else adata.varm[f"{key}_alpha"]
+        rho = adata.layers[f"{key}_rho"]
+        _beta = np.exp(adata.varm[f"{key}_logmu_beta"]) if full_vb else adata.varm[f"{key}_beta"]
+        _gamma = np.exp(adata.varm[f"{key}_logmu_gamma"]) if full_vb else adata.varm[f"{key}_gamma"]
+        alpha = np.empty(adata.shape)
+        beta = np.empty(adata.shape)
+        gamma = np.empty(adata.shape)
+        batch = adata.obs[batch_key].to_numpy()
+        n_batch = int(batch.max())+1
+        for i in range(n_batch):
+            alpha[batch == i] = _alpha[:, i]
+            beta[batch == i] = _beta[:, i]
+            gamma[batch == i] = _gamma[:, i]
+        
     t = adata.obs[f"{key}_time"].to_numpy()
     t0 = adata.obs[f"{key}_t0"].to_numpy()
     U0 = adata.layers[f"{key}_u0"]
