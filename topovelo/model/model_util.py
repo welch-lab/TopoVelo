@@ -16,6 +16,7 @@ from sklearn.neighbors import BallTree
 from scipy.stats import dirichlet, bernoulli, kstest, linregress
 from scipy.linalg import svdvals
 from scipy.spatial.distance import cosine
+from scipy.sparse import csr_array
 
 ###################################################################################
 # Spatial time prior estimation based Delaunay triangulation
@@ -1667,3 +1668,13 @@ def add_capture_time(adata, tkey, save_key="tprior"):
 def add_cell_cluster(adata, cluster_key, save_key="clusters"):
     cell_labels = adata.obs[cluster_key].to_numpy()
     adata.obs["clusters"] = np.array([str(x) for x in cell_labels])
+
+
+def dge2array(cum_num_col, row, val):
+    n_entries_per_col = np.diff(cum_num_col)
+    col = []
+    for i, num in enumerate(n_entries_per_col):
+        col.extend([i]*num)
+    col = np.array(col)
+    n = len(n_entries_per_col)
+    return csr_array((val.sum(1), (row, col)), shape=(n, n)).toarray()

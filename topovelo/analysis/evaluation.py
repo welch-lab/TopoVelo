@@ -9,6 +9,7 @@ from topovelo.plotting import set_dpi, get_colors, plot_cluster, plot_phase_grid
 from multiprocessing import cpu_count
 from scipy.stats import spearmanr
 from sklearn.neighbors import NearestNeighbors
+from ..scvelo_preprocessing.neighbors import neighbors
 
 
 def get_n_cpu(n_cell):
@@ -476,7 +477,7 @@ def post_analysis(adata,
                   keys,
                   spatial_graph_key=None,
                   spatial_key=None,
-                  num_spatial_neighbors=8,
+                  n_spatial_neighbors=8,
                   gene_key='velocity_genes',
                   compute_metrics=True,
                   raw_count=False,
@@ -518,7 +519,7 @@ def post_analysis(adata,
             Key in .obsp storing the adjacency matrix of a spatial graph.
         spatial_key (str):
             Key in .obsm storing spatial coordinates
-        num_spatial_neighbors (int, optional):
+        n_spatial_neighbors (int, optional):
             Number of neighbors in the spatial KNN graph,
             effective only if spatial_key is not None
         gene_key (str, optional):
@@ -646,28 +647,18 @@ def post_analysis(adata,
         tkey = 'latent_time' if method == 'scVelo' else f'{keys[i]}_time'
         tkeys.append(tkey)
 
-    # Optionally compute a spatial KNN graph,
-    # used for spatial velocity consistency and optionally velocity stream
-    try:
-        nn = None
-        assert spatial_graph_key in adata.obsp
-    except AssertionError:
-        print(f'Warning: spatial graph with key {spatial_graph_key} not found.')
+    # recompute the spatial KNN graph
+    if spatial_velocity_graph:
+        #if spatial_graph_key in adata.obsp:
+        #    n_spatial_neighbors = adata.uns['neighbors']['indices'].shape[1]
         if spatial_key is not None:
-            print(f'Computing a spatial graph using KNN on {spatial_key}')
-            X_pos = adata.obsm[spatial_key]
-            nn = NearestNeighbors(n_neighbors=num_spatial_neighbors)
-            nn.fit(X_pos)
-            adata.obsp['spatial_graph'] = nn.kneighbors_graph(mode='connectivity')
-            spatial_graph_key = 'spatial_graph'
-    if spatial_velocity_graph and 'stream' in plot_type:
-        if nn is None:
-            X_pos = adata.obsm[spatial_key]
-            nn = NearestNeighbors(n_neighbors=num_spatial_neighbors)
-            nn.fit(X_pos)
-        adata.obsp['connectivities'] = nn.kneighbors_graph(mode='connectivity')
-        adata.obsp['distances'] = nn.kneighbors_graph(mode='distance')
-        
+            print(f'Computing a spatial graph using KNN on {spatial_key} with k={n_spatial_neighbors}')
+            if 'connectivities' in adata.obsp or 'neighbors' in adata.uns:
+                print(f'Warning: overwriting the original KNN graph! (.uns, .obsp)')
+            neighbors(adata, n_neighbors=n_spatial_neighbors, use_rep=spatial_key, method='sklearn')
+        else:
+            raise KeyError
+
 
     # Compute metrics and generate plots for each method
     for i, method in enumerate(methods):
@@ -899,8 +890,8 @@ def post_analysis(adata,
                     gene_subset = adata.var_names[adata.var['velocity_genes'].to_numpy()]
                 else:
                     gene_subset = adata.var_names[~np.isnan(adata.layers[vkey][0])]
-                
-                velocity_graph(adata, vkey=vkey, gene_subset=gene_subset, n_jobs=get_n_cpu(adata.n_obs))
+                xkey = 'Ms' if 'xkey' not in kwargs else kwargs['xkey']
+                velocity_graph(adata, vkey=vkey, xkey=xkey, gene_subset=gene_subset, n_jobs=get_n_cpu(adata.n_obs))
                 velocity_embedding_stream(adata,
                                           basis=embed,
                                           vkey=vkey,

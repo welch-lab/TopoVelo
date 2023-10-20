@@ -1,6 +1,6 @@
 import scanpy
 import numpy as np
-from scipy.sparse import block_diag
+from scipy.sparse import block_diag, csr_matrix
 from .scvelo_preprocessing import *
 from tqdm import tqdm
 from sklearn.neighbors import NearestNeighbors
@@ -138,6 +138,7 @@ def preprocess(adata,
                n_gene=1000,
                cluster_key="clusters",
                spatial_key=None,
+               spatial_smoothing=False,
                tkey=None,
                selection_method="scv",
                min_count_per_cell=None,
@@ -154,7 +155,7 @@ def preprocess(adata,
                max_cells_u=None,
                npc=30,
                n_neighbors=30,
-               n_spatial_neighbors=8,
+               n_spatial_neighbors=50,
                genes_retain=None,
                perform_clustering=False,
                resolution=1.0,
@@ -173,6 +174,12 @@ def preprocess(adata,
         Number of genes to keep
     cluster_key : str, optional
         Key in adata.obs containing the cell type
+    spatial_key : str, optional
+        Key in adata.obsm containing the spatial coordinates
+        Defaults to None
+    spatial_smoothing : bool, optional
+        Whether to use the spatial graph to smooth the data.
+        Defaults to False.
     tkey : str, optional
         Key in adata.obs containing the capture time
     selection_method : {'scv','balanced'}, optional
@@ -287,7 +294,11 @@ def preprocess(adata,
 
     # 2. KNN Averaging
     # remove_duplicate_cells(adata)
-    moments(adata, n_pcs=npc, n_neighbors=n_neighbors)
+    if spatial_smoothing:
+        print('Spatial KNN smoothing.')
+        moments(adata, n_pcs=npc, n_neighbors=n_spatial_neighbors, method='sklearn', use_rep=spatial_key)
+    else:
+        moments(adata, n_pcs=npc, n_neighbors=n_neighbors)
 
     if keep_raw:
         print("Keep raw unspliced/spliced count data.")
@@ -316,22 +327,32 @@ def preprocess(adata,
         scanpy.tl.umap(adata, min_dist=umap_min_dist)
 
     # 6. Compute the spatial graph
+    """
     if spatial_key is not None:
         if not divide_compartments:
-            print('Perform spatial KNN graph.')
+            print('Computing spatial KNN graph.')
             X_pos = adata.obsm[spatial_key]
             nn = NearestNeighbors(n_neighbors=n_spatial_neighbors)
             nn.fit(X_pos)
             adata.obsp['spatial_graph'] = nn.kneighbors_graph()
+            adata.obsp['connectivities'] = nn.kneighbors_graph(mode='connectivity')
+            adata.obsp['distances'] = nn.kneighbors_graph(mode='distance')
         else:
             print('Divide compartments and perform spatial clustering.')
             scanpy.tl.leiden(adata, key_added='compartment', resolution=resolution)
             print(f"{len(np.unique(adata.obs['compartment']))} compartments detected.")
             compartments = adata.obs['compartment'].to_numpy().astype(int)
             blocks = []
+            blocks_conn = []
+            blocks_dist = []
             for i in range(compartments.max()+1):
                 X_pos = adata.obsm[spatial_key][compartments == i]
                 nn = NearestNeighbors(n_neighbors=min(n_spatial_neighbors, len(X_pos)-1))
                 nn.fit(X_pos)
                 blocks.append(nn.kneighbors_graph().toarray())
+                blocks_conn.append(nn.kneighbors_graph(mode='connectivity').toarray())
+                blocks_dist.append(nn.kneighbors_graph(mode='distance').toarray())
             adata.obsp['spatial_graph'] = block_diag(blocks).tocsr()
+            adata.obsp['connectivities'] = block_diag(blocks_conn).tocsr()
+            adata.obsp['distances'] = block_diag(blocks_dist).tocsr()
+    """

@@ -3,6 +3,7 @@ import pandas as pd
 import os
 import psutil
 import matplotlib.pyplot as plt
+from scipy.sparse import csr_matrix, csc_matrix, coo_matrix
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -23,6 +24,7 @@ from .model_util import pred_su, ode_numpy, knnx0_index, get_x0, spatial_x1_inde
 from .model_util import elbo_collapsed_categorical
 from .model_util import assign_gene_mode, find_dirichlet_param, assign_gene_mode_tprior
 from .model_util import get_cell_scale, get_dispersion
+from .model_util import dge2array
 
 from .transition_graph import encode_type
 from .training_data import SCGraphData, Index
@@ -2205,6 +2207,7 @@ class VAE(VanillaVAE):
               plot=False,
               gene_plot=[],
               cluster_key="clusters",
+              us_keys=None,
               figure_path="figures",
               embed="umap",
               random_state=2022):
@@ -2245,6 +2248,11 @@ class VAE(VanillaVAE):
         if self.is_discrete:
             U, S = np.array(adata.layers['unspliced'].todense()), np.array(adata.layers['spliced'].todense())
             X = np.concatenate((U, S), 1).astype(int)
+        elif us_keys is not None:
+            U, S = adata.layers[us_keys[0]], adata.layers[us_keys[1]]
+            if isinstance(U, csr_matrix) or isinstance(U, csc_matrix) or isinstance(U, coo_matrix):
+                U, S = U.A, S.A
+            X = np.concatenate((U, S), 1)
         else:
             X = np.concatenate((adata.layers['Mu'], adata.layers['Ms']), 1).astype(float)
         try:
@@ -2729,35 +2737,80 @@ class VAE(VanillaVAE):
         self.decoder.sigma_s = nn.Parameter(torch.tensor(np.log(std_s+1e-16),
                                             dtype=torch.float,
                                             device=self.device))
-
+        
         return
 
-    def get_enc_att(self, data_in, edge_index):
+    def get_enc_att(self, data_in, edge_index, edge_weight):
         gatconv = self.encoder.conv1
         if not isinstance(gatconv, GATConv):
-            print("Invalid graph layer! Please use GATConv instead.")
+            print("Skipping encoder attention score computation.")
             return None
         with torch.no_grad():
-            _, att = gatconv(data_in, edge_index, return_attention_weights=True)
-        row, col, val = att.cpu().csr()
-        row = row.numpy()
-        col = col.numpy()
-        val = val.numpy()
-        return row, col, val
+            _, att = gatconv(data_in, edge_index, edge_weight, return_attention_weights=True)
+        cum_num_col, row, val = att.cpu().csr()
+        cum_num_col = cum_num_col.detach().numpy()
+        row = row.detach().numpy()
+        val = val.detach().numpy()
+        return dge2array(cum_num_col, row, val)
 
-    def get_dec_att(self, data_in, edge_index):
+    def get_dec_att(self, data_in, edge_index, edge_weight):
         gatconv = self.decoder.net_rho2.conv1
         if not isinstance(gatconv, GATConv):
-            print("Invalid graph layer! Please use GATConv instead.")
+            print("Skipping decoder attention score computation.")
             return None
         with torch.no_grad():
-            _, att = gatconv(data_in, edge_index, return_attention_weights=True)
-        row, col, val = att.cpu().csr()
-        row = row.numpy()
-        col = col.numpy()
-        val = val.numpy()
-        return row, col, val
+            _, att = gatconv(data_in, edge_index, edge_weight, return_attention_weights=True)
+        cum_num_col, row, val = att.cpu().csr()
+        cum_num_col = cum_num_col.detach().numpy()
+        row = row.detach().numpy()
+        val = val.detach().numpy()
+        return dge2array(cum_num_col, row, val)
     
+    def get_gradients(self, adata, query_genes, query_cells, spatial_graph_key):
+        self.set_mode('train')
+        G = self.decoder.n_gene
+        self.graph_data.data.x.requires_grad = True
+        condition = (F.one_hot(self.graph_data.batch, self.n_batch).float()
+                                if self.enable_cvae else None)
+        scaling_u = self.decoder.get_param_1d('scaling_u', condition, sample=False, detach=False)
+        scaling_s = self.decoder.get_param_1d('scaling_s', condition, sample=False, detach=False)
+        data_in_scale = torch.cat((self.graph_data.data.x[:, :G]/scaling_u,
+                                  self.graph_data.data.x[:, G:]/scaling_s), 1)
+
+        mu_t, std_t, mu_z, std_z = self.encoder.forward(self.graph_data.data.x,
+                                                        self.graph_data.data.adj_t,
+                                                        self.graph_data.edge_weight,
+                                                        condition)
+
+        t = self.sample(mu_t, std_t)
+        z = self.sample(mu_z, std_z)
+        gatconv = self.decoder.net_rho2.conv1
+        h, att = gatconv(z,
+                         self.graph_data.data.adj_t,
+                         self.graph_data.edge_weight,
+                         return_attention_weights=True)
+        h = self.decoder.net_rho2.act(h)
+        if condition is not None:
+            h = torch.cat((h, condition), 1)
+        if not self.decoder.net_rho2.enable_sigmoid:
+            rho = self.decoder.net_rho2.fc_out(h)
+        else:
+            rho = self.decoder.net_rho2.sigm(self.decoder.net_rho2.fc_out(h))
+        gd = []
+        for gene in query_genes:
+            if gene in adata.var_names:
+                idx = np.where(adata.var_names==query_gene)[0][0]
+                gd_gene = []
+                for cell in query_cells:
+                    nbs = np.where(adata.obsp[spatial_graph_key][cell].A > 0)[0]
+                    _gd = torch.autograd.grad(rho[cell, idx],
+                                              self.graph_data.data.x[nbs],
+                                              retain_graph=True,
+                                              allow_unused=True)[0]
+                    gd_gene.append(_gd)
+                gd.append(gd_gene)
+        return gd
+
     def xy_velocity(self,
                     edge_index=None,
                     edge_weight=None,
@@ -2868,6 +2921,21 @@ class VAE(VanillaVAE):
         adata.obsm[f"X_{key}_xy0"] = self.graph_data.xy0.detach().cpu().numpy()
         adata.layers[f"{key}_uhat"] = Uhat
         adata.layers[f"{key}_shat"] = Shat
+        
+        # Attention score
+        enc_att = self.get_enc_att(self.graph_data.data.x,
+                                   self.graph_data.data.adj_t,
+                                   self.graph_data.edge_weight)
+        z_ts = torch.tensor(z, device=self.device)
+        dec_att = self.get_dec_att(z_ts,
+                                   self.graph_data.data.adj_t,
+                                   self.graph_data.edge_weight)
+        
+        if enc_att is not None:
+            adata.obsp[f"{key}_enc_att"] = enc_att
+        if dec_att is not None:
+            adata.obsp[f"{key}_dec_att"] = dec_att
+        del z_ts, enc_att, dec_att
 
         adata.obs[f"{key}_t0"] = self.graph_data.t0.detach().cpu().squeeze().numpy()
         adata.layers[f"{key}_u0"] = self.graph_data.u0.detach().cpu().numpy()
