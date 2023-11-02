@@ -1,3 +1,7 @@
+"""VAE Base Class
+Reference: https://github.com/welch-lab/VeloVAE/blob/master/velovae/model/vanilla_vae.py
+
+"""
 import numpy as np
 import torch
 import torch.nn as nn
