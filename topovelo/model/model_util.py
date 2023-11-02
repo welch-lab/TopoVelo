@@ -1677,4 +1677,5 @@ def dge2array(cum_num_col, row, val):
         col.extend([i]*num)
     col = np.array(col)
     n = len(n_entries_per_col)
-    return csr_array((val.sum(1), (row, col)), shape=(n, n)).toarray()
+    
+    return [csr_array((val[:, i], (row, col)), shape=(n, n)).toarray() for i in range(val.shape[1])]
