@@ -885,6 +885,8 @@ def post_analysis(adata,
                 stream_legend_loc = kwargs['stream_legend_loc']
             else:
                 stream_legend_loc = 'on data' if len(colors) <= 10 else 'right margin'
+            legend_fontsize = (kwargs['legend_fontsize'] if 'legend_fontsize' in kwargs else
+                               np.clip(15 - np.clip(len(colors)-10, 0, None), 8, None))
             for i, vkey in enumerate(vkeys):
                 if methods[i] in ['scVelo', 'UniTVelo', 'DeepVelo']:
                     gene_subset = adata.var_names[adata.var['velocity_genes'].to_numpy()]
@@ -900,8 +902,8 @@ def post_analysis(adata,
                                           figsize=stream_figsize,
                                           palette=colors,
                                           size=dot_size,
-                                          legend_fontsize=np.clip(15 - np.clip(len(colors)-10, 0, None), 8, None),
                                           legend_loc=stream_legend_loc,
+                                          legend_fontsize=legend_fontsize,
                                           cutoff_perc=0.0,
                                           dpi=dpi,
                                           show=True,
@@ -919,8 +921,8 @@ def post_analysis(adata,
                                               figsize=stream_figsize,
                                               palette=colors,
                                               size=dot_size,
-                                              legend_fontsize=np.clip(15 - np.clip(len(colors)-10, 0, None), 8, None),
                                               legend_loc=stream_legend_loc,
+                                              legend_fontsize=legend_fontsize,
                                               cutoff_perc=0.0,
                                               dpi=dpi,
                                               show=True,

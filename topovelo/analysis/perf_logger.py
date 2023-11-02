@@ -69,7 +69,7 @@ class PerfLogger:
         self.df_multi_type = pd.DataFrame(index=row_mindex, columns=col_mindex_3)
 
     def insert(self, data_name, res, res_type, multi_res, multi_res_type):
-        """Insert the performance evaluation results from velovae.post_analysis
+        """Insert the performance evaluation results from topovelo.post_analysis
 
         Args:
             data_name (str):
