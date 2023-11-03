@@ -2688,6 +2688,10 @@ class VAE(VanillaVAE):
                                       self.config['enable_edge_weight'],
                                       self.config['normalize_pos'],
                                       random_state)
+        
+        # Automatically set test iteration if not given
+        if self.config["test_iter"] is None:
+            self.config["test_iter"] = len(self.train_idx)//self.config["batch_size"]*2
 
         self.use_knn = True
         self.train_stage = 2
@@ -2717,6 +2721,77 @@ class VAE(VanillaVAE):
                                           device=self.device,
                                           requires_grad=True)
 
+        return
+    
+    def resume_train_stage_3(self,
+                             adata,
+                             graph,
+                             spatial_key,
+                             lr=1e-3,
+                             config={},
+                             plot=False,
+                             gene_plot=[],
+                             cluster_key="clusters",
+                             us_keys=None,
+                             figure_path="figures",
+                             embed="umap",
+                             random_state=2022):
+        """The high-level API for retraining the spatial decoder.
+        """
+        start = time.time()
+        seed_everything(random_state)
+        print("*********                  Resuming Stage  3                  *********")
+        gind, gene_plot = get_gene_index(adata.var_names, gene_plot)
+        param_sp = list(self.decoder.net_coord.parameters())
+        optimizer = torch.optim.Adam(param_sp, lr=lr, weight_decay=self.config["lambda"])
+        self.train_stage = 3
+        self.n_drop = 0
+        self.loss_train_sp = []
+        self.loss_test_sp = []
+        self.config["early_stop_thred"] = 0
+        try:
+            Xembed = adata.obsm[f"X_{embed}"]
+        except KeyError:
+            print("Embedding not found! Set to None.")
+            Xembed = np.nan*np.ones((adata.n_obs, 2))
+            plot = False
+        for epoch in range(self.config['n_epochs']):
+            stop_training = self.train_spatial_epoch(optimizer)
+
+            if plot and (epoch == 0 or (epoch+1) % self.config["save_epoch"] == 0):
+                mse_train = self.test_spatial(f"train{epoch+1}", False, plot, figure_path)
+                self.set_mode('train')
+                mse_test = self.loss_test_sp[-1] if len(self.loss_test_sp) > 0 else [-np.inf]
+                print(f"Epoch {epoch+1}: Train MSE = {np.sum(mse_train):.3f},\t"
+                      f"Test MSE = {np.sum(mse_test):.3f},\t"
+                      f"Total Time = {convert_time(time.time()-start)}")
+
+            if stop_training:
+                print(f"*********       Stage 3: Early Stop Triggered at epoch {epoch+1}.       *********")
+                print(f"Summary: \n"
+                      f"Train MSE = {np.sum(self.loss_train_sp[-1]):.3f}\n"
+                      f"Test MSE = {np.sum(self.loss_test_sp[-1]):.3f}\n"
+                      f"Total Time = {convert_time(time.time()-start)}\n")
+                break
+
+        mse_train = self.test_spatial("final-train", False, plot, figure_path)
+        mse_test = self.test_spatial("final-test", True, plot, figure_path)
+        self.loss_train_sp.append(mse_train)
+        self.loss_test_sp.append(mse_test)
+        # Plot final results
+        if plot:
+            self.loss_train = np.stack(self.loss_train)
+            plot_train_loss(self.loss_train_sp,
+                            range(1, len(self.loss_train_sp)+1),
+                            save=f'{figure_path}/xyloss_train.png')
+            if self.config["test_iter"] > 0:
+                plot_test_loss(self.loss_test_sp,
+                               [i*self.config["test_iter"] for i in range(1, len(self.loss_test_sp)+1)],
+                               save=f'{figure_path}/xyloss_test.png')
+
+        self.timer = self.timer + (time.time()-start)
+        print(f"*********              Finished. Total Time = {convert_time(self.timer)}             *********")
+        print(f"\tTrain MSE = {mse_train:.3f},\tTestMSE = {mse_test:.3f}")
         return
 
     def test(self,
@@ -2885,8 +2960,17 @@ class VAE(VanillaVAE):
         if not isinstance(gatconv, GATConv):
             print("Skipping decoder attention score computation.")
             return None
-        # with torch.no_grad():
-        _, att = gatconv(data_in, edge_index, edge_weight, return_attention_weights=True)
+        if self.enable_cvae:
+            condition = F.one_hot(self.graph_data.batch, self.n_batch).float()
+            _, att = gatconv(torch.cat([data_in, condition], 1),
+                             edge_index,
+                             edge_weight,
+                             return_attention_weights=True)
+        else:
+            _, att = gatconv(data_in,
+                             edge_index,
+                             edge_weight,
+                             return_attention_weights=True)
         cum_num_col, row, val = att.cpu().csr()
         cum_num_col = cum_num_col.detach().numpy()
         row = row.detach().numpy()
@@ -2899,7 +2983,7 @@ class VAE(VanillaVAE):
         G = self.decoder.n_gene
         self.graph_data.data.x.requires_grad = True
         condition = (F.one_hot(self.graph_data.batch, self.n_batch).float()
-                                if self.enable_cvae else None)
+                     if self.enable_cvae else None)
         scaling_u = self.decoder.get_param_1d('scaling_u', condition, sample=False, detach=False)
         scaling_s = self.decoder.get_param_1d('scaling_s', condition, sample=False, detach=False)
         data_in_scale = torch.cat((self.graph_data.data.x[:, :G]/scaling_u,
