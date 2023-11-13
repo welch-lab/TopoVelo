@@ -657,6 +657,45 @@ def plot_velocity(X_embed, vx, vy, save=None):
 #########################################################################
 
 
+def plot_spatial_extrapolation(xy,
+                               xy_ext,
+                               cell_labels,
+                               colors=None,
+                               dot_size=10,
+                               legend_fontsize=12,
+                               figsize=(6, 4),
+                               dpi=300,
+                               save=None):
+    fig, ax = plt.subplots(figsize=figsize)
+    ax.scatter(xy[:, 0],
+               xy[:, 1],
+               color='gray',
+               s=dot_size,
+               alpha=0.1,
+               edgecolors='none')
+    cell_types = np.unique(cell_labels)
+    if colors is None:
+        colors = get_colors(len(cell_types))
+    for i, type_ in enumerate(cell_types):
+        ax.scatter(xy_ext[cell_labels == type_, 0],
+                   xy_ext[cell_labels == type_, 1],
+                   label=type_,
+                   s=dot_size,
+                   color=colors[i],
+                   edgecolors=None)
+    
+    handles, labels = ax.get_legend_handles_labels()
+    lgd = ax.legend(handles,
+                    labels,
+                    fontsize=legend_fontsize,
+                    markerscale=2.0,
+                    bbox_to_anchor=(0.05, 1.0),
+                    loc='upper right')
+    plt.tight_layout()
+    if save is not None:
+        save_fig(fig, save, bbox_extra_artists=(lgd,))
+
+
 def plot_legend(adata, cluster_key='clusters', ncol=1, save='figures/legend.png'):
     """Plots figure legend containing all cell types.
 
@@ -2193,306 +2232,6 @@ def plot_rate_grid(adata,
 
         save = None if figname is None else f'{path}/{figname}_brode_rates_{i_fig+1}.{save_format}'
         save_fig(fig, save, (lgd,))
-    return
-
-
-def plot_velocity_stream(X_embed,
-                         t,
-                         vx,
-                         vy,
-                         cell_labels,
-                         n_grid=50,
-                         k=50,
-                         k_time=10,
-                         dist_thred=None,
-                         eps_t=None,
-                         scale=1.5,
-                         color_map=None,
-                         figsize=(8, 6),
-                         save='figures/velstream.png'):
-    """
-    .. deprecated:: 0.1.0
-    """
-    # Compute velocity on a grid
-    knn_model = pynndescent.NNDescent(X_embed, n_neighbors=2*k)
-    umap1, umap2 = X_embed[:, 0], X_embed[:, 1]
-    x = np.linspace(X_embed[:, 0].min(), X_embed[:, 0].max(), n_grid)
-    y = np.linspace(X_embed[:, 1].min(), X_embed[:, 1].max(), n_grid)
-
-    xgrid, ygrid = np.meshgrid(x, y)
-    xgrid, ygrid = xgrid.flatten(), ygrid.flatten()
-    Xgrid = np.stack([xgrid, ygrid]).T
-
-    neighbors_grid, dist_grid = knn_model.query(Xgrid, k=k)
-    neighbors_grid_, dist_grid_ = knn_model.query(Xgrid, k=k_time)
-    neighbors_grid = neighbors_grid.astype(int)
-    neighbors_grid_ = neighbors_grid_.astype(int)
-
-    # Prune grid points
-    if dist_thred is None:
-        ind, dist = knn_model.neighbor_graph
-        dist_thred = dist.mean() * scale
-    mask = np.quantile(dist_grid, 0.5, 1) <= dist_thred
-
-    # transition probability on UMAP
-    def transition_prob(dist, sigma):
-        P = np.exp(-(dist/sigma)**2)
-        P = P/P.sum(1).reshape(-1, 1)
-        return P
-
-    P = transition_prob(dist_grid, dist_thred)
-    P_ = transition_prob(dist_grid_, dist_thred)
-
-    # Local Averaging
-    tgrid = np.sum(np.stack([t[neighbors_grid_[i]] for i in range(len(xgrid))])*P_, 1)
-    if eps_t is None:
-        eps_t = (t.max()-t.min())/500
-    P = P*np.stack([t[neighbors_grid[i]] >= tgrid[i]+eps_t for i in range(len(xgrid))])
-    vx_grid = np.sum(np.stack([vx[neighbors_grid[i]] for i in range(len(xgrid))])*P, 1)
-    vy_grid = np.sum(np.stack([vy[neighbors_grid[i]] for i in range(len(xgrid))])*P, 1)
-
-    fig, ax = plt.subplots(figsize=figsize)
-    # Plot cells by label
-    font_shift = (x.max()-x.min())/100
-    cell_types = np.unique(cell_labels)
-    colors = get_colors(len(cell_types), color_map)
-
-    for i, type_ in enumerate(cell_types):
-        cell_mask = cell_labels == type_
-        ax.scatter(umap1[cell_mask], umap2[cell_mask], s=5.0, color=colors[i % len(colors)], alpha=0.5)
-        ax.text(umap1[cell_mask].mean() - len(type_)*font_shift,
-                umap2[cell_mask].mean(),
-                type_,
-                fontsize=15,
-                color='k')
-    ax.streamplot(xgrid.reshape(n_grid, n_grid),
-                  ygrid.reshape(n_grid, n_grid),
-                  (vx_grid*mask).reshape(n_grid, n_grid),
-                  (vy_grid*mask).reshape(n_grid, n_grid),
-                  density=2.0,
-                  color='k',
-                  integration_direction='both')
-    ax.set_title('Velocity Stream Plot')
-    ax.set_xlabel('Umap 1')
-    ax.set_ylabel('Umap 2')
-
-    save_fig(fig, save)
-
-
-def plot_cell_trajectory(X_embed,
-                         t,
-                         cell_labels,
-                         n_grid=50,
-                         k=30,
-                         k_grid=8,
-                         scale=1.5,
-                         eps_t=None,
-                         color_map=None,
-                         save=None):
-    """Plot the velocity stream based on time. This is not stable yet and we suggest not using it for now.
-    .. deprecated:: 0.1.0
-    """
-    # Compute the time on a grid
-    knn_model = pynndescent.NNDescent(X_embed, n_neighbors=k+20)
-    ind, dist = knn_model.neighbor_graph
-    dist_thred = dist.mean() * scale
-
-    x = np.linspace(X_embed[:, 0].min(), X_embed[:, 0].max(), n_grid)
-    y = np.linspace(X_embed[:, 1].min(), X_embed[:, 1].max(), n_grid)
-
-    xgrid, ygrid = np.meshgrid(x, y)
-    xgrid, ygrid = xgrid.flatten(), ygrid.flatten()
-    Xgrid = np.stack([xgrid, ygrid]).T
-
-    neighbors_grid, dist_grid = knn_model.query(Xgrid, k=k)
-    mask = np.quantile(dist_grid, 0.5, 1) <= dist_thred
-
-    # transition probability on UMAP
-    def transition_prob(dist, sigma):
-        P = np.exp(-(np.clip(dist/sigma, -100, None))**2)
-        psum = P.sum(1).reshape(-1, 1)
-        psum[psum == 0] = 1.0
-        P = P/psum
-        return P
-
-    P = transition_prob(dist_grid, dist_thred)
-    tgrid = np.sum(np.stack([t[neighbors_grid[i]] for i in range(len(xgrid))])*P, 1)
-    tgrid = tgrid[mask]
-
-    # Compute velocity based on grid time
-    # filter out distant grid points
-    knn_grid = pynndescent.NNDescent(Xgrid[mask], n_neighbors=k_grid, metric="l2")
-    neighbor_grid, dist_grid = knn_grid.neighbor_graph
-
-    if eps_t is None:
-        eps_t = (t.max()-t.min())/len(t)*10
-    delta_t = tgrid[neighbor_grid] - tgrid.reshape(-1, 1) - eps_t
-    sigma_t = (t.max()-t.min())/n_grid
-    P = (np.exp((np.clip(delta_t/sigma_t, -100, 100))**2))*(delta_t >= 0)
-    psum = P.sum(1).reshape(-1, 1)
-    psum[psum == 0] = 1.0
-    P = P/psum
-
-    delta_x = (xgrid[mask][neighbor_grid] - xgrid[mask].reshape(-1, 1))
-    delta_y = (ygrid[mask][neighbor_grid] - ygrid[mask].reshape(-1, 1))
-    norm = np.sqrt(delta_x**2+delta_y**2)
-    norm[norm == 0] = 1.0
-    vx_grid_filter = ((delta_x/norm)*P).sum(1)
-    vy_grid_filter = ((delta_y/norm)*P).sum(1)
-    vx_grid = np.zeros((n_grid*n_grid))
-    vy_grid = np.zeros((n_grid*n_grid))
-    vx_grid[mask] = vx_grid_filter
-    vy_grid[mask] = vy_grid_filter
-
-    fig, ax = plt.subplots(figsize=(15, 12))
-    # Plot cells by label
-    cell_types = np.unique(cell_labels)
-    colors = get_colors(len(cell_types), color_map)
-
-    for i, type_ in enumerate(cell_types):
-        cell_mask = cell_labels == type_
-        ax.scatter(X_embed[:, 0][cell_mask], X_embed[:, 1][cell_mask], s=5.0, c=colors[i], alpha=0.5, label=type_)
-
-    ax.streamplot(xgrid.reshape(n_grid, n_grid),
-                  ygrid.reshape(n_grid, n_grid),
-                  vx_grid.reshape(n_grid, n_grid),
-                  vy_grid.reshape(n_grid, n_grid),
-                  density=2.0,
-                  color='k',
-                  integration_direction='both')
-
-    ax.set_title('Velocity Stream Plot')
-    ax.set_xlabel('Umap 1')
-    ax.set_ylabel('Umap 2')
-    lgd = ax.legend(fontsize=12, ncol=4, markerscale=3.0, bbox_to_anchor=(0.0, 1.0, 1.0, 0.5), loc='center')
-
-    save_fig(fig, save, (lgd,))
-
-    return
-
-
-def plot_velocity_3d(X_embed,
-                     t,
-                     cell_labels,
-                     plot_arrow=True,
-                     n_grid=50,
-                     k=30,
-                     k_grid=8,
-                     scale=1.5,
-                     angle=(15, 45),
-                     eps_t=None,
-                     color_map=None,
-                     save=None):
-    """3D velocity quiver plot.
-    Arrows follow the direction of time to nearby points.
-    This is not stable yet and we suggest not using it for now.
-    .. deprecated:: 0.1.0
-    """
-    fig = plt.figure(figsize=(30, 15))
-    ax = fig.add_subplot(projection='3d')
-    ax.view_init(angle[0], angle[1])
-
-    t_clip = np.clip(t, np.quantile(t, 0.01), np.quantile(t, 0.99))
-    cell_types = np.unique(cell_labels)
-    colors = get_colors(len(cell_types), color_map)
-    for i, type_ in enumerate(cell_types):
-        cell_mask = cell_labels == type_
-        d = max(1, np.sum(cell_mask)//3000)
-        ax.scatter(X_embed[:, 0][cell_mask][::d],
-                   X_embed[:, 1][cell_mask][::d],
-                   X_embed[:, 2][cell_mask][::d],
-                   s=5.0,
-                   color=colors[i],
-                   label=type_,
-                   alpha=0.5,
-                   edgecolor='none')
-
-    if plot_arrow:
-        # Used for filtering target grid points
-        knn_model = pynndescent.NNDescent(X_embed, n_neighbors=k+20)
-        ind, dist = knn_model.neighbor_graph
-        dist_thred = dist.mean() * scale  # filter grid points distant from data cloud
-
-        x = np.linspace(X_embed[:, 0].min(), X_embed[:, 0].max(), n_grid)
-        y = np.linspace(X_embed[:, 1].min(), X_embed[:, 1].max(), n_grid)
-        z = np.linspace(X_embed[:, 2].min(), X_embed[:, 2].max(), n_grid)
-
-        xgrid, ygrid, zgrid = np.meshgrid(x, y, z)
-        xgrid, ygrid, zgrid = xgrid.flatten(), ygrid.flatten(), zgrid.flatten()
-        Xgrid = np.stack([xgrid, ygrid, zgrid]).T
-
-        neighbors_grid, dist_grid = knn_model.query(Xgrid, k=k)
-        mask = np.quantile(dist_grid, 0.5, 1) <= dist_thred
-
-        # transition probability on UMAP
-        def transition_prob(dist, sigma):
-            P = np.exp(-(np.clip(dist/sigma, -5, None))**2)
-            psum = P.sum(1).reshape(-1, 1)
-            psum[psum == 0] = 1.0
-            P = P/psum
-            return P
-
-        P = transition_prob(dist_grid, dist_thred)
-        tgrid = np.sum(np.stack([t[neighbors_grid[i]] for i in range(len(xgrid))])*P, 1)
-        tgrid = tgrid[mask]
-
-        # Compute velocity based on grid time
-        # filter out distant grid points
-        knn_grid = pynndescent.NNDescent(Xgrid[mask], n_neighbors=k_grid, metric="l2")
-        neighbor_grid, dist_grid = knn_grid.neighbor_graph
-
-        if eps_t is None:
-            eps_t = (t_clip.max()-t_clip.min())/len(t)*10
-        delta_t = tgrid[neighbor_grid] - tgrid.reshape(-1, 1) - eps_t
-
-        sigma_t = (t_clip.max()-t_clip.min())/n_grid
-
-        # Filter out backflow and distant points in 2D space
-        dist_thred_ = (dist_grid.mean(1)+dist_grid.std(1)).reshape(-1, 1)  # filter grid points distant from data cloud
-        P = (np.exp((np.clip(delta_t/sigma_t, -5, 5))**2))*((delta_t >= 0) & (dist_grid <= dist_thred_))
-        psum = P.sum(1).reshape(-1, 1)
-        psum[psum == 0] = 1.0
-        P = P/psum
-
-        delta_x = (xgrid[mask][neighbor_grid] - xgrid[mask].reshape(-1, 1))
-        delta_y = (ygrid[mask][neighbor_grid] - ygrid[mask].reshape(-1, 1))
-        delta_z = (zgrid[mask][neighbor_grid] - zgrid[mask].reshape(-1, 1))
-        norm = np.sqrt(delta_x**2+delta_y**2+delta_z**2)
-        norm[norm == 0] = 1.0
-        vx_grid_filter = ((delta_x/norm)*P).sum(1)
-        vy_grid_filter = ((delta_y/norm)*P).sum(1)
-        vz_grid_filter = ((delta_z/norm)*P).sum(1)
-        # KNN Smoothing
-        vx_grid_filter = vx_grid_filter[neighbor_grid].mean(1)
-        vy_grid_filter = vy_grid_filter[neighbor_grid].mean(1)
-        vz_grid_filter = vz_grid_filter[neighbor_grid].mean(1)
-
-        vx_grid = np.zeros((n_grid*n_grid*n_grid))
-        vy_grid = np.zeros((n_grid*n_grid*n_grid))
-        vz_grid = np.zeros((n_grid*n_grid*n_grid))
-        vx_grid[mask] = vx_grid_filter
-        vy_grid[mask] = vy_grid_filter
-        vz_grid[mask] = vz_grid_filter
-
-        ax.quiver(xgrid.reshape(n_grid, n_grid, n_grid),
-                  ygrid.reshape(n_grid, n_grid, n_grid),
-                  zgrid.reshape(n_grid, n_grid, n_grid),
-                  vx_grid.reshape(n_grid, n_grid, n_grid),
-                  vy_grid.reshape(n_grid, n_grid, n_grid),
-                  vz_grid.reshape(n_grid, n_grid, n_grid),
-                  color='k',
-                  length=2*np.median(X_embed.max(1)-X_embed.min(1))/n_grid,
-                  normalize=True)
-
-    ax.set_xlabel('Embedding 1', fontsize=16)
-    ax.set_ylabel('Embedding 2', fontsize=16)
-    ax.set_zlabel('Embedding 3', fontsize=16)
-
-    lgd = ax.legend(fontsize=12, ncol=4, markerscale=5.0, bbox_to_anchor=(0.0, 1.0, 1.0, -0.05), loc='center')
-    plt.tight_layout()
-
-    save_fig(fig, save, (lgd,))
-
     return
 
 

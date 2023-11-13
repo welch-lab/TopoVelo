@@ -18,6 +18,7 @@ from torch_geometric.nn.norm import BatchNorm, LayerNorm, GraphNorm
 import time
 from ..plotting import plot_sig, plot_time, plot_cluster
 from ..plotting import plot_train_loss, plot_test_loss
+from ..plotting import plot_spatial_extrapolation
 
 from .model_util import hist_equal, init_params, get_ts_global, reinit_params
 from .model_util import convert_time, get_gene_index
@@ -1031,7 +1032,7 @@ class VAE(VanillaVAE):
             "graph_decoder": graph_decoder,
             "batch_key": batch_key,
             "ref_batch": ref_batch,
-            "radius": 0.1,
+            "epsilon_ball": 0.1,  # normalized epsilon ball radius
 
             # Training Parameters
             "batch_size": 128,
@@ -1076,6 +1077,8 @@ class VAE(VanillaVAE):
 
         self.set_device(device)
         self.encode_batch(adata)
+        if slice_key is None:
+            slice_key = batch_key
         self.encode_slice(adata, slice_key)
 
         self.dim_z = dim_z
@@ -2084,7 +2087,7 @@ class VAE(VanillaVAE):
                                             xy,
                                             dt,
                                             self.config["n_neighbors"],
-                                            self.config["radius"],
+                                            self.epsilon_ball,
                                             hist_eq=True)
             else:
                 self.x0_index = knnx0_index_batch(t[self.train_idx],
@@ -2097,7 +2100,7 @@ class VAE(VanillaVAE):
                                                   self.slice_label,
                                                   dt,
                                                   self.config["n_neighbors"],
-                                                  self.config["radius"],
+                                                  self.epsilon_ball,
                                                   hist_eq=True)
         u0, s0, xy0, t0 = get_x0(out["uhat"][self.train_idx],
                                  out["shat"][self.train_idx],
@@ -2117,7 +2120,7 @@ class VAE(VanillaVAE):
                                             xy,
                                             dt,
                                             self.config["n_neighbors"],
-                                            self.config["radius"],
+                                            self.epsilon_ball,
                                             forward=True,
                                             hist_eq=True)
             else:
@@ -2131,7 +2134,7 @@ class VAE(VanillaVAE):
                                             self.slice_label,
                                             dt,
                                             self.config["n_neighbors"],
-                                            self.config["radius"],
+                                            self.epsilon_ball,
                                             forward=True,
                                             hist_eq=True)
             u1, s1, xy1, t1 = get_x0(out["uhat"][self.train_idx],
@@ -2190,9 +2193,16 @@ class VAE(VanillaVAE):
             else:
                 self.config['sigma_pos'] = 0.1 * np.min((X_spatial.max(0)-X_spatial.min(0)) / np.sqrt(len(X_spatial)))
 
-    def _set_radius(self, X_spatial):
+    def _set_epsilon_ball(self, X_spatial):
         if not self.config["normalize_pos"]:
-            self.config["radius"] = self.config["radius"] * np.min(X_spatial.max(0)-X_spatial.min(0))
+            #if self.enable_cvae:
+            #    self.epsilon_ball = []
+            #    for i in range(self.n_batch):
+            #        xmax = X_spatial[self.batch_ == i].max(0)
+            #        xmin = X_spatial[self.batch_ == i].min(0)
+            #        self.epsilon_ball.append(self.config["epsilon_ball"] * np.min(xmax - xmin))
+            #else:
+            self.epsilon_ball = self.config["epsilon_ball"] * np.min(X_spatial.max(0)-X_spatial.min(0))
 
     def set_mode(self, mode='train'):
         VanillaVAE.set_mode(self, mode)
@@ -2244,7 +2254,7 @@ class VAE(VanillaVAE):
             self._set_lr(p)
             print(f'Learning Rate based on Data Sparsity: {self.config["learning_rate"]:.4f}')
         self._set_sigma_pos(adata.obsm[spatial_key])
-        self._set_radius(adata.obsm[spatial_key])
+        self._set_epsilon_ball(adata.obsm[spatial_key])
 
         print("--------------------------- Train a TopoVelo ---------------------------")
         # Get data loader
@@ -2644,7 +2654,7 @@ class VAE(VanillaVAE):
             self._set_lr(p)
             print(f'Learning Rate based on Data Sparsity: {self.config["learning_rate"]:.4f}')
         self._set_sigma_pos(adata.obsm[spatial_key])
-        self._set_radius(adata.obsm[spatial_key])
+        self._set_epsilon_ball(adata.obsm[spatial_key])
 
         print("--------------------------- Reloading a TopoVelo ---------------------------")
         # Get data loader
@@ -3125,7 +3135,49 @@ class VAE(VanillaVAE):
                                             condition).detach().cpu().numpy()
         xy_hat = xy_hat.detach().cpu().numpy()
         return (xy_hat_1 - xy_hat) / delta_t
-    
+
+    def spatial_extrapolation(self,
+                              adata,
+                              cluster_key,
+                              time_interval,
+                              figure_path=None):
+        cell_labels = adata.obs[cluster_key].to_numpy()
+        condition = (F.one_hot(self.graph_data.batch, self.n_batch).float()
+                     if self.enable_cvae else None)
+        xy_hat = self.pred_xy(self.graph_data.t,
+                              self.graph_data.z,
+                              self.graph_data.t0,
+                              self.graph_data.xy0,
+                              self.graph_data.data.adj_t,
+                              self.graph_data.edge_weight,
+                              condition,
+                              None,
+                              mode='eval')
+        xy_future_multitime = []
+        for i, delta_t in enumerate(time_interval):
+            xy_future = self.pred_xy(self.graph_data.t + delta_t,
+                                     self.graph_data.z,
+                                     self.graph_data.t,
+                                     xy_hat,
+                                     self.graph_data.data.adj_t,
+                                     self.graph_data.edge_weight,
+                                     condition,
+                                     None,
+                                     mode='eval').detach().cpu().numpy()
+            xy_future_multitime.append(xy_future)
+            # Plot the predicted future positions
+            save = None
+            if figure_path is not None:
+                save = f'{figure_path}/xy_ext_{i}.png'
+            plot_spatial_extrapolation(xy_hat.detach().cpu().numpy(),
+                                       xy_future,
+                                       cell_labels,
+                                       save=save)
+        adata.uns['delta_t'] = time_interval
+        adata.obsm['X_x_ext'] = np.stack([xy[:, 0] for xy in xy_future_multitime], axis=1)
+        adata.obsm['X_y_ext'] = np.stack([xy[:, 1] for xy in xy_future_multitime], axis=1)
+        return
+
     def save_anndata(self, adata, key, file_path, file_name=None):
         """Save the ODE parameters and cell time to the anndata object and write it to disk.
 
