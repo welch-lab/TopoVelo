@@ -209,7 +209,7 @@ def preprocess(adata,
     # 1. Cell, Gene filtering and data normalization
     n_cell = adata.n_obs
     if min_count_per_cell is None:
-        min_count_per_cell = n_gene * 0.5
+        min_count_per_cell = 0
     if min_genes_expressed is None:
         min_genes_expressed = n_gene // 50
     scanpy.pp.filter_cells(adata, min_counts=min_count_per_cell)
