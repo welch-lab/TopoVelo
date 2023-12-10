@@ -62,6 +62,16 @@ def get_colors(n, color_map=None):
 
 
 def save_fig(fig, save, bbox_extra_artists=None):
+    """Save a figure
+
+    Args:
+        fig (:class:`matplotlib.figure.Figure`):
+            Figure object.
+        save (str):
+            Figure name for saving (including path).
+        bbox_extra_artists (tuple, optional):
+            Extra artists to be included in the bounding box. Defaults to None.
+    """
     global DPI
     if save is not None:
         try:
@@ -492,8 +502,7 @@ def cellwise_vel_embedding(adata, key, type_name=None, idx=None, embed='umap', s
             Figure name for saving (including path). Defaults to None.
 
     Returns:
-        :class:`numpy.ndarray`:
-            Indices of cells for plotting.
+        :class:`numpy.ndarray`: Indices of cells for plotting.
     """
     if f'{key}_velocity_graph' not in adata.uns:
         print("Please run 'velocity_graph' and 'velocity_embedding' first!")
@@ -664,7 +673,6 @@ def plot_spatial_extrapolation(xy,
                                dot_size=10,
                                legend_fontsize=12,
                                figsize=(6, 4),
-                               dpi=300,
                                save=None):
     fig, ax = plt.subplots(figsize=figsize)
     ax.scatter(xy[:, 0],
@@ -732,8 +740,7 @@ def _plot_heatmap(ax,
                   colorbar_ticklabels=None,
                   markersize=5,
                   cmap='plasma',
-                  show_color_bar=True,
-                  axis_off=True):
+                  show_color_bar=True):
     """General heatmap plotting helper function.
     """
     ax.scatter(X_embed[:, 0],

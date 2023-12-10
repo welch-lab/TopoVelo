@@ -1,6 +1,5 @@
 import scanpy
 import numpy as np
-from scipy.sparse import block_diag, csr_matrix
 from .scvelo_preprocessing import *
 from tqdm import tqdm
 from sklearn.neighbors import NearestNeighbors
@@ -137,8 +136,8 @@ def rank_gene_selection(adata, cluster_key, **kwargs):
 def preprocess(adata,
                n_gene=1000,
                cluster_key="clusters",
-               spatial_key=None,
                spatial_smoothing=False,
+               spatial_key=None,
                tkey=None,
                selection_method="scv",
                min_count_per_cell=None,
@@ -160,60 +159,51 @@ def preprocess(adata,
                perform_clustering=False,
                resolution=1.0,
                compute_umap=False,
-               divide_compartments=False,
                umap_min_dist=0.5,
                keep_raw=True,
                **kwargs):
-    """Run the entire preprocessing pipeline using scanpy
+    """Preprocess the data.
 
-    Arguments
-    ---------
-
-    adata : :class:`anndata.AnnData`
-    n_gene : int, optional
-        Number of genes to keep
-    cluster_key : str, optional
-        Key in adata.obs containing the cell type
-    spatial_key : str, optional
-        Key in adata.obsm containing the spatial coordinates
-        Defaults to None
-    spatial_smoothing : bool, optional
-        Whether to use the spatial graph to smooth the data.
-        Defaults to False.
-    tkey : str, optional
-        Key in adata.obs containing the capture time
-    selection_method : {'scv','balanced'}, optional
-        If set to 'balanced', the function will call balanced_gene_selection.
-        Otherwise, it uses scanpy to pick highly variable genes.
-    min_count_per_cell...max_cells_u : int, optional
-        RNA count threshold
-    npc : int, optional
-        Number of principal components in PCA dimension reduction
-    n_neighbors : int, optional
-        Number of neighbors in KNN graph
-    n_spatial_neighbors : int, optional
-        Number of spatial neighbors in spatial KNN graph
-    genes_retain : `numpy array` or string list, optional
-        By setting genes_retain to a specific list of gene names
-        preprocessing will pick these exact genes regardless of their counts and gene selection method.
-    perform_clustering : bool, optional
-        Whether to perform Leiden clustering
-    resolution : float, optional
-        Leiden clustering hyperparameter.
-    compute_umap : bool, optional
-        Whether to compute 2D UMAP
-    umap_min_dist : float, optional
-        UMAP hyperparameter. Usually is set to less than 1
+    Args:
+        adata (AnnData): Annotated data matrix.
+        n_gene (int): Number of genes to keep. If n_gene < 0, all genes are kept.
+        cluster_key (str): Key for cell type annotation.
+        spatial_smoothing (bool): Whether to perform spatial smoothing.
+        spatial_key (str): Key for spatial coordinates.
+            Effective only when spatial_smoothing is True.
+        tkey (str): Key for capture time.
+        selection_method (str): Method for gene selection. "scv" for scVelo, "balanced" for balanced gene selection,
+            "wilcoxon" for Wilcoxon rank-sum test.
+        min_count_per_cell (int): Minimal number of counts per cell.
+        min_genes_expressed (int): Minimal number of genes expressed per cell.
+        min_shared_counts (int): Minimal number of shared counts for each gene.
+        min_shared_cells (int): Minimal number of shared cells for each gene.
+        min_counts_s (int): Minimal number of counts for spliced mRNA.
+        min_cells_s (int): Minimal number of cells for spliced mRNA.
+        max_counts_s (int): Maximal number of counts for spliced mRNA.
+        max_cells_s (int): Maximal number of cells for spliced mRNA.
+        min_counts_u (int): Minimal number of counts for unspliced mRNA.
+        min_cells_u (int): Minimal number of cells for unspliced mRNA.
+        max_counts_u (int): Maximal number of counts for unspliced mRNA.
+        max_cells_u (int): Maximal number of cells for unspliced mRNA.
+        npc (int): Number of principal components.
+        n_neighbors (int): Number of neighbors for KNN averaging.
+        n_spatial_neighbors (int): Number of neighbors for spatial KNN averaging.
+        genes_retain (list): List of genes to keep.
+        perform_clustering (bool): Whether to perform clustering.
+        resolution (float): Resolution for clustering.
+        compute_umap (bool): Whether to compute UMAP coordinates.
+        umap_min_dist (float): Minimal distance for UMAP.
+        keep_raw (bool): Whether to keep the raw count data.
+        **kwargs: Additional arguments for gene selection.
     """
     # Preprocessing
     # 1. Cell, Gene filtering and data normalization
     n_cell = adata.n_obs
-    if min_count_per_cell is None:
-        min_count_per_cell = 0
-    if min_genes_expressed is None:
-        min_genes_expressed = n_gene // 50
-    scanpy.pp.filter_cells(adata, min_counts=min_count_per_cell)
-    scanpy.pp.filter_cells(adata, min_genes=min_genes_expressed)
+    if min_count_per_cell is not None:
+        scanpy.pp.filter_cells(adata, min_counts=min_count_per_cell)
+    if min_genes_expressed is not None:
+        scanpy.pp.filter_cells(adata, min_genes=min_genes_expressed)
     if n_cell - adata.n_obs > 0:
         print(f"Filtered out {n_cell - adata.n_obs} cells with low counts.")
 
@@ -309,6 +299,7 @@ def preprocess(adata,
     # 3. Obtain cell clusters
     if perform_clustering:
         scanpy.tl.leiden(adata, key_added='clusters', resolution=resolution)
+
     # 4. Obtain Capture Time (If available)
     if tkey is not None:
         capture_time = adata.obs[tkey].to_numpy()
@@ -325,34 +316,17 @@ def preprocess(adata,
         if "X_umap" in adata.obsm:
             print("Warning: Overwriting existing UMAP coordinates.")
         scanpy.tl.umap(adata, min_dist=umap_min_dist)
+    
 
-    # 6. Compute the spatial graph
+def build_spatial_graph(adata, spatial_key, n_neighbors):
+    """Build spatial graph.
+
+    Args:
+        adata (AnnData): Annotated data matrix.
+        spatial_key (str): Key for spatial coordinates.
+        n_neighbors (int): Number of neighbors for KNN averaging.
     """
-    if spatial_key is not None:
-        if not divide_compartments:
-            print('Computing spatial KNN graph.')
-            X_pos = adata.obsm[spatial_key]
-            nn = NearestNeighbors(n_neighbors=n_spatial_neighbors)
-            nn.fit(X_pos)
-            adata.obsp['spatial_graph'] = nn.kneighbors_graph()
-            adata.obsp['connectivities'] = nn.kneighbors_graph(mode='connectivity')
-            adata.obsp['distances'] = nn.kneighbors_graph(mode='distance')
-        else:
-            print('Divide compartments and perform spatial clustering.')
-            scanpy.tl.leiden(adata, key_added='compartment', resolution=resolution)
-            print(f"{len(np.unique(adata.obs['compartment']))} compartments detected.")
-            compartments = adata.obs['compartment'].to_numpy().astype(int)
-            blocks = []
-            blocks_conn = []
-            blocks_dist = []
-            for i in range(compartments.max()+1):
-                X_pos = adata.obsm[spatial_key][compartments == i]
-                nn = NearestNeighbors(n_neighbors=min(n_spatial_neighbors, len(X_pos)-1))
-                nn.fit(X_pos)
-                blocks.append(nn.kneighbors_graph().toarray())
-                blocks_conn.append(nn.kneighbors_graph(mode='connectivity').toarray())
-                blocks_dist.append(nn.kneighbors_graph(mode='distance').toarray())
-            adata.obsp['spatial_graph'] = block_diag(blocks).tocsr()
-            adata.obsp['connectivities'] = block_diag(blocks_conn).tocsr()
-            adata.obsp['distances'] = block_diag(blocks_dist).tocsr()
-    """
+    x_pos = adata.obsm[spatial_key]
+    nn = NearestNeighbors(n_neighbors=n_neighbors)
+    nn.fit(x_pos)
+    adata.obsp['spatial_graph'] = nn.kneighbors_graph()

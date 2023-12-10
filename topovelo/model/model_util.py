@@ -1,15 +1,11 @@
 """Model utility functions
 """
 import numpy as np
-import os
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from scipy.special import loggamma
 from scipy.spatial import Delaunay
-from .scvelo_util import mRNA, vectorize, tau_inv, R_squared, test_bimodality, leastsq_NxN
 from sklearn.neighbors import NearestNeighbors
-import pynndescent
 from tqdm.autonotebook import trange
 from sklearn.cluster import SpectralClustering, KMeans
 from sklearn.neighbors import BallTree
@@ -17,6 +13,7 @@ from scipy.stats import dirichlet, bernoulli, kstest, linregress
 from scipy.linalg import svdvals
 from scipy.spatial.distance import cosine
 from scipy.sparse import csr_array
+from .scvelo_util import mRNA, vectorize, tau_inv, R_squared, test_bimodality, leastsq_NxN
 
 ###################################################################################
 # Spatial time prior estimation based Delaunay triangulation
@@ -39,8 +36,20 @@ def triangle_height(p_query, p1, p2):
 
 
 def get_spatial_tprior(adata, tmax, basis="spatial", q=0.95):
+    """Estimate the spatial time prior based on Delaunay triangulation.
+
+    Args:
+        adata (AnnData): AnnData object.
+        tmax (float): Maximum time.
+        basis (str, optional): Spatial embedding. Defaults to "spatial".
+        q (float, optional): Quantile to remove outliers. Defaults to 0.95.
+    
+    Returns:
+        None. Stores the spatial time prior in adata.obs['tprior'].
+    """
     P = adata.obsm[f"X_{basis}"]
     T = Delaunay(P)
+
     # Compute area of all triangles and remove outliers
     area = []
     for simplex in T.simplices:
@@ -51,6 +60,7 @@ def get_spatial_tprior(adata, tmax, basis="spatial", q=0.95):
         for k in range(3):
             if (T.neighbors[i][k] in outliers):
                 T.neighbors[i][k] = -1
+
     # Find edges at the boundary
     boundary = set()
     for i in range(len(T.neighbors)):
@@ -72,12 +82,6 @@ def get_spatial_tprior(adata, tmax, basis="spatial", q=0.95):
     sigma = np.median(dist) * 1.5
     t_prior = tmax*np.exp(-(dist/sigma)**2)
     adata.obs['tprior'] = t_prior
-    # For debugging
-    # plt.figure(figsize=(12, 8))
-    # plt.triplot(P[:,0], P[:,1], T.simplices[np.where(area <= ub)[0]])
-    # plt.plot(P[:,0], P[:,1], '.')
-    # plt.plot(P[list(boundary),0], P[list(boundary),1], 'or')
-    # plt.show()
 
 ###################################################################################
 # Dynamical Model
@@ -89,7 +93,7 @@ def get_spatial_tprior(adata, tmax, basis="spatial", q=0.95):
 
 
 def scv_pred_single(t, alpha, beta, gamma, ts, scaling=1.0, uinit=0, sinit=0):
-    # Predicts u and s using the dynamical model.
+    """Predicts u and s using the dynamical model."""
     beta = beta*scaling
     tau, alpha, u0, s0 = vectorize(t, ts, alpha, beta, gamma, u0=uinit, s0=sinit)
     tau = np.clip(tau, a_min=0, a_max=None)
@@ -99,7 +103,7 @@ def scv_pred_single(t, alpha, beta, gamma, ts, scaling=1.0, uinit=0, sinit=0):
 
 
 def scv_pred(adata, key, glist=None):
-    # Reproduce the full prediction of scvelo dynamical model
+    """Reproduce the full prediction of scvelo dynamical model."""
 
     n_gene = len(glist) if glist is not None else adata.n_vars
     n_cell = adata.n_obs
@@ -126,16 +130,23 @@ def scv_pred(adata, key, glist=None):
 
     return ut, st
 
-#End of Reference
-
-
 ############################################################
 # Shared among all VAEs
 ############################################################
 
 
 def hist_equal(t, tmax, perc=0.95, n_bin=101):
-    # Perform histogram equalization across all local times.
+    """Histogram equalization of the time distribution.
+
+    Args:
+        t (:class:`np.ndarray`): Time distribution.
+        tmax (float): Maximum time.
+        perc (float, optional): Quantile to remove outliers. Defaults to 0.95.
+        n_bin (int, optional): Number of bins. Defaults to 101.
+
+    Returns:
+        :class:`np.ndarray`: Equalized time distribution.
+    """
     t_ub = np.quantile(t, perc)
     t_lb = t.min()
     delta_t = (t_ub - t_lb)/(n_bin-1)
@@ -143,7 +154,7 @@ def hist_equal(t, tmax, perc=0.95, n_bin=101):
     pdf_t, edges = np.histogram(t, bins, density=True)
     pt, edges = np.histogram(t, bins, density=False)
 
-    # Perform histogram equalization
+    # Perform histogram equalization sing the CDF
     cdf_t = np.concatenate(([0], np.cumsum(pt)))
     cdf_t = cdf_t/cdf_t[-1]
     t_out = np.zeros((len(t)))
@@ -158,13 +169,20 @@ def hist_equal(t, tmax, perc=0.95, n_bin=101):
 
 
 def pred_su_numpy(tau, u0, s0, alpha, beta, gamma):
-    ############################################################
-    # (Numpy Version)
-    # Analytical solution of the ODE
-    # tau: [B x 1] or [B x 1 x 1] time duration starting from the switch-on time of each gene.
-    # u0, s0: [G] or [N type x G] initial conditions
-    # alpha, beta, gamma: [G] or [N type x G] generation, splicing and degradation rates
-    ############################################################
+    """Analytical solution of the ODE (numpy version).
+
+    Args:
+        tau (:class:`np.ndarray`): Time duration starting from the switch-on time of each gene.
+        u0 (:class:`np.ndarray`): Initial conditions of u.
+        s0 (:class:`np.ndarray`): Initial conditions of s.
+        alpha (:class:`np.ndarray`): Generation rate.
+        beta (:class:`np.ndarray`): Splicing rate.
+        gamma (:class:`np.ndarray`): Degradation rate.
+
+    Returns:
+        np.ndarray: Predicted u.
+        np.ndarray: Predicted s.
+    """
     unstability = (np.abs(beta-gamma) < 1e-6)
     expb, expg = np.exp(-beta*tau), np.exp(-gamma*tau)
 
@@ -176,13 +194,19 @@ def pred_su_numpy(tau, u0, s0, alpha, beta, gamma):
 
 
 def pred_su(tau, u0, s0, alpha, beta, gamma):
-    ############################################################
-    # (PyTorch Version)
-    # Analytical solution of the ODE
-    # tau: [B x 1] or [B x 1 x 1] time duration starting from the switch-on time of each gene.
-    # u0, s0: [G] or [N type x G] initial conditions
-    # alpha, beta, gamma: [G] or [N type x G] generation, splicing and degradation rates
-    ############################################################
+    """Analytical solution of the ODE (PyTorch version).
+
+    Args:
+        tau (torch.Tensor): Time duration starting from the switch-on time of each gene.
+        u0 (torch.Tensor): Initial conditions of u.
+        s0 (torch.Tensor): Initial conditions of s.
+        alpha (torch.Tensor): Generation rate.
+        beta (torch.Tensor): Splicing rate.
+        gamma (torch.Tensor): Degradation rate.
+
+    Returns:
+        _type_: _description_
+    """
 
     expb, expg = torch.exp(-beta*tau), torch.exp(-gamma*tau)
     eps = 1e-6

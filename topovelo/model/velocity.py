@@ -21,6 +21,12 @@ def rna_velocity_vanillavae(adata,
         whether to use the (noisy) input count to compute the velocity
     use_scv_genes : bool, optional
         whether to compute velocity only for genes scVelo fits
+    k : float, optional
+        Parameter used in soft clipping of time duration.
+        Defaults to 10.
+    return_copy : bool, optional
+        Whether to return a copy of the velocity values.
+        Defaults to False.
 
     Returns (only if `return_copy`=True)
     -------
@@ -86,34 +92,31 @@ def rna_velocity_vae(adata,
     """Compute the velocity based on:
        du/dt = rho * alpha - beta * u, ds/dt = beta * u - gamma * s
 
-    Arguments
-    ---------
-    adata : :class:`anndata.AnnData`
-    key : str
-        key used for extracting ODE parameters
-    batch_key : str
-        key used for extracting batch labels
-    use_raw : bool, optional
-        whether to use the (noisy) input count to compute the velocity
-    use_scv_genes : bool, optional
-        whether to compute velocity only for genes scVelo fits
-    sigma : float, optional
-        Parameter used in Gaussian filtering of velocity values.
-    apprx : bool, optional
-        Whether to use linear approximation to compute velocity
-    full_vb : bool, optional
-        Whether the model is full VB
+    Args:
+        adata : :class:`anndata.AnnData`
+        key : str
+            key used for extracting ODE parameters
+        batch_key : str
+            key used for extracting batch labels
+        use_raw : bool, optional
+            whether to use the (noisy) input count to compute the velocity
+        use_scv_genes : bool, optional
+            whether to compute velocity only for genes scVelo fits
+        sigma : float, optional
+            Parameter used in Gaussian filtering of velocity values.
+        apprx : bool, optional
+            Whether to use linear approximation to compute velocity
+        full_vb : bool, optional
+            Whether the model is full VB
+        return_copy : bool, optional
+            Whether to return a copy of the velocity values.
+            Defaults to False.
 
-    Returns (only if `return_copy`=True)
-    -------
-    Vu : `numpy array`
-        velocity of u
-    V : `numpy array`
-        velocity of s
-    U : `numpy array`
-        predicted u values
-    S : `numpy array`
-        predicted s values
+    Returns:
+        :class:`numpy array`: velocity of u
+        :class:`numpy array`: velocity of s
+        :class:`numpy array`: predicted u values
+        :class:`numpy array`: predicted s values
     """
     if batch_key is None:
         alpha = np.exp(adata.var[f"{key}_logmu_alpha"].to_numpy()) if full_vb\
@@ -212,12 +215,9 @@ def rna_velocity_brode(adata, key, use_raw=False, use_scv_genes=False, k=10.0):
 
     Returns
     -------
-    V : `numpy array`
-        velocity
-    U : `numpy array`
-        predicted u values
-    S : `numpy array`
-        predicted s values
+    :class:`numpy array`: RNA velocity
+    :class:`numpy array`: predicted u values
+    :class:`numpy array`: predicted s values
     """
     alpha = adata.varm[f"{key}_alpha"].T
     beta = adata.varm[f"{key}_beta"].T
@@ -264,6 +264,16 @@ def rna_velocity_brode(adata, key, use_raw=False, use_scv_genes=False, k=10.0):
 
 
 def smooth_vel(v, t, W=5):
+    """Smooth the velocity values by applying an average filter.
+
+    Args:
+        v (:class:`numpy.ndarray`): RNA velocity.
+        t (:class:`numpy.ndarray`): Cell time.
+        W (int, optional): Window length. Defaults to 5.
+
+    Returns:
+        :class:`numpy.ndarray`: smoothed RNA velocity
+    """
     order_t = np.argsort(t)
     h = np.ones((W))*(1/W)
     v_ret = np.zeros((len(v)))

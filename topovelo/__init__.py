@@ -19,4 +19,4 @@ from .plotting import (get_colors,
                        plot_velocity,
                        plot_transition_graph,
                        plot_rate_grid)
-from .preprocessing import preprocess
+from .preprocessing import preprocess, build_spatial_graph

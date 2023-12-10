@@ -1,6 +1,5 @@
 from .evaluation import post_analysis
-from .evaluation_util import (calibrated_cross_boundary_correctness,
-                              velocity_consistency,
+from .evaluation_util import (velocity_consistency,
                               spatial_velocity_consistency,
                               use_spatial_knn,
                               _fit_growth_rate,
@@ -13,7 +12,6 @@ from .perf_logger import PerfLogger
 
 __all__ = [
     "post_analysis",
-    "calibrated_cross_boundary_correctness",
     "velocity_consistency",
     "spatial_velocity_consistency",
     "use_spatial_knn",

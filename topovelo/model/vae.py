@@ -60,7 +60,7 @@ def print_gpu_mem(name):
         print("^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^")
 
 
-class encoder(nn.Module):
+class Encoder(nn.Module):
     """Encoder class for the graph VAE model
     """
     def __init__(self,
@@ -72,7 +72,7 @@ class encoder(nn.Module):
                  n_head=5,
                  xavier_gain=0.05,
                  checkpoint=None):
-        super(encoder, self).__init__()
+        super(Encoder, self).__init__()
         self.dim_z = dim_z
         self.dim_cond = dim_cond
         self.n_hidden = n_hidden
@@ -1112,7 +1112,7 @@ class VAE(VanillaVAE):
 
         try:
             G = adata.n_vars
-            self.encoder = encoder(2*G,
+            self.encoder = Encoder(2*G,
                                    dim_z,
                                    dim_cond,
                                    hidden_size[0],
@@ -1537,10 +1537,10 @@ class VAE(VanillaVAE):
                 scaling_s = self.decoder.get_param_1d('scaling_s', condition, sample=False, detach=True)
             for i in range(n_iter+1):
                 if i < n_iter:
-                    batch_idx = torch.range(i*batch_size, (i+1)*batch_size-1).to(device).long()
+                    batch_idx = torch.arange(i*batch_size, (i+1)*batch_size-1).to(device).long()
                 else:
                     if n_iter * batch_size < len(t):
-                        batch_idx = torch.range(n_iter*batch_size, len(t)-1).to(device).long()
+                        batch_idx = torch.arange(n_iter*batch_size, len(t)-1).to(device).long()
                     else:
                         break
                 if condition is not None:
@@ -2296,8 +2296,7 @@ class VAE(VanillaVAE):
                                       self.device,
                                       self.batch_,
                                       self.config['enable_edge_weight'],
-                                      self.config['normalize_pos'],
-                                      random_state)
+                                      self.config['normalize_pos'])
 
         # Automatically set test iteration if not given
         if self.config["test_iter"] is None:

@@ -18,6 +18,14 @@ def get_n_cpu(n_cell):
 
 
 def get_velocity_metric_placeholder(cluster_edges):
+    """Returns placeholder for velocity metrics.
+
+    Args:
+        cluster_edges (list[tuple[str]]): List of cell type transitions.
+
+    Returns:
+        tuple: Placeholder for velocity metrics.
+    """
     # Convert tuples to a single string
     cluster_edges_ = []
     for pair in cluster_edges:
@@ -60,6 +68,8 @@ def get_velocity_metric(adata,
             Key for cell time in the form of f'{key}_time'.
         vkey (str):
             Key for velocity in adata.obsm.
+        tkey (str):
+            Key for latent time in adata.obs.
         cluster_key (str):
             Key for cell type annotations.
         cluster_edges (list[tuple[str]]):
@@ -78,19 +88,28 @@ def get_velocity_metric(adata,
     Returns:
         tuple
 
-            - dict: In-Cluster Coherence per cell type transition
-            - float: Mean In-Cluster Coherence
-            - dict: CBDir (embedding) per cell type transition
-            - float: Mean CBDir (embedding)
-            - dict: CBDir per cell type transition
-            - float: Mean CBDir
-            - :class:`numpy.ndarray` Mean k-step CBDir (embedding)
-            - :class:`numpy.ndarray` Mean k-step CBDir
-            - :class:`numpy.ndarray` k-step Mann-Whitney U test result (embedding)
-            - :class:`numpy.ndarray` k-step Mann-Whitney U test result
-            - dict: Time Accuracy Score per cell type transition
-            - float: Mean Time Accuracy Score
-            - float: Velocity Consistency
+            - **iccoh** (:class:`dict`): In-Cluster Coherence.
+            - **mean_iccoh** (_type_): Mean In-Cluster Coherence.
+            - **cbdir_embed** (:class:`dict`): Cross-Boundary Direction Correctness in embedding space.
+            - **mean_cbdir_embed** (_type_): Mean Cross-Boundary Direction Correctness in embedding space.
+            - **cbdir** (:class:`dict`): Cross-Boundary Direction Correctness in gene space.
+            - **mean_cbdir** (_type_): Mean Cross-Boundary Direction Correctness in gene space.
+            - **k_cbdir_embed** (:class:`dict`): K-step Cross-Boundary Direction Correctness in embedding space.
+            - **mean_k_cbdir_embed** (_type_): Mean K-step Cross-Boundary Direction Correctness in embedding space.
+            - **k_cbdir** (:class:`dict`): K-step Cross-Boundary Direction Correctness in gene space.
+            - **mean_k_cbdir** (_type_): Mean K-step Cross-Boundary Direction Correctness in gene space.
+            - **acc_embed** (:class:`dict`): Mann-Whitney U test in embedding space.
+            - **mean_acc_embed** (_type_): Mean Mann-Whitney U test in embedding space.
+            - **acc** (:class:`dict`): Mann-Whitney U test in gene space.
+            - **mean_acc** (_type_): Mean Mann-Whitney U test in gene space.
+            - **umtest_embed** (:class:`dict`): Mann-Whitney U test statistics in embedding space.
+            - **mean_umtest_embed** (_type_): Mean Mann-Whitney U test statistics in embedding space.
+            - **umtest** (:class:`dict`): Mann-Whitney U test statistics in gene space.
+            - **mean_umtest** (_type_): Mean Mann-Whitney U test statistics in gene space.
+            - **tscore** (:class:`dict`): Time score.
+            - **mean_tscore** (_type_): Mean time score.
+            - **mean_consistency_score** (_type_): Mean velocity consistency score.
+            - **mean_sp_vel_consistency** (_type_): Mean spatial velocity consistency score.
     """
     mean_consistency_score = velocity_consistency(adata, vkey, gene_mask)
     mean_sp_vel_consistency = np.nan
@@ -203,7 +222,7 @@ def get_velocity_metric(adata,
 
 
 def gather_stats(**kwargs):
-    # Helper function, used for gathering scalar performance metrics
+    """Helper function, used for gathering scalar performance metrics."""
     stats = {
         'MSE Train': np.nan,
         'MSE Test': np.nan,
@@ -274,6 +293,8 @@ def gather_type_stats(**kwargs):
 
 
 def gather_multistats(**kwargs):
+    """Helper function, used for gathering multi-step performance metrics.
+    """
     metrics = {
         'kcbdir': 'K-CBDir (Gene Space)',
         'kcbdir_embed': 'K-CBDir',
@@ -290,6 +311,8 @@ def gather_multistats(**kwargs):
 
 
 def gather_type_multistats(**kwargs):
+    """Helper function, used for gathering multi-step performance metrics all each cell type transition pairs.
+    """
     metrics = {
         'kcbdir': 'K-CBDir (Gene Space)',
         'kcbdir_embed': 'K-CBDir',
@@ -352,7 +375,7 @@ def get_metric(adata,
 
     Returns:
         stats (:class:`pandas.DataFrame`):
-            Stores the performance metrics. Rows are metric names and columns are method names
+            Stores the performance metrics. Rows are metric names and columns are method names.
     """
     if gene_key is not None and gene_key in adata.var:
         gene_mask = adata.var[gene_key].to_numpy()
@@ -362,35 +385,31 @@ def get_metric(adata,
     if method == 'scVelo':
         (mse_train, mse_test,
          mae_train, mae_test,
-         logp_train, logp_test) = get_err_scv(adata)
+         logp_train, logp_test) = eval_scv(adata)
     elif method == 'Vanilla VAE':
         (mse_train, mse_test,
          mae_train, mae_test,
-         logp_train, logp_test) = get_err_vanilla(adata, key, gene_mask)
-    elif method == 'Cycle VAE':
-        (mse_train, mse_test,
-         mae_train, mae_test,
-         logp_train, logp_test) = get_err_cycle(adata, key, gene_mask)
+         logp_train, logp_test) = eval_vanilla(adata, key, gene_mask)
     elif 'VeloVAE' in method or 'TopoVelo' in method:
         (mse_train, mse_test,
          mae_train, mae_test,
-         logp_train, logp_test) = get_err_velovae(adata, key, gene_mask, 'Rate Prior' in method)
+         logp_train, logp_test) = eval_vae(adata, key, gene_mask, 'Rate Prior' in method)
     elif method == 'BrODE':
         (mse_train, mse_test,
          mae_train, mae_test,
-         logp_train, logp_test) = get_err_brode(adata, key, gene_mask)
+         logp_train, logp_test) = eval_brode(adata, key, gene_mask)
     elif method == 'Discrete VeloVAE' or method == 'Discrete VeloVAE (Rate Prior)':
         (mse_train, mse_test,
          mae_train, mae_test,
-         logp_train, logp_test) = get_err_velovae(adata, key, gene_mask, 'VeloVAE (Rate Prior)' in method, True)
+         logp_train, logp_test) = eval_vae(adata, key, gene_mask, 'VeloVAE (Rate Prior)' in method, True)
     elif method == 'UniTVelo':
         (mse_train, mse_test,
          mae_train, mae_test,
-         logp_train, logp_test) = get_err_utv(adata, key, gene_mask)
+         logp_train, logp_test) = eval_utv(adata, key, gene_mask)
     elif method == 'DeepVelo':
         (mse_train, mse_test,
          mae_train, mae_test,
-         logp_train, logp_test) = get_err_dv(adata, key, gene_mask)
+         logp_train, logp_test) = eval_dv(adata, key, gene_mask)
     elif 'PyroVelocity' in method:
         if 'err' in adata.uns:
             mse_train, mse_test = adata.uns['err']['MSE Train'], adata.uns['err']['MSE Test']
@@ -399,11 +418,11 @@ def get_metric(adata,
         else:
             (mse_train, mse_test,
              mae_train, mae_test,
-             logp_train, logp_test) = get_err_pv(adata, key, gene_mask, 'Continuous' not in method)
+             logp_train, logp_test) = eval_pv(adata, key, gene_mask, 'Continuous' not in method)
     elif method == 'VeloVI':
         (mse_train, mse_test,
          mae_train, mae_test,
-         logp_train, logp_test) = get_err_velovi(adata, key, gene_mask)
+         logp_train, logp_test) = eval_velovi(adata, key, gene_mask)
     else:
         mse_train, mse_test = np.nan, np.nan
         mae_train, mae_test = np.nan, np.nan
@@ -494,105 +513,79 @@ def post_analysis(adata,
                   grid_size=(1, 1),
                   sparsity_correction=True,
                   stream_figsize=None,
+                  colors=None,
                   dpi=80,
                   figure_path=None,
                   save=None,
                   **kwargs):
-    """High-level API for method evaluation and plotting after training.
-    This function computes performance metrics and generates plots based on user input.
+    """Performs model evaluation and generates figures.
 
     Args:
         adata (:class:`anndata.AnnData`):
             AnnData object.
         test_id (str):
-            Used for naming the figures.
-            For example, it can be set as the name of the dataset.
+            Test ID.
         methods (list[str]):
-            Contains the methods to compare with.
-            Now supports {'scVelo', 'UniTVelo', 'DeepVelo', 'cellDancer', 'VeloVI', 'PyroVelocity',
-            'VeloVAE', 'VeloVAE (Rate Prior)', 'Discrete VeloVAE', 'Discrete VeloVAE (Rate Prior)', 'BrODE',
-            'TopoVelo (GCN)', 'TopoVelo (GAT)'}.
+            List of model names.
         keys (list[str]):
-            Used for extracting ODE parameters from .var or .varm from anndata
-            It should be of the same length as methods.
-        spatial_graph_key (str):
-            Key in .obsp storing the adjacency matrix of a spatial graph.
-        spatial_key (str):
-            Key in .obsm storing spatial coordinates
+            List of keys for extracting model parameters.
+        spatial_graph_key (str, optional):
+            Key for spatial graph. Defaults to None.
+        spatial_key (str, optional):
+            Key for spatial embedding. Defaults to None.
         n_spatial_neighbors (int, optional):
-            Number of neighbors in the spatial KNN graph,
-            effective only if spatial_key is not None
+            Number of spatial neighbors. Defaults to 8.
         gene_key (str, optional):
-            Key in .var for gene filtering. Usually set to select velocity genes.
-            Defaults to 'velocity_genes'.
+            Key for filtering the genes. Defaults to 'velocity_genes'.
         compute_metrics (bool, optional):
-            Whether to compute the performance metrics for the methods. Defaults to True.
+            Whether to compute performance metrics. Defaults to True.
         raw_count (bool, optional):
-            Whether to plot raw count numbers for discrete models. Defaults to False.
+            Whether to use raw count for computing metrics. Defaults to False.
         spatial_velocity_graph (bool, optional):
-            Whether to use the spatial knn graph in velocity graph computation.
-            Affects the velocity stream plot.
-            Defaults to False.
+            Whether to recompute the spatial graph. Defaults to False.
         genes (list[str], optional):
-            Genes to plot. Used when plot_type contains "phase" or "gene".
-            If not provided, gene(s) will be randomly sampled for plotting. Defaults to [].
-        plot_type (list, optional):
-            Type of plots to generate.
-            Now supports {'time', 'gene', 'stream', 'phase', 'cluster'}.
-            Defaults to ['time', 'gene', 'stream'].
+            List of gene names. Defaults to [].
+        plot_type (list[str], optional):
+            List of plot types. Defaults to ['time', 'gene', 'stream'].
         cluster_key (str, optional):
-            Key in .obs containing the cell type annotations. Defaults to "clusters".
-        cluster_edges (list[str], optional):
-            List of ground-truth cell type ancestor-descendant relations, e.g. (A, B)
-            means cell type A is the ancestor of type B. This is used for computing
-            velocity metrics. Defaults to [].
+            Key for cell type annotation. Defaults to "clusters".
+        cluster_edges (list[tuple[str]], optional):
+            List of ground truth cell type transitions.
+            Each transition is of the form (A, B) where A is a progenitor
+            cell type and B is a descendant type.
+            Defaults to [].
         nplot (int, optional):
-            Number of data points in the line prediction.
-            This is to save memory. For plotting line predictions, we don't need
-            as many points as the original dataset contains. Defaults to 500.
+            Number of cells to plot. Defaults to 500.
         frac (float, optional):
-            Parameter for the loess plot.
-            A higher value means larger time window and the resulting fitted line will
-            be smoother. Disabled if set to 0.
-            Defaults to 0.0.
+            Fraction of cells to plot. Defaults to 0.0.
         embed (str, optional):
-            2D embedding used for visualization of time and cell type.
-            The true key for the embedding is f"X_{embed}" in .obsm.
-            Defaults to "umap".
+            Low-dimensional embedding name. Defaults to 'umap'.
+        time_colormap (str, optional):
+            Colormap for plotting time. Defaults to 'plasma'.
+        dot_size (int, optional):
+            Dot size for plotting. Defaults to 50.
         grid_size (tuple[int], optional):
-            Grid size for plotting the genes.
-            n_row * n_col >= len(genes). Defaults to (1, 1).
+            Grid size for plotting. Defaults to (1, 1).
         sparsity_correction (bool, optional):
-            Whether to sample cells non-uniformly across time and count values so
-            that regions with sparser data point distributions will not be missed
-            in gene plots due to sampling. Default to True.
+            Whether to apply sparsity correction. Defaults to True.
+        stream_figsize (tuple[int], optional):
+            Figure size for plotting stream plot. Defaults to None.
+        colors (list[str], optional):
+            List of colors for cell types. Defaults to None.
+        dpi (int, optional):
+            DPI for plotting. Defaults to 80.
         figure_path (str, optional):
-            Path to save the figures.. Defaults to None.
+            Path for saving figures. Defaults to None.
         save (str, optional):
-            Path + output file name to save the AnnData object to a .h5ad file.
-            Defaults to None.
-
-    kwargs:
-        random_state (int):
-            Random number seed. Default to 42.
-        n_jobs (int):
-            Number of CPU cores used for parallel computing in scvelo.tl.velocity_graph.
-        save_format (str):
-            Figure save_format. Default to 'png'.
-
-
+            Filename for saving figures. Defaults to None.
     Returns:
-        tuple
-
-            - :class:`pandas.DataFrame`: Contains the dataset-wise performance metrics of all methods.
-            - :class:`pandas.DataFrame`: Contains the performance metrics of each pair of ancestor and desendant cell types.
-
-        Saves the figures to 'figure_path'.
-
-        Notice that the two output dataframes will be None if 'compute_metrics' is set to False.
+        dict: Performance metrics.
+        dict: Performance metrics for each cell type transition.
+        dict: Performance metrics for each time step.
+        dict: Performance metrics for each cell type transition and each time step.
     """
     # set the random seed
-    random_state = 42 if not 'random_state' in kwargs else kwargs['random_state']
+    random_state = 42 if 'random_state' not in kwargs else kwargs['random_state']
     np.random.seed(random_state)
     # dpi
     set_dpi (dpi)
@@ -604,6 +597,8 @@ def post_analysis(adata,
     else:
         U, S = adata.layers["Mu"], adata.layers["Ms"]
     X_embed = adata.obsm[f"X_{embed}"]
+
+    # Retrieve cell type labels and encode them as integers
     cell_labels_raw = adata.obs[cluster_key].to_numpy()
     cell_types_raw = np.unique(cell_labels_raw)
     label_dic = {}
@@ -638,6 +633,8 @@ def post_analysis(adata,
     stats = {}
     stats_type_list, multi_stats_list, multi_stats_type_list = [], [], []
     methods_display = []  # allows comparing multiple instances of the same model type
+
+    # Stores the prediction for each method for plotting
     Uhat, Shat, V = {}, {}, {}
     That, Yhat = {}, {}
     vkeys, tkeys = [], []
@@ -649,8 +646,6 @@ def post_analysis(adata,
 
     # recompute the spatial KNN graph
     if spatial_velocity_graph:
-        #if spatial_graph_key in adata.obsp:
-        #    n_spatial_neighbors = adata.uns['neighbors']['indices'].shape[1]
         if spatial_key is not None:
             print(f'Computing a spatial graph using KNN on {spatial_key} with k={n_spatial_neighbors}')
             if 'connectivities' in adata.obsp or 'neighbors' in adata.uns:
@@ -658,7 +653,6 @@ def post_analysis(adata,
             neighbors(adata, n_neighbors=n_spatial_neighbors, use_rep=spatial_key, method='sklearn')
         else:
             raise KeyError
-
 
     # Compute metrics and generate plots for each method
     for i, method in enumerate(methods):
@@ -686,16 +680,11 @@ def post_analysis(adata,
             method_ = f"{method} ({keys[i]})" if method in stats else method
             methods_display.append(method_)
             stats[method_] = stats_i
+
         # Compute prediction for the purpose of plotting (a fixed number of plots)
         if 'phase' in plot_type or 'gene' in plot_type or 'all' in plot_type:
             # avoid duplicate methods with different keys
             method_ = f"{method} ({keys[i]})" if method in V else method
-            # Integer-encoded cell type
-            cell_labels_raw = adata.obs[cluster_key].to_numpy()
-            cell_types_raw = np.unique(cell_labels_raw)
-            cell_labels = np.zeros((len(cell_labels_raw)))
-            for j in range(len(cell_types_raw)):
-                cell_labels[cell_labels_raw == cell_types_raw[j]] = j
 
             if method == 'scVelo':
                 t_i, Uhat_i, Shat_i = get_pred_scv_demo(adata, keys[i], genes, nplot)
@@ -703,10 +692,6 @@ def post_analysis(adata,
                 V[method_] = adata.layers["velocity"][:, gene_indices]
             elif method == 'Vanilla VAE':
                 t_i, Uhat_i, Shat_i = get_pred_vanilla_demo(adata, keys[i], genes, nplot)
-                Yhat[method_] = None
-                V[method_] = adata.layers[f"{keys[i]}_velocity"][:, gene_indices]
-            elif method == 'Cycle VAE':
-                t_i, Uhat_i, Shat_i = get_pred_cycle_demo(adata, keys[i], genes, nplot)
                 Yhat[method_] = None
                 V[method_] = adata.layers[f"{keys[i]}_velocity"][:, gene_indices]
             elif 'VeloVAE' in method or 'TopoVelo' in method:
@@ -772,13 +757,13 @@ def post_analysis(adata,
     print("---   Plotting  Results   ---")
     save_format = kwargs["save_format"] if "save_format" in kwargs else "png"
 
+    # Generate plots
     if 'cluster' in plot_type or "all" in plot_type:
         plot_cluster(adata.obsm[f"X_{embed}"],
                      adata.obs[cluster_key].to_numpy(),
-                     save=(None if figure_path is None else 
+                     save=(None if figure_path is None else
                            f"{figure_path}/{test_id}_umap.{save_format}"))
-
-    # Generate plots
+    
     if "time" in plot_type or "all" in plot_type:
         T = {}
         capture_time = adata.obs["tprior"].to_numpy() if "tprior" in adata.obs else None
@@ -807,9 +792,6 @@ def post_analysis(adata,
                        color_map=time_colormap,
                        save=(None if figure_path is None else
                              f"{figure_path}/{test_id}_time.{save_format}"))
-
-    if len(genes) == 0:
-        return
 
     if "phase" in plot_type or "all" in plot_type:
         Labels_phase = {}
@@ -880,7 +862,8 @@ def post_analysis(adata,
         try:
             from scvelo.tl import velocity_graph
             from scvelo.pl import velocity_embedding_stream
-            colors = get_colors(len(cell_types_raw))
+            if colors is None:
+                colors = get_colors(len(cell_types_raw))
             if 'stream_legend_loc' in kwargs:
                 stream_legend_loc = kwargs['stream_legend_loc']
             else:
@@ -909,9 +892,11 @@ def post_analysis(adata,
                                           show=True,
                                           save=(None if figure_path is None else
                                                 f'{figure_path}/{test_id}_{keys[i]}.png'))
+                # Cell veloocity
                 if 'TopoVelo' in methods[i]:
-                    # adata.uns[f"{vkey}_params"]["embeddings"].append(f'{keys[i]}_xy')
                     adata.obsm[f"{vkey}_dec_{embed}"] = adata.obsm[f"{keys[i]}_velocity_{keys[i]}_xy"]
+                    if 'colors_cell_velocity' not in kwargs:
+                        colors = get_colors(len(cell_types_raw))
                     velocity_embedding_stream(adata,
                                               basis=embed,
                                               vkey=f"{vkey}_dec",
@@ -927,12 +912,14 @@ def post_analysis(adata,
                                               dpi=dpi,
                                               show=True,
                                               save=(None if figure_path is None else
-                                                    f'{figure_path}/{test_id}_{keys[i]}_true_velocity.png'))
+                                                    f'{figure_path}/{test_id}_{keys[i]}_cell_velocity.png'))
         except ImportError:
             print('Please install scVelo in order to generate stream plots')
             pass
+
     if save is not None:
         adata.write_h5ad(save)
+
     if compute_metrics:
         if figure_path is not None:
             stats_df.to_csv(f"{figure_path}/metrics_{test_id}.csv", sep='\t')
