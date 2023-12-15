@@ -327,6 +327,8 @@ class decoder(nn.Module):
                  N2=500,
                  spatial_hidden_size=(128, 64),
                  p=98,
+                 min_sigma_u=0.1,
+                 min_sigma_s=0.1,
                  init_ton_zero=False,
                  filter_gene=False,
                  xavier_gain=0.05,
@@ -348,6 +350,8 @@ class decoder(nn.Module):
         self.cvae = True if dim_cond > 1 else False
         self.batch = batch_idx
         self.ref_batch = ref_batch
+        self.min_sigma_u = min_sigma_u
+        self.min_sigma_s = min_sigma_s
         self.init_ton_zero = init_ton_zero
         self.filter_gene = filter_gene
         self.device = device
@@ -466,7 +470,7 @@ class decoder(nn.Module):
             ui = u[self.batch[self.train_idx] == self.ref_batch]
             si = s[self.batch[self.train_idx] == self.ref_batch]
             filt = (si > 0) * (ui > 0)
-            print(np.mean(np.sum(filt, 0) > 0))
+            print(f"{np.mean(np.sum(filt, 0) > 0)*100:.2f}% of the genes in the reference batch have non-zero u and s in the reference batch.")
             ui[~filt] = np.nan
             si[~filt] = np.nan
             std_u_ref, std_s_ref = np.nanstd(ui, axis=0), np.nanstd(si, axis=0)
@@ -479,11 +483,6 @@ class decoder(nn.Module):
                     ui = u[self.batch[self.train_idx] == i]
                     si = s[self.batch[self.train_idx] == i]
                     filt = (si > 0) * (ui > 0)
-                    # for debug purpose
-                    # plt.figure()
-                    # plt.hist(np.mean(filt, 0), bins=[0, 1e-4, 1e-3, 1e-2, 0.1, 1.0])
-                    # plt.xscale('log')
-                    # plt.show()
 
                     ui[~filt] = np.nan
                     si[~filt] = np.nan
@@ -495,6 +494,11 @@ class decoder(nn.Module):
                 scaling_u_full[self.batch[self.train_idx] == i] = scaling_u[i]
                 scaling_s_full[self.batch[self.train_idx] == i] = scaling_s[i]
             # Handle inf and nan
+            p_nan = np.mean(np.isnan(scaling_u) | np.isnan(scaling_s), 1)*100
+            p_inf = np.mean(np.isinf(scaling_u) | np.isinf(scaling_s), 1)*100
+            df = pd.DataFrame({'batch': np.arange(self.dim_cond), 'nan (%)': p_nan, 'inf (%)': p_inf})
+            print("Percentage of invalid scaling factors in each batch.")
+            print(df)
             if np.any(np.isnan(scaling_u) | np.isinf(scaling_u)):
                 scaling_u[np.isnan(scaling_u) | np.isinf(scaling_u)] = 1.0
             if np.any(np.isnan(scaling_s) | np.isinf(scaling_s)):
@@ -509,22 +513,24 @@ class decoder(nn.Module):
              toff,
              u0, s0,
              sigma_u, sigma_s,
-             T, gene_score) = init_params(u/scaling_s_full, s/scaling_s_full, p, fit_scaling=True)
+             T, gene_score) = init_params(u/scaling_s_full, s/scaling_s_full, p, fit_scaling=True,
+                                          min_sigma_u=self.min_sigma_u, min_sigma_s=self.min_sigma_s)
         else:
             (alpha, beta, gamma,
              scaling_u,
              toff,
              u0, s0,
              sigma_u, sigma_s,
-             T, gene_score) = init_params(u, s, p, fit_scaling=True)
+             T, gene_score) = init_params(u, s, p, fit_scaling=True,
+                                          min_sigma_u=self.min_sigma_u, min_sigma_s=self.min_sigma_u)
             # Scaling equals 1 in case of a single batch
             scaling_s = np.ones_like(scaling_u)
         
             if np.any(np.isinf(scaling_u)):
-                print('scaling_u_u invalid inf')
+                print('scaling_u invalid inf')
                 scaling_u[np.isinf(scaling_u)] = 1.0
             if np.any(np.isnan(scaling_u)):
-                print('scaling_u_u invalid nan')
+                print('scaling_u invalid nan')
                 scaling_u[np.isnan(scaling_u)] = 1.0
             scaling_u_full = scaling_u
             scaling_s_full = scaling_s
@@ -935,6 +941,8 @@ class VAE(VanillaVAE):
                  count_distribution="Poisson",
                  time_overlap=0.05,
                  std_z_prior=0.01,
+                 min_sigma_u=0.1,
+                 min_sigma_s=0.1,
                  xavier_gain=0.05,
                  checkpoints=[None, None],
                  rate_prior={
@@ -1103,6 +1111,8 @@ class VAE(VanillaVAE):
                                ref_batch=self.ref_batch,
                                init_ton_zero=init_ton_zero,
                                filter_gene=filter_gene,
+                               min_sigma_u=min_sigma_u,
+                               min_sigma_s=min_sigma_s,
                                xavier_gain=xavier_gain,
                                device=self.device,
                                init_method=init_method,
@@ -2630,11 +2640,8 @@ class VAE(VanillaVAE):
                         spatial_key,
                         key,
                         config={},
-                        plot=False,
-                        gene_plot=[],
                         cluster_key="clusters",
                         us_keys=None,
-                        figure_path="figures",
                         embed="umap",
                         random_state=2022):
         """Regenerate the training scene without actually training the model.
@@ -2807,8 +2814,8 @@ class VAE(VanillaVAE):
              Xembed,
              testid=0,
              test_mode=True,
-             gind=None,
-             gene_plot=None,
+             gind=[],
+             gene_plot=[],
              plot=False,
              path='figures',
              **kwargs):
@@ -2905,9 +2912,15 @@ class VAE(VanillaVAE):
             loss *= self.config['sigma_pos']
         if plot:
             cell_labels = np.array([self.label_dic_rev[x] for x in self.cell_labels])
-            plot_cluster(xy_hat.cpu().numpy()[self.train_idx], cell_labels[self.train_idx], embed='Predicted Coordinates',
+            plot_cluster(xy_hat.cpu().numpy()[self.train_idx],
+                         cell_labels[self.train_idx],
+                         embed='Predicted Coordinates',
+                         real_aspect_ratio=True,
                          save=f"{path}/xy-{testid}-train.png")
-            plot_cluster(xy_hat.cpu().numpy()[self.test_idx], cell_labels[self.test_idx], embed='Predicted Coordinates',
+            plot_cluster(xy_hat.cpu().numpy()[self.test_idx],
+                         cell_labels[self.test_idx],
+                         embed='Predicted Coordinates',
+                         real_aspect_ratio=True,
                          save=f"{path}/xy-{testid}-test.png")
         return loss.cpu().item()
 

@@ -25,6 +25,12 @@ def set_dpi(dpi):
     global DPI
     DPI = dpi
 
+def _set_figsize(X_embed, real_aspect_ratio=False, width=7.5):
+    figsize = (width, width*0.75)
+    if real_aspect_ratio:
+        aspect_ratio = (X_embed[:, 0].max() - X_embed[:, 0].min()) / (X_embed[:, 1].max() - X_embed[:, 1].min())
+        figsize = (width, width*aspect_ratio)
+    return figsize
 
 def get_colors(n, color_map=None):
     """Get colors for plotting cell clusters.
@@ -308,7 +314,13 @@ def plot_phase(u, s,
     save_fig(fig, save, (lgd,))
 
 
-def plot_cluster(X_embed, cell_labels, figsize=(6, 4), color_map=None, embed=None, show_legend=False, save=None):
+def plot_cluster(X_embed,
+                 cell_labels,
+                 color_map=None,
+                 embed=None,
+                 real_aspect_ratio=False,
+                 markersize=20,
+                 save=None):
     """Plot the predicted cell types from the encoder
 
     Args:
@@ -320,12 +332,18 @@ def plot_cluster(X_embed, cell_labels, figsize=(6, 4), color_map=None, embed=Non
             User-defined colormap for cell clusters. Defaults to None.
         embed (str, optional):
             Embedding name. Used for labeling axes. Defaults to 'umap'.
+        real_aspect_ratio (bool, optional):
+            Whether to set the aspect ratio of the plot to be the same as the data.
+            Defaults to False.
+        markersize (int, optional):
+            Marker size. Defaults to 20.
         show_labels (bool, optional):
             Whether to add cell cluster names to the plot. Defaults to True.
         save (str, optional):
             Figure name for saving (including path). Defaults to None.
     """
     cell_types = np.unique(cell_labels)
+    figsize = _set_figsize(X_embed, real_aspect_ratio)
     fig, ax = plt.subplots(figsize=figsize, facecolor='white')
     x = X_embed[:, 0]
     y = X_embed[:, 1]
@@ -337,7 +355,7 @@ def plot_cluster(X_embed, cell_labels, figsize=(6, 4), color_map=None, embed=Non
     for i, typei in enumerate(cell_types):
         mask = cell_labels == typei
         xbar, ybar = np.mean(x[mask]), np.mean(y[mask])
-        ax.plot(x[mask], y[mask], '.', color=colors[i % len(colors)])
+        ax.scatter(x[mask], y[mask], s=markersize, color=colors[i % len(colors)], edgecolors='none')
         n_char = len(typei)
         txt = ax.text(xbar - x_range*4e-3*n_char, ybar - y_range*4e-3, typei, fontsize=max(15, 100//n_char_max), color='k')
         txt.set_bbox(dict(facecolor='white', alpha=0.5, edgecolor='black'))
@@ -482,7 +500,14 @@ def cellwise_vel(adata,
     save_fig(fig, save)
 
 
-def cellwise_vel_embedding(adata, key, type_name=None, idx=None, embed='umap', save=None):
+def cellwise_vel_embedding(adata,
+                           key,
+                           type_name=None,
+                           idx=None,
+                           embed='umap',
+                           markersize=80,
+                           real_aspect_ratio=False,
+                           save=None):
     """Plots velocity of a subset of cells on an embedding space.
     Used for debugging.
 
@@ -524,7 +549,8 @@ def cellwise_vel_embedding(adata, key, type_name=None, idx=None, embed='umap', s
     neighbors = np.where((A[idx] > 0) | (A_neg[idx] < 0))[0]
     t = adata.obs[f'{key}_time'].to_numpy()
 
-    fig, ax = plt.subplots(1, 2, figsize=(24, 9), facecolor='white')
+    figsize = _set_figsize(X_embed, real_aspect_ratio)
+    fig, ax = plt.subplots(1, 2, figsize=figsize, facecolor='white')
     ax[0].plot(x_embed_1, x_embed_2, '.', color='grey', alpha=0.25)
     tmask = t[neighbors] > t[idx]
     ax[0].plot(x_embed_1[neighbors[~tmask]], x_embed_2[neighbors[~tmask]], 'c.', label="Earlier Neighbors")
@@ -533,7 +559,7 @@ def cellwise_vel_embedding(adata, key, type_name=None, idx=None, embed='umap', s
     ax[0].legend(loc=1)
 
     corr = A[idx, neighbors]+A_neg[idx, neighbors]
-    _plot_heatmap(ax[1], corr, X_embed[neighbors], 'Cosine Similarity', markersize=80)
+    _plot_heatmap(ax[1], corr, X_embed[neighbors], 'Cosine Similarity', markersize=markersize)
     ax[1].quiver(x_embed_1[[idx]], x_embed_2[[idx]], [v_embed[idx, 0]], [v_embed[idx, 1]], angles='xy')
     ax[1].plot(x_embed_1[[idx]], x_embed_2[[idx]], 'ks', markersize=10, label="Target Cell")
 
@@ -592,6 +618,7 @@ def plot_phase_vel(adata,
                    dt=0.05,
                    grid_size=(30, 30),
                    percentile=25,
+                   markersize=20,
                    save=None):
     """Plots RNA velocity stream on a phase portrait.
 
@@ -623,7 +650,7 @@ def plot_phase_vel(adata,
     u = adata.layers['Mu'][:, gidx]/scaling
     s = adata.layers['Ms'][:, gidx]
     x = np.stack([s, u]).T
-    _plot_heatmap(ax, t, x, 'time')
+    _plot_heatmap(ax, t, x, 'time', markersize=markersize)
     grid_points = pick_grid_points(x, grid_size, percentile)
     ax.quiver(s[grid_points],
               u[grid_points],
@@ -638,7 +665,7 @@ def plot_phase_vel(adata,
     save_fig(fig, save)
 
 
-def plot_velocity(X_embed, vx, vy, save=None):
+def plot_velocity(X_embed, vx, vy, real_aspect_ratio=False, save=None):
     """2D quiver plot of velocity
 
     Args:
@@ -648,11 +675,15 @@ def plot_velocity(X_embed, vx, vy, save=None):
             Velocity in the x direction.
         vy (:class:`numpy.ndarray`):
             Velocity in the y direction.
+        real_aspect_ratio (bool, optional):
+            Whether to set the aspect ratio of the plot to be the same as the data.
+            Defaults to False.
         save (str, optional):
             Figure name for saving (including path). Defaults to None.
     """
     umap1, umap2 = X_embed[:, 0], X_embed[:, 1]
-    fig, ax = plt.subplots(figsize=(12, 8))
+    figsize = _set_figsize(X_embed, real_aspect_ratio)
+    fig, ax = plt.subplots(figsize=figsize)
     v = np.sqrt(vx**2+vy**2)
     vmax, vmin = np.quantile(v, 0.95), np.quantile(v, 0.05)
     v = np.clip(v, vmin, vmax)
@@ -738,9 +769,9 @@ def _plot_heatmap(ax,
                   X_embed,
                   colorbar_name,
                   colorbar_ticklabels=None,
-                  markersize=5,
+                  markersize=20,
                   cmap='plasma',
-                  show_color_bar=True):
+                  axis_off=False):
     """General heatmap plotting helper function.
     """
     ax.scatter(X_embed[:, 0],
@@ -789,6 +820,8 @@ def plot_heatmap(vals,
                  X_embed,
                  colorbar_name="Latent Time",
                  colorbar_ticks=None,
+                 markersize=20,
+                 real_aspect_ratio=False,
                  save=None):
     """Plots a quantity as a heatmap.
 
@@ -801,11 +834,16 @@ def plot_heatmap(vals,
             Name shown next to the colorbar. Defaults to "Latent Time".
         colorbar_ticks (str, optional):
             Name shown on the colorbar axis. Defaults to None.
+        markersize (int, optional):
+            Marker size. Defaults to 20.
+        real_aspect_ratio (bool, optional):
+            Whether to use real aspect ratio for the plot. Defaults to False.
         save (str, optional):
             Figure name for saving (including path). Defaults to None.
     """
-    fig, ax = plt.subplots(figsize=(12, 6))
-    ax = _plot_heatmap(ax, vals, X_embed, colorbar_name, colorbar_ticks, axis_off=True)
+    figsize = _set_figsize(X_embed, real_aspect_ratio)
+    fig, ax = plt.subplots(figsize=figsize)
+    ax = _plot_heatmap(ax, vals, X_embed, colorbar_name, colorbar_ticks, markersize=markersize, axis_off=True)
     save_fig(fig, save)
 
 
@@ -813,6 +851,8 @@ def plot_time(t_latent,
               X_embed,
               cmap='plasma',
               legend_label='Latent Time',
+              real_aspect_ratio=False,
+              markersize=20,
               save=None):
     """Plots mean cell time as a heatmap.
 
@@ -825,11 +865,23 @@ def plot_time(t_latent,
             Colormap name. Defaults to 'plasma'.
         legend_label (str, optional):
             Text added next to the color bar. Defaults to 'Latent Time'.
+        real_aspect_ratio (bool, optional):
+            Whether to use real aspect ratio for the plot. Defaults to False.
+        markersize (int, optional):
+            Marker size. Defaults to 20.
         save (str, optional):
             Figure name for saving (including path). Defaults to None.
     """
-    fig, ax = plt.subplots(figsize=(12, 6))
-    _plot_heatmap(ax, t_latent, X_embed, legend_label, ['early', 'late'], cmap=cmap, axis_off=True)
+    figsize = _set_figsize(X_embed, real_aspect_ratio)
+    fig, ax = plt.subplots(figsize=figsize)
+    _plot_heatmap(ax,
+                  t_latent,
+                  X_embed,
+                  legend_label,
+                  ['early', 'late'],
+                  cmap=cmap,
+                  markersize=markersize,
+                  axis_off=True)
     save_fig(fig, save)
 
 
@@ -838,6 +890,8 @@ def plot_time_var(std_t,
                   t=None,
                   hist_eq=True,
                   cmap='viridis',
+                  real_aspect_ratio=False,
+                  markersize=20,
                   save=None):
     """Plots cell time coefficient of variation as a heatmap.
 
@@ -852,6 +906,7 @@ def plot_time_var(std_t,
             Whether to perform histogram equalization. Defaults to True.
         cmap (str, optional):
             Colormap name. Defaults to 'viridis'.
+        
         save (str, optional):
             Figure name for saving (including path). Defaults to None.
     """
@@ -860,8 +915,16 @@ def plot_time_var(std_t,
     if hist_eq:
         diff_entropy = histeq(diff_entropy, Nbin=len(diff_entropy)//50)
 
-    fig, ax = plt.subplots(figsize=(12, 6))
-    ax = _plot_heatmap(ax, diff_entropy, X_embed, "Time Variance", ['low', 'high'], cmap=cmap, axis_off=True)
+    figsize = _set_figsize(X_embed, real_aspect_ratio)
+    fig, ax = plt.subplots(figsize=figsize)
+    ax = _plot_heatmap(ax,
+                       diff_entropy,
+                       X_embed,
+                       "Time Variance",
+                       ['low', 'high'],
+                       cmap=cmap,
+                       markersize=markersize, 
+                       axis_off=True)
     save_fig(fig, save)
 
 
@@ -870,6 +933,8 @@ def plot_state_var(std_z,
                    z=None,
                    hist_eq=True,
                    cmap='viridis',
+                   real_aspect_ratio=False,
+                   markersize=20,
                    save=None):
     """Plots cell state variance (in the form of coefficient of variation) as a heatmap.
 
@@ -892,8 +957,16 @@ def plot_state_var(std_z,
     if hist_eq:
         diff_entropy = histeq(diff_entropy, Nbin=len(diff_entropy)//50)
 
-    fig, ax = plt.subplots(figsize=(12, 6))
-    ax = _plot_heatmap(ax, diff_entropy, X_embed, "State Uncertainty", ['low', 'high'], cmap=cmap, axis_off=True)
+    figsize = _set_figsize(X_embed, real_aspect_ratio)
+    fig, ax = plt.subplots(figsize=figsize)
+    ax = _plot_heatmap(ax,
+                       diff_entropy,
+                       X_embed,
+                       "State Uncertainty",
+                       ['low', 'high'],
+                       cmap=cmap,
+                       markersize=markersize,
+                       axis_off=True)
     save_fig(fig, save)
 
 

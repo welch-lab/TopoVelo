@@ -433,7 +433,14 @@ def init_gene(s, u, percent, fit_scaling=False, Ntype=None):
     return alpha, beta, gamma, t_latent, u0_, s0_, t_, scaling
 
 
-def init_params(u, s, percent, fit_offset=False, fit_scaling=True, eps=1e-3):
+def init_params(u,
+                s,
+                percent,
+                fit_offset=False,
+                fit_scaling=True,
+                min_sigma_u=None,
+                min_sigma_s=None,
+                eps=1e-3):
     # Adopted from SCVELO
     # Use the steady-state model to estimate alpha, beta,
     # gamma and the latent time
@@ -489,10 +496,20 @@ def init_params(u, s, percent, fit_offset=False, fit_scaling=True, eps=1e-3):
         dist_u[:, i] = u[:, i] - upred
         dist_s[:, i] = s[:, i] - spred
 
-    sigma_u = np.clip(np.std(dist_u, 0), 0.1, None)
-    sigma_s = np.clip(np.std(dist_s, 0), 0.1, None)
-    sigma_u[np.isnan(sigma_u)] = 0.1
-    sigma_s[np.isnan(sigma_s)] = 0.1
+    sigma_u = np.std(dist_u, 0)
+    sigma_s = np.std(dist_s, 0)
+    if min_sigma_u is None:
+        q1 = np.quantile(sigma_u[sigma_u > 0], 0.25)
+        q3 = np.quantile(sigma_u[sigma_u > 0], 0.75)
+        min_sigma_u = q1 - 1.5*(q3-q1)
+    sigma_u = np.clip(sigma_u, a_min=min_sigma_u, a_max=None)
+    if min_sigma_s is None:
+        q1 = np.quantile(sigma_s[sigma_s > 0], 0.25)
+        q3 = np.quantile(sigma_s[sigma_s > 0], 0.75)
+        min_sigma_s = q1 - 1.5*(q3-q1)
+    sigma_s = np.clip(sigma_s, a_min=min_sigma_s, a_max=None)
+    sigma_u[np.isnan(sigma_u)] = min_sigma_u
+    sigma_s[np.isnan(sigma_s)] = min_sigma_s
 
     # Make sure all genes get the same total relevance score
     gene_score = velocity_genes * 1.0 + (1 - velocity_genes) * 0.25

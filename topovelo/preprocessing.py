@@ -3,6 +3,9 @@ import numpy as np
 from .scvelo_preprocessing import *
 from tqdm import tqdm
 from sklearn.neighbors import NearestNeighbors
+from .model.scvelo_util import leastsq_NxN, R_squared
+from scipy.spatial import Delaunay
+from scipy.sparse import csr_matrix
 
 
 def count_peak_expression(adata, cluster_key="clusters"):
@@ -318,15 +321,64 @@ def preprocess(adata,
         scanpy.tl.umap(adata, min_dist=umap_min_dist)
     
 
-def build_spatial_graph(adata, spatial_key, n_neighbors):
+def build_spatial_graph(adata, spatial_key, graph_key='spatial_graph', n_neighbors=16, method='KNN'):
     """Build spatial graph.
 
     Args:
         adata (AnnData): Annotated data matrix.
         spatial_key (str): Key for spatial coordinates.
+        graph_key (str): Key for saving the spatial graph.
         n_neighbors (int): Number of neighbors for KNN averaging.
+            Defaults to 16.
+        method (str): Method for building spatial graph.
+            "KNN" for KNN graph, "Delaunay" for Delaunay triangulation.
     """
-    x_pos = adata.obsm[spatial_key]
-    nn = NearestNeighbors(n_neighbors=n_neighbors)
-    nn.fit(x_pos)
-    adata.obsp['spatial_graph'] = nn.kneighbors_graph()
+    if method == 'KNN':
+        x_pos = adata.obsm[spatial_key]
+        nn = NearestNeighbors(n_neighbors=n_neighbors)
+        nn.fit(x_pos)
+        adata.obsp[graph_key] = nn.kneighbors_graph()
+    elif method == 'Delaunay':
+        x_pos = adata.obsm[spatial_key]
+        tri = Delaunay(x_pos)
+        adata.obsp[graph_key] = csr_matrix((np.zeros((len(tri.vertex_neighbor_vertices[1]))),
+                                                  tri.vertex_neighbor_vertices[1],
+                                                  tri.vertex_neighbor_vertices[0]))
+
+
+def pick_ref_batch(adata, batch_key, percent=95, min_r2=0.01, eps=1e-3):
+    """Pick a reference batch for batch-corrected TopoVelo model.
+    We determine the reference batch by using the steady-state model to
+    fit u, s for each gene and then pick the batch with the most number
+    of velocity genes.
+    This step should be performed after the data is preprocessed.
+
+    Args:
+        adata (AnnData): Annotated data matrix.
+        batch_key (str): Key for batch annotation.
+        percent (float): Percentile for fitting steady-state model.
+        min_r2 (float): Minimal R2 for fitting steady-state model.
+        eps (float): Minimal value for gamma.
+    """
+    batch_labels = adata.obs[batch_key].to_numpy()
+    batch_names = np.unique(batch_labels)
+    try:
+        n_vel_genes = {}
+        for batch in batch_names:
+            batch_idx = np.where(batch_labels == batch)[0]
+            u, s = adata.layers["Ms"][batch_idx, :], adata.layers["Mu"][batch_idx, :]
+            offset, gamma = leastsq_NxN(s, u, False, perc=[100-percent, percent])
+            gamma = np.clip(gamma, eps, None)
+            residual = u-gamma*s-offset
+            r2 = R_squared(residual, total=u-u.mean(0))
+            velocity_genes = (r2 > min_r2) & (r2 < 0.95) & (gamma > 0.01) & (np.max(s > 0, 0) > 0) & (np.max(u > 0, 0) > 0)
+            n_vel_genes[batch] = np.sum(velocity_genes)
+        ref_batch = None
+        max_count = -1
+        for batch, count in n_vel_genes.items():
+            if count > max_count:
+                ref_batch = batch
+    except KeyError:
+        print("Warning: unspliced/spliced count are not KNN smoothed. Please run preprocess first.")
+        ref_batch = batch_names[0]
+    return ref_batch
