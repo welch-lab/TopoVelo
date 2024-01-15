@@ -1921,7 +1921,7 @@ def plot_sig_grid(Nr,
         lgd = fig_sig.legend(handles,
                              labels,
                              fontsize=legend_fontsize,
-                             markerscale=5.0,
+                             markerscale=2.0,
                              bbox_to_anchor=(-0.03/Nc, l_indent),
                              loc='upper right')
 
@@ -1942,6 +1942,7 @@ def plot_time_grid(T,
                    H=3,
                    dot_size=10,
                    grid_size=None,
+                   real_aspect_ratio=True,
                    color_map='plasma_r',
                    save="figures/time_grid.png"):
     """Plot the latent time of different methods.
@@ -1962,9 +1963,15 @@ def plot_time_grid(T,
         q (float, optional):
             Top quantile for clipping extreme values. Defaults to 0.99.
         W (int, optional):
-            Subplot width. Defaults to 6.
+            Subplot width. Defaults to 6. Ignored when real_aspect_ratio is True.
         H (int, optional):
-            Subplot height. Defaults to 3.
+            Subplot height. Defaults to 3. Ignored when real_aspect_ratio is True.
+        dot_size (int, optional):
+            Size of the dots. Defaults to 10.
+        grid_size (tuple, optional):
+            Grid size. Defaults to None.
+        real_aspect_ratio (bool, optional):
+            Whether to use real aspect ratio. Defaults to True.
         save (str, optional):
             Figure name for saving (including path). Defaults to "figures/time_grid.png".
     """
@@ -1973,12 +1980,20 @@ def plot_time_grid(T,
     else:
         methods = list(T.keys())
     M = len(methods)
-    
+
     if grid_size is None:
         grid_size = (1, M)
     n_row, n_col = grid_size
+
+    # Calculate figure size
+    panel_figsize = _set_figsize(X_emb, real_aspect_ratio, W)
+    if real_aspect_ratio:
+        figsize = (panel_figsize[0]*n_col, panel_figsize[1]*n_row)
+    else:
+        figsize = (W*n_col, H*n_row)
+
     if std_t is not None:
-        fig_time, ax = plt.subplots(2*n_row, n_col, figsize=(W*n_col+2, H*n_row), facecolor='white')
+        fig_time, ax = plt.subplots(2*n_row, n_col, figsize=figsize, facecolor='white')
         for i, method in enumerate(methods):
             row = i // n_col
             col = i - row * n_col
@@ -2038,7 +2053,7 @@ def plot_time_grid(T,
                     cbar1.ax.get_yaxis().labelpad = 15
                     cbar1.ax.set_ylabel('Time Variance', rotation=270, fontsize=12)
     else:
-        fig_time, ax = plt.subplots(n_row, n_col, figsize=(8*n_col, 4*n_row), facecolor='white')
+        fig_time, ax = plt.subplots(n_row, n_col, figsize=figsize, facecolor='white')
         for i, method in enumerate(methods):
             row = i // n_col
             col = i - row * n_col

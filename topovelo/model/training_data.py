@@ -125,6 +125,7 @@ class SCGraphData():
                  validation_idx,
                  test_idx,
                  device,
+                 edge_attr=None,
                  batch=None,
                  enable_edge_weight=False,
                  normalize_xy=False):
@@ -148,6 +149,8 @@ class SCGraphData():
                 Indices of test samples.
             device (:class:`torch.device`):
                 {'cpu' or 'cuda'}
+            edge_attr (:class:`numpy.ndarray`, optional):
+                Edge attributes of shape (|E|,|E|,dim_edge_attr). Defaults to None.
             batch (:class:`numpy.ndarray`, optional):
                 Batch indices of cells. Defaults to None.
             enable_edge_weight (bool, optional):
@@ -157,12 +160,19 @@ class SCGraphData():
         """
         self.N, self.G = data.shape[0], data.shape[1]//2
         self.graph = graph.A
+        self.edges = np.stack(graph.nonzero())
+        if edge_attr is not None:
+            edge_attr_ = self._extract_edge_attr(edge_attr)
+        else:
+            edge_attr_ = None
+
         self.data = T.ToSparseTensor()(Data(x=torch.tensor(data,
                                                            dtype=torch.float32,
                                                            requires_grad=False),
-                                            edge_index=torch.tensor(np.stack(graph.nonzero()),
+                                            edge_index=torch.tensor(self.edges,
                                                                     dtype=torch.long,
                                                                     requires_grad=False),
+                                            edge_attr=edge_attr_,
                                             y=torch.tensor(labels,
                                                            dtype=torch.int8,
                                                            requires_grad=False))).to(device)
@@ -208,6 +218,32 @@ class SCGraphData():
         self.z = None
 
         return
+    
+    def _extract_edge_attr(self, edge_attr):
+        """Extract edge attributes from the graph.
+
+        Args:
+            edge_attr (:class:`numpy.ndarray`):
+                Edge attributes.
+
+        Returns:
+            :class:`torch.tensor`: Edge attributes.
+        """            
+        edge_attr_ = np.zeros((self.edges.shape[1], edge_attr.shape[-1]))
+        ptr = 0
+        prev = 0
+        # edge case: there is only one edge
+        if self.edges.shape[1] == 1:
+            return torch.tensor(edge_attr, dtype=torch.float32, requires_grad=False)
+        # general case
+        while ptr < self.edges.shape[1]:
+            while self.edges[0, ptr] == self.edges[0, ptr+1]:
+                ptr += 1
+                if ptr == self.edges.shape[1]-1:
+                    break
+            edge_attr_[prev:ptr+1] = edge_attr[self.edges[0, ptr], self.edges[1, prev:ptr+1]]
+            prev = ptr+1
+        return torch.tensor(edge_attr, dtype=torch.float32, requires_grad=False)
 
 
 class Index(Dataset):

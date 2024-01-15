@@ -67,6 +67,7 @@ class Encoder(nn.Module):
                  Cin,
                  dim_z,
                  dim_cond=0,
+                 dim_edge=None,
                  n_hidden=500,
                  attention=True,
                  n_head=5,
@@ -79,7 +80,7 @@ class Encoder(nn.Module):
         self.n_head = n_head
         self.xavier_gain = xavier_gain
         if attention:
-            self.conv1 = GATConv(Cin, n_hidden, n_head)
+            self.conv1 = GATConv(Cin, n_hidden, n_head, edge_dim=dim_edge)
             self.fc_mu_t = nn.Linear(n_head*n_hidden+dim_cond, 1).float()
             self.spt1 = nn.Softplus().float()
             self.fc_std_t = nn.Linear(n_head*n_hidden+dim_cond, 1).float()
@@ -188,6 +189,7 @@ class GraphDecoder(nn.Module):
                  Cin,
                  dim_out,
                  dim_cond=0,
+                 dim_edge=None,
                  n_hidden=500,
                  attention=True,
                  n_head=5,
@@ -201,7 +203,7 @@ class GraphDecoder(nn.Module):
         self.xavier_gain = xavier_gain
         self.enable_sigmoid = enable_sigmoid
         if attention:
-            self.conv1 = GATConv(Cin, n_hidden, n_head)
+            self.conv1 = GATConv(Cin, n_hidden, n_head, edge_dim=dim_edge)
             self.fc_out = nn.Linear(n_head*n_hidden, dim_out).float()
             self.sigm = nn.Sigmoid().float()
         else:
@@ -244,6 +246,7 @@ class MultiLayerGraphDecoder(nn.Module):
                  Cin,
                  dim_out,
                  dim_cond=0,
+                 dim_edge=None,
                  hidden_size=(500, 250),
                  attention=True,
                  n_head=5,
@@ -262,7 +265,7 @@ class MultiLayerGraphDecoder(nn.Module):
         # for i in range(self.n_layers):
         #    self.bn_layers.append(BatchNorm(hidden_size[i]))
         if attention:
-            self.conv_layers = nn.ModuleList([GATConv(Cin, hidden_size[0], n_head)])
+            self.conv_layers = nn.ModuleList([GATConv(Cin, hidden_size[0], n_head, edge_dim=dim_edge)])
             for i in range(1, self.n_layers):
                 self.conv_layers.append(GATConv(hidden_size[i-1]*n_head, hidden_size[i], n_head))
             self.fc_out = nn.Linear(n_head*hidden_size[-1], dim_out).float()
@@ -309,7 +312,7 @@ class MultiLayerGraphDecoder(nn.Module):
         return self.sigm(self.fc_out(h))
 
 
-class decoder(nn.Module):
+class Decoder(nn.Module):
     def __init__(self,
                  adata,
                  tmax,
@@ -321,6 +324,7 @@ class decoder(nn.Module):
                  attention=False,
                  n_head=5,
                  dim_cond=0,
+                 dim_edge=None,
                  batch_idx=None,
                  ref_batch=None,
                  N1=250,
@@ -337,7 +341,7 @@ class decoder(nn.Module):
                  init_key=None,
                  checkpoint=None,
                  **kwargs):
-        super(decoder, self).__init__()
+        super(Decoder, self).__init__()
         self.n_gene = adata.n_vars
         self.tmax = tmax
         self.train_idx = train_idx
@@ -358,20 +362,22 @@ class decoder(nn.Module):
         self.init_method = init_method
         self.init_key = init_key
         self.checkpoint = checkpoint
-        self.construct_nn(adata, dim_z, dim_cond, N1, N2, spatial_hidden_size, p, n_head, xavier_gain, **kwargs)
+        self.construct_nn(adata, dim_z, dim_cond, dim_edge, N1, N2, spatial_hidden_size, p, n_head, xavier_gain, **kwargs)
 
-    def construct_nn(self, adata, dim_z, dim_cond, N1, N2, spatial_hidden_size, p, n_head, xavier_gain, **kwargs):
+    def construct_nn(self, adata, dim_z, dim_cond, dim_edge, N1, N2, spatial_hidden_size, p, n_head, xavier_gain, **kwargs):
         self.set_shape(self.n_gene, dim_cond)
         if self.graph_decoder:
             self.net_rho = GraphDecoder(dim_z+dim_cond,
                                         self.n_gene,
                                         n_hidden=N2,
+                                        dim_edge=dim_edge,
                                         attention=self.attention,
                                         n_head=n_head,
                                         xavier_gain=xavier_gain).to(self.device)
             self.net_rho2 = GraphDecoder(dim_z+dim_cond,
                                          self.n_gene,
                                          n_hidden=N2,
+                                         dim_edge=dim_edge,
                                          attention=self.attention,
                                          n_head=n_head,
                                          xavier_gain=xavier_gain).to(self.device)
@@ -920,6 +926,7 @@ class VAE(VanillaVAE):
                  tmax,
                  dim_z,
                  dim_cond=0,
+                 dim_edge=None,
                  device='cpu',
                  hidden_size=(500, 250, 500),
                  spatial_hidden_size=(128, 64),
@@ -1026,6 +1033,7 @@ class VAE(VanillaVAE):
         self.config = {
             # Model Parameters
             "dim_z": dim_z,
+            "dim_edge": dim_edge,
             "hidden_size": hidden_size,
             "tmax": tmax,
             "init_method": init_method,
@@ -1094,7 +1102,7 @@ class VAE(VanillaVAE):
 
         seed_everything(random_state)
         self.split_train_validation_test(adata.n_obs, test_samples)
-        self.decoder = decoder(adata,
+        self.decoder = Decoder(adata,
                                tmax,
                                self.train_idx,
                                dim_z,
@@ -1107,6 +1115,7 @@ class VAE(VanillaVAE):
                                attention=attention,
                                n_head=n_head,
                                dim_cond=self.n_batch,
+                               dim_edge=dim_edge,
                                batch_idx=self.batch_,
                                ref_batch=self.ref_batch,
                                init_ton_zero=init_ton_zero,
@@ -1118,18 +1127,19 @@ class VAE(VanillaVAE):
                                init_method=init_method,
                                init_key=init_key,
                                checkpoint=checkpoints[1],
-                               **kwargs).float().to(device)
+                               **kwargs).float().to(self.device)
 
         try:
             G = adata.n_vars
             self.encoder = Encoder(2*G,
                                    dim_z,
                                    dim_cond,
+                                   dim_edge,
                                    hidden_size[0],
                                    attention=attention,
                                    n_head=n_head,
                                    xavier_gain=xavier_gain,
-                                   checkpoint=checkpoints[0]).to(device)
+                                   checkpoint=checkpoints[0]).to(self.device)
         except IndexError:
             print('Please provide two dimensions!')
 
@@ -2225,6 +2235,7 @@ class VAE(VanillaVAE):
               adata,
               graph,
               spatial_key,
+              edge_attr=None,
               config={},
               plot=False,
               gene_plot=[],
@@ -2239,6 +2250,15 @@ class VAE(VanillaVAE):
         ---------
 
         adata : :class:`anndata.AnnData`
+            Annotated data matrix.
+        graph : :class:`torch_geometric.data.Data`
+            Graph data object.
+        spatial_key : str
+            Key in adata.obsm storing the spatial coordinates.
+        edge_attr : :class:`numpy.ndarray`, optional
+            Edge attributes. Has a shape of (n_edge, dim_feature).
+            The order should follow the edge_index in graph.
+            Defaults to None.
         config : dictionary, optional
             Contains all hyper-parameters.
         plot : bool, optional
@@ -2254,13 +2274,15 @@ class VAE(VanillaVAE):
         test_samples : :class:`numpy.array`
             Indices of samples included in the test set (unseen data)
         """
-        #torch.manual_seed(random_state)
-        #np.random.seed(random_state)
         seed_everything(random_state)
         self.load_config(config)
         if self.config["learning_rate"] is None:
-            p = (np.sum(adata.layers["unspliced"].A > 0)
-                 + (np.sum(adata.layers["spliced"].A > 0)))/adata.n_obs/adata.n_vars/2
+            try:
+                p = (np.sum(adata.layers["unspliced"].A > 0)
+                    + (np.sum(adata.layers["spliced"].A > 0)))/adata.n_obs/adata.n_vars/2
+            except AttributeError:  # dense matrix/array
+                p = (np.sum(adata.layers["unspliced"] > 0)
+                    + (np.sum(adata.layers["spliced"] > 0)))/adata.n_obs/adata.n_vars/2
             self._set_lr(p)
             print(f'Learning Rate based on Data Sparsity: {self.config["learning_rate"]:.4f}')
         self._set_sigma_pos(adata.obsm[spatial_key])
@@ -2304,9 +2326,12 @@ class VAE(VanillaVAE):
                                       self.validation_idx,
                                       self.test_idx,
                                       self.device,
+                                      edge_attr,
                                       self.batch_,
                                       self.config['enable_edge_weight'],
                                       self.config['normalize_pos'])
+        if edge_attr is not None:
+            self.config['dim_edge'] = edge_attr.shape[-1]
 
         # Automatically set test iteration if not given
         if self.config["test_iter"] is None:

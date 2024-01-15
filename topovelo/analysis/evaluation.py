@@ -588,7 +588,7 @@ def post_analysis(adata,
     random_state = 42 if 'random_state' not in kwargs else kwargs['random_state']
     np.random.seed(random_state)
     # dpi
-    set_dpi (dpi)
+    set_dpi(dpi)
     if figure_path is not None:
         makedirs(figure_path, exist_ok=True)
     # Retrieve data
