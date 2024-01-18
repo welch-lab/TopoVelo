@@ -2231,6 +2231,91 @@ class VAE(VanillaVAE):
             if mode == 'train':
                 self.decoder.net_coord.train()
 
+    def _set_config(self, adata, config, spatial_key):
+        """Set the configuration of the model.
+
+        Args:
+            adata (AnnData): Annotated data matrix.
+            config (dict): Configuration dictionary.
+            spatial_key (str): Key in adata.obsm storing the spatial coordinates.
+        """
+        self.load_config(config)
+        if self.config["learning_rate"] is None:
+            try:
+                p = (np.sum(adata.layers["unspliced"].A > 0)
+                    + (np.sum(adata.layers["spliced"].A > 0)))/adata.n_obs/adata.n_vars/2
+            except AttributeError:  # dense matrix/array
+                p = (np.sum(adata.layers["unspliced"] > 0)
+                    + (np.sum(adata.layers["spliced"] > 0)))/adata.n_obs/adata.n_vars/2
+            self._set_lr(p)
+            print(f'Learning Rate based on Data Sparsity: {self.config["learning_rate"]:.4f}')
+        self._set_sigma_pos(adata.obsm[spatial_key])
+        self._set_epsilon_ball(adata.obsm[spatial_key])
+        # Automatically set test iteration if not given
+        if self.config["test_iter"] is None:
+            self.config["test_iter"] = len(self.train_idx)//self.config["batch_size"]*2
+
+    def _set_cell_type_label(self, adata, cluster_key):
+        """Set cell type labels.
+
+        Args:
+            adata (AnnData): Annotated data matrix.
+            cluster_key (str): Key in adata.obs storing the cell type annotation.
+        """
+        cell_labels_raw = (adata.obs[cluster_key].to_numpy() if cluster_key in adata.obs
+                           else np.array(['Unknown' for i in range(adata.n_obs)]))
+        # Encode the labels
+        cell_types_raw = np.unique(cell_labels_raw)
+        self.label_dic, self.label_dic_rev = encode_type(cell_types_raw)
+
+        self.n_type = len(cell_types_raw)
+        self.cell_labels = np.array([self.label_dic[x] for x in cell_labels_raw])
+        self.cell_types = np.array([self.label_dic[cell_types_raw[i]] for i in range(self.n_type)])
+
+    def _load_data(self, adata, graph, spatial_key, us_keys, embed, edge_attr):
+        """Retreive data from adata and build training/validation datasets.
+
+        Args:
+            adata (AnnData): Annotated data matrix.
+            spatial_key (str): Key in adata.obsm storing the spatial coordinates.
+            us_keys (list): Keys in adata.layers storing the unspliced and spliced count matrices.
+            embed (str): Low dimensional embedding in adata.obsm.
+                The actual key storing the embedding should be f'X_{embed}'
+
+        Returns:
+            bool : Whether the data is successfully loaded.
+        """
+        if self.is_discrete:
+            U, S = np.array(adata.layers['unspliced'].todense()), np.array(adata.layers['spliced'].todense())
+            X = np.concatenate((U, S), 1).astype(int)
+        elif us_keys is not None:
+            U, S = adata.layers[us_keys[0]], adata.layers[us_keys[1]]
+            if isinstance(U, csr_matrix) or isinstance(U, csc_matrix) or isinstance(U, coo_matrix):
+                U, S = U.A, S.A
+            X = np.concatenate((U, S), 1)
+        else:
+            X = np.concatenate((adata.layers['Mu'], adata.layers['Ms']), 1).astype(float)
+        try:
+            self.x_embed = adata.obsm[f"X_{embed}"]
+        except KeyError:
+            print("Embedding not found! Set to None.")
+            self.x_embed = np.nan*np.ones((adata.n_obs, 2))
+        
+        print("*********               Creating a Graph Dataset              *********")
+        self.graph_data = SCGraphData(X,
+                                      self.cell_labels,
+                                      graph,
+                                      adata.obsm[spatial_key],
+                                      self.train_idx,
+                                      self.validation_idx,
+                                      self.test_idx,
+                                      self.device,
+                                      edge_attr,
+                                      self.batch_,
+                                      self.config['enable_edge_weight'],
+                                      self.config['normalize_pos'])
+        print("*********                      Finished.                      *********")
+
     def train(self,
               adata,
               graph,
@@ -2275,69 +2360,11 @@ class VAE(VanillaVAE):
             Indices of samples included in the test set (unseen data)
         """
         seed_everything(random_state)
-        self.load_config(config)
-        if self.config["learning_rate"] is None:
-            try:
-                p = (np.sum(adata.layers["unspliced"].A > 0)
-                    + (np.sum(adata.layers["spliced"].A > 0)))/adata.n_obs/adata.n_vars/2
-            except AttributeError:  # dense matrix/array
-                p = (np.sum(adata.layers["unspliced"] > 0)
-                    + (np.sum(adata.layers["spliced"] > 0)))/adata.n_obs/adata.n_vars/2
-            self._set_lr(p)
-            print(f'Learning Rate based on Data Sparsity: {self.config["learning_rate"]:.4f}')
-        self._set_sigma_pos(adata.obsm[spatial_key])
-        self._set_epsilon_ball(adata.obsm[spatial_key])
+        self._set_config(adata, config, spatial_key)
+        self._set_cell_type_label(adata, cluster_key)
+        self._load_data(adata, graph, spatial_key, us_keys, embed, edge_attr)
 
         print("--------------------------- Train a TopoVelo ---------------------------")
-        # Get data loader
-        if self.is_discrete:
-            U, S = np.array(adata.layers['unspliced'].todense()), np.array(adata.layers['spliced'].todense())
-            X = np.concatenate((U, S), 1).astype(int)
-        elif us_keys is not None:
-            U, S = adata.layers[us_keys[0]], adata.layers[us_keys[1]]
-            if isinstance(U, csr_matrix) or isinstance(U, csc_matrix) or isinstance(U, coo_matrix):
-                U, S = U.A, S.A
-            X = np.concatenate((U, S), 1)
-        else:
-            X = np.concatenate((adata.layers['Mu'], adata.layers['Ms']), 1).astype(float)
-        try:
-            Xembed = adata.obsm[f"X_{embed}"]
-        except KeyError:
-            print("Embedding not found! Set to None.")
-            Xembed = np.nan*np.ones((adata.n_obs, 2))
-            plot = False
-
-        cell_labels_raw = (adata.obs[cluster_key].to_numpy() if cluster_key in adata.obs
-                           else np.array(['Unknown' for i in range(adata.n_obs)]))
-        # Encode the labels
-        cell_types_raw = np.unique(cell_labels_raw)
-        self.label_dic, self.label_dic_rev = encode_type(cell_types_raw)
-
-        self.n_type = len(cell_types_raw)
-        self.cell_labels = np.array([self.label_dic[x] for x in cell_labels_raw])
-        self.cell_types = np.array([self.label_dic[cell_types_raw[i]] for i in range(self.n_type)])
-
-        print("*********               Creating a Graph Dataset              *********")
-        self.graph_data = SCGraphData(X,
-                                      self.cell_labels,
-                                      graph,
-                                      adata.obsm[spatial_key],
-                                      self.train_idx,
-                                      self.validation_idx,
-                                      self.test_idx,
-                                      self.device,
-                                      edge_attr,
-                                      self.batch_,
-                                      self.config['enable_edge_weight'],
-                                      self.config['normalize_pos'])
-        if edge_attr is not None:
-            self.config['dim_edge'] = edge_attr.shape[-1]
-
-        # Automatically set test iteration if not given
-        if self.config["test_iter"] is None:
-            self.config["test_iter"] = len(self.train_idx)//self.config["batch_size"]*2
-        print("*********                      Finished.                      *********")
-
         gind, gene_plot = get_gene_index(adata.var_names, gene_plot)
         os.makedirs(figure_path, exist_ok=True)
 
@@ -2373,7 +2400,7 @@ class VAE(VanillaVAE):
                 stop_training = self.train_epoch(optimizer, None)
 
             if plot and (epoch == 0 or (epoch+1) % self.config["save_epoch"] == 0):
-                elbo_train = self.test(Xembed[self.train_idx],
+                elbo_train = self.test(self.x_embed[self.train_idx],
                                        f"train{epoch+1}",
                                        False,
                                        gind,
@@ -2439,7 +2466,7 @@ class VAE(VanillaVAE):
                     stop_training = self.train_epoch(optimizer_post, None)
 
                 if plot and (epoch == 0 or (epoch+count_epoch+1) % self.config["save_epoch"] == 0):
-                    elbo_train = self.test(Xembed[self.train_idx],
+                    elbo_train = self.test(self.x_embed[self.train_idx],
                                            f"train{epoch+count_epoch+1}",
                                            False,
                                            gind,
@@ -2510,14 +2537,14 @@ class VAE(VanillaVAE):
                       f"Total Time = {convert_time(time.time()-start)}\n")
                 break
 
-        elbo_train = self.test(Xembed[self.train_idx],
+        elbo_train = self.test(self.x_embed[self.train_idx],
                                "final-train",
                                False,
                                gind,
                                gene_plot,
                                plot,
                                figure_path)
-        elbo_test = self.test(Xembed[self.validation_idx],
+        elbo_test = self.test(self.x_embed[self.validation_idx],
                               "final-test",
                               True,
                               gind,
@@ -2664,6 +2691,7 @@ class VAE(VanillaVAE):
                         graph,
                         spatial_key,
                         key,
+                        edge_attr=None,
                         config={},
                         cluster_key="clusters",
                         us_keys=None,
@@ -2675,64 +2703,14 @@ class VAE(VanillaVAE):
             adata (:class:`anndata.AnnData`): AnnData object.
             graph (:class:`numpy.ndarray`): Spatial graph.
             spatial_key (str): Key for extracting spatial coordinates.
-            us_keys (tuple[str]): Key for unspliced and spliced count matrices in .layers
+            key (str): Key for storing pretrained model parameters in AnnData
+            
         """
         seed_everything(random_state)
-        self.load_config(config)
-        if self.config["learning_rate"] is None:
-            p = (np.sum(adata.layers["unspliced"].A > 0)
-                 + (np.sum(adata.layers["spliced"].A > 0)))/adata.n_obs/adata.n_vars/2
-            self._set_lr(p)
-            print(f'Learning Rate based on Data Sparsity: {self.config["learning_rate"]:.4f}')
-        self._set_sigma_pos(adata.obsm[spatial_key])
-        self._set_epsilon_ball(adata.obsm[spatial_key])
-
         print("--------------------------- Reloading a TopoVelo ---------------------------")
-        # Get data loader
-        if self.is_discrete:
-            U, S = np.array(adata.layers['unspliced'].todense()), np.array(adata.layers['spliced'].todense())
-            X = np.concatenate((U, S), 1).astype(int)
-        elif us_keys is not None:
-            U, S = adata.layers[us_keys[0]], adata.layers[us_keys[1]]
-            if isinstance(U, csr_matrix) or isinstance(U, csc_matrix) or isinstance(U, coo_matrix):
-                U, S = U.A, S.A
-            X = np.concatenate((U, S), 1)
-        else:
-            X = np.concatenate((adata.layers['Mu'], adata.layers['Ms']), 1).astype(float)
-        try:
-            Xembed = adata.obsm[f"X_{embed}"]
-        except KeyError:
-            print("Embedding not found! Set to None.")
-            Xembed = np.nan*np.ones((adata.n_obs, 2))
-            plot = False
-
-        cell_labels_raw = (adata.obs[cluster_key].to_numpy() if cluster_key in adata.obs
-                           else np.array(['Unknown' for i in range(adata.n_obs)]))
-        # Encode the labels
-        cell_types_raw = np.unique(cell_labels_raw)
-        self.label_dic, self.label_dic_rev = encode_type(cell_types_raw)
-
-        self.n_type = len(cell_types_raw)
-        self.cell_labels = np.array([self.label_dic[x] for x in cell_labels_raw])
-        self.cell_types = np.array([self.label_dic[cell_types_raw[i]] for i in range(self.n_type)])
-
-        print("*********               Creating a Graph Dataset              *********")
-        self.graph_data = SCGraphData(X,
-                                      self.cell_labels,
-                                      graph,
-                                      adata.obsm[spatial_key],
-                                      self.train_idx,
-                                      self.validation_idx,
-                                      self.test_idx,
-                                      self.device,
-                                      self.batch_,
-                                      self.config['enable_edge_weight'],
-                                      self.config['normalize_pos'],
-                                      random_state)
-        
-        # Automatically set test iteration if not given
-        if self.config["test_iter"] is None:
-            self.config["test_iter"] = len(self.train_idx)//self.config["batch_size"]*2
+        self._set_config(adata, config, spatial_key)
+        self._set_cell_type_label(adata, cluster_key)
+        self._load_data(adata, spatial_key, us_keys, embed, edge_attr)
 
         self.use_knn = True
         self.train_stage = 2
@@ -2836,7 +2814,7 @@ class VAE(VanillaVAE):
         return
 
     def test(self,
-             Xembed,
+             x_embed,
              testid=0,
              test_mode=True,
              gind=[],
@@ -2848,7 +2826,7 @@ class VAE(VanillaVAE):
 
         Arguments
         ---------
-        Xembed : `numpy array`
+        x_embed : `numpy array`
             Low-dimensional embedding for plotting
         testid : str or int, optional
             Used to name the figures.
@@ -2880,7 +2858,7 @@ class VAE(VanillaVAE):
 
         if plot:
             # Plot Time
-            plot_time(t, Xembed, save=f"{path}/time-{testid}-TopoVelo.png")
+            plot_time(t, x_embed, save=f"{path}/time-{testid}-TopoVelo.png")
             cell_labels = np.array([self.label_dic_rev[x] for x in self.cell_labels])
             cell_labels = cell_labels[self.validation_idx] if test_mode else cell_labels[self.train_idx]
             # Plot u/s-t and phase portrait for each gene
