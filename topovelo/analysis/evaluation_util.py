@@ -67,7 +67,7 @@ def cell_state(adata, method, key, gene_indices=None, **kwargs):
         toff = toff[gene_indices]
         ton = ton[gene_indices]
         cell_state = (t.reshape(-1, 1) > toff) + (t.reshape(-1, 1) < ton)*2
-    elif method in ['VeloVAE', 'VeloVAE (Rate Prior)', 'Discrete VeloVAE', 'Discrete VeloVAE (Rate Prior)']:
+    elif 'VeloVAE' in method or 'TopoVelo' in method:
         rho = adata.layers[f"{key}_rho"][:, gene_indices]
         t = adata.obs[f"{key}_time"].to_numpy()
         mask_induction = rho > 0.01

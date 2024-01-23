@@ -392,14 +392,7 @@ class Decoder(nn.Module):
                                                 n_head=n_head,
                                                 xavier_gain=xavier_gain,
                                                 enable_sigmoid=False).to(self.device)
-        """
-        self.net_coord = MLPDecoder(dim_z+3,
-                                    2,
-                                    dim_cond,
-                                    spatial_hidden_size,
-                                    1.0,
-                                    enable_sigmoid=False)
-        """
+
         if self.checkpoint is not None:
             self.alpha = nn.Parameter(torch.empty(self.params_shape))
             self.beta = nn.Parameter(torch.empty(self.params_shape))

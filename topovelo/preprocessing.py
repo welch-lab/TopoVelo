@@ -321,7 +321,7 @@ def preprocess(adata,
         scanpy.tl.umap(adata, min_dist=umap_min_dist)
     
 
-def build_spatial_graph(adata, spatial_key, graph_key='spatial_graph', n_neighbors=16, method='KNN'):
+def build_spatial_graph(adata, spatial_key, graph_key='spatial_graph', n_neighbors=16, method='KNN', dist_cutoff=None):
     """Build spatial graph.
 
     Args:
@@ -332,18 +332,49 @@ def build_spatial_graph(adata, spatial_key, graph_key='spatial_graph', n_neighbo
             Defaults to 16.
         method (str): Method for building spatial graph.
             "KNN" for KNN graph, "Delaunay" for Delaunay triangulation.
+        dist_cutoff (float): Distance cutoff.
+            Remove edges with distance larger than the percentage with a value of dist_cutoff.
+            Defaults to None.
     """
     if method == 'KNN':
         x_pos = adata.obsm[spatial_key]
         nn = NearestNeighbors(n_neighbors=n_neighbors)
         nn.fit(x_pos)
-        adata.obsp[graph_key] = nn.kneighbors_graph()
+        
+        if isinstance(dist_cutoff, float) or isinstance(dist_cutoff, int):
+            dist = nn.kneighbors_graph(mode='distance')
+            nonzero_dist = dist.data
+            thred = np.percentile(nonzero_dist, dist_cutoff)
+            adata.obsp[graph_key] = nn.kneighbors_graph().multiply(dist < thred)
+        elif dist_cutoff == 'auto':
+            dist = nn.kneighbors_graph(mode='distance')
+            nonzero_dist = dist.data
+            q1, q3 = np.quantile(nonzero_dist, 0.25), np.quantile(nonzero_dist, 0.75)
+            thred = q3 + 1.5 * (q3 - q1)
+            adata.obsp[graph_key] = nn.kneighbors_graph().multiply(dist < thred)
+        else:
+            adata.obsp[graph_key] = nn.kneighbors_graph()
     elif method == 'Delaunay':
         x_pos = adata.obsm[spatial_key]
         tri = Delaunay(x_pos)
-        adata.obsp[graph_key] = csr_matrix((np.zeros((len(tri.vertex_neighbor_vertices[1]))),
-                                                  tri.vertex_neighbor_vertices[1],
-                                                  tri.vertex_neighbor_vertices[0]))
+        adata.obsp[graph_key] = csr_matrix((np.ones((len(tri.vertex_neighbor_vertices[1]))),
+                                            tri.vertex_neighbor_vertices[1],
+                                            tri.vertex_neighbor_vertices[0]))
+        if isinstance(dist_cutoff, float) or isinstance(dist_cutoff, int):
+            idx_1, idx_2 = adata.obsp[graph_key].nonzero()
+            dist = np.linalg.norm(x_pos[idx_1] - x_pos[idx_2], axis=1)
+            thred = np.percentile(dist, dist_cutoff)
+            mask = (dist < thred).astype(int)
+            mtx = csr_matrix((mask, (idx_1, idx_2)))
+            adata.obsp[graph_key] = adata.obsp[graph_key].multiply(mtx)
+        elif dist_cutoff == 'auto':
+            idx_1, idx_2 = adata.obsp[graph_key].nonzero()
+            dist = np.linalg.norm(x_pos[idx_1] - x_pos[idx_2], axis=1)
+            q1, q3 = np.quantile(dist, 0.25), np.quantile(dist, 0.75)
+            thred = q3 + 1.5 * (q3 - q1)
+            mask = (dist < thred).astype(int)
+            mtx = csr_matrix((mask, (idx_1, idx_2)))
+            adata.obsp[graph_key] = adata.obsp[graph_key].multiply(mtx)
 
 
 def pick_ref_batch(adata, batch_key, percent=95, min_r2=0.01, eps=1e-3):

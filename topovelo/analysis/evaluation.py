@@ -789,6 +789,7 @@ def post_analysis(adata,
                        dot_size=dot_size,
                        down_sample=min(10, max(1, adata.n_obs//5000)),
                        grid_size=(n_row, n_col),
+                       real_aspect_ratio=True,
                        color_map=time_colormap,
                        save=(None if figure_path is None else
                              f"{figure_path}/{test_id}_time.{save_format}"))

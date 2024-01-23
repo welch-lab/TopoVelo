@@ -15,6 +15,10 @@ TAB20 = list(plt.get_cmap("tab20").colors)
 TAB20B = list(plt.get_cmap("tab20b").colors)
 TAB20C = list(plt.get_cmap("tab20c").colors)
 RAINBOW = [plt.cm.rainbow(i) for i in range(256)]
+CATEGORICAL = ["#399283", "#eb1241", "#60df82", "#8a2f6b", "#34f50e", "#dc5dd8",
+               "#559310", "#3f16f9", "#a9e81a", "#333dcd", "#ead624", "#2d5192",
+               "#f79302", "#9693f7", "#2c4e2f", "#ffc4de", "#683d0d", "#54b2fc",
+               "#8a1b07", "#accebd", "#123abc"]
 
 markers = ["o", "x", "s", "v", "+", "d", "1", "*", "^", "p", "h", "8", "1", "2", "|"]
 # change dpi via the function set_dpi()
@@ -28,7 +32,7 @@ def set_dpi(dpi):
 def _set_figsize(X_embed, real_aspect_ratio=False, width=7.5):
     figsize = (width, width*0.75)
     if real_aspect_ratio:
-        aspect_ratio = (X_embed[:, 0].max() - X_embed[:, 0].min()) / (X_embed[:, 1].max() - X_embed[:, 1].min())
+        aspect_ratio = (X_embed[:, 1].max() - X_embed[:, 1].min()) / (X_embed[:, 0].max() - X_embed[:, 0].min())
         figsize = (width, width*aspect_ratio)
     return figsize
 
@@ -51,7 +55,7 @@ def get_colors(n, color_map=None):
         if n <= 10:
             return TAB10[:n]
         elif n <= 20:
-            return TAB20[:n]
+            return CATEGORICAL
         elif n <= 40:
             TAB40 = TAB20B+TAB20C
             return TAB40[:n]
@@ -314,13 +318,42 @@ def plot_phase(u, s,
     save_fig(fig, save, (lgd,))
 
 
+def plot_cluster_axis(ax,
+                      X_embed,
+                      cell_labels,
+                      palette=None,
+                      color_map=None,
+                      embed=None,
+                      real_aspect_ratio=False,
+                      markersize=20):
+    """Same as plot_cluster but returns the axes object.
+    """
+    cell_types = np.unique(cell_labels)
+    x = X_embed[:, 0]
+    y = X_embed[:, 1]
+    x_range = x.max()-x.min()
+    y_range = y.max()-y.min()
+    if palette is None:
+        palette = get_colors(len(cell_types), color_map)
+
+    n_char_max = np.max([len(x) for x in cell_types])
+    for i, typei in enumerate(cell_types):
+        mask = cell_labels == typei
+        xbar, ybar = np.mean(x[mask]), np.mean(y[mask])
+        ax.scatter(x[mask], y[mask], s=markersize, color=palette[i % len(palette)], edgecolors='none', label=typei)
+    if embed is not None:
+        ax.set_xlabel(f'{embed} 1')
+        ax.set_ylabel(f'{embed} 2')
+    return ax
+
+
 def plot_cluster(X_embed,
                  cell_labels,
                  color_map=None,
                  embed=None,
                  real_aspect_ratio=False,
                  markersize=20,
-                 save=None):
+                 save=None,):
     """Plot the predicted cell types from the encoder
 
     Args:
