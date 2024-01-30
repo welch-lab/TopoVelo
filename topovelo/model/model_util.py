@@ -1322,7 +1322,8 @@ def get_x0(U,
           else np.tile(u0_init, (N, 1)))
     s0 = (np.zeros((N, S.shape[1])) if s0_init is None
           else np.tile(s0_init, (N, 1)))
-    xy0 = np.zeros((N, 2))
+    d = xy.shape[1]
+    xy0 = np.zeros((N, d))
     t0 = np.ones((N))*(t.min() - dt[0])
     # Used as the default u/s counts at the final time point
     t_98 = np.quantile(t, 0.98)
@@ -1364,11 +1365,53 @@ def knnx0_index_batch(t,
                       adaptive=0.0,
                       std_t=None,
                       forward=False,
-                      hist_eq=False):
+                      hist_eq=False,
+                      connect_adjacent=False):
+    """Find the k-nearest neighbors within each batch
+
+    Args:
+        t (:class:`numpy.ndarray`):  
+            Latent time of cells in the training set
+        z (:class:`numpy.ndarray`):
+            Latent space of cells in the training set
+        xy (:class:`numpy.ndarray`):
+            Spatial coordinates of cells in the training set
+        batch_label (:class:`numpy.ndarray`):
+            Batch label of cells in the training set
+        t_query (:class:`numpy.ndarray`):
+            Latent time of cells in the query set
+        z_query (:class:`numpy.ndarray`):
+            Latent space of cells in the query set
+        xy_query (:class:`numpy.ndarray`):
+            Spatial coordinates of cells in the query set
+        batch_label_query (:class:`numpy.ndarray`):
+            Batch label of cells in the query set
+        dt (tuple):
+            Time window for finding neighbors
+        k (int):
+            Number of neighbors
+        radius (float):
+            Radius for finding neighbors
+        adaptive (float, optional):
+            Whether to use adaptive time window. Defaults to 0.0.
+        std_t (:class:`numpy.ndarray`, optional):
+            Standard deviation of latent time. Defaults to None.
+        forward (bool, optional):
+            Whether to use forward time window. Defaults to False.
+        hist_eq (bool, optional):
+            Whether to perform histogram equalization. Defaults to False.
+        connect_adjacent (bool, optional):
+            Whether to connect adjacent batches. Defaults to False.          
+    """
     neighbor_index = [[] for i in range(len(t_query))]
     unique_batches = np.unique(batch_label)
-    for batch in unique_batches:
+    for i, batch in enumerate(unique_batches):
         batch_idx = np.where(batch_label == batch)[0]
+        if connect_adjacent:
+            if i > 0:
+                batch_idx = np.concatenate([batch_idx, np.where(batch_label == batch-1)[0]])
+            if i < len(unique_batches)-1:
+                batch_idx = np.concatenate([batch_idx, np.where(batch_label == batch+1)[0]])
         batch_idx_query = np.where(batch_label_query == batch)[0]
         batch_neighbor_index = knnx0_index(t[batch_idx],
                                            z[batch_idx],

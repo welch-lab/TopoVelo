@@ -324,6 +324,7 @@ class Decoder(nn.Module):
                  attention=False,
                  n_head=5,
                  dim_cond=0,
+                 dim_coord=2,
                  dim_edge=None,
                  batch_idx=None,
                  ref_batch=None,
@@ -362,9 +363,9 @@ class Decoder(nn.Module):
         self.init_method = init_method
         self.init_key = init_key
         self.checkpoint = checkpoint
-        self.construct_nn(adata, dim_z, dim_cond, dim_edge, N1, N2, spatial_hidden_size, p, n_head, xavier_gain, **kwargs)
+        self.construct_nn(adata, dim_z, dim_cond, dim_coord, dim_edge, N1, N2, spatial_hidden_size, p, n_head, xavier_gain, **kwargs)
 
-    def construct_nn(self, adata, dim_z, dim_cond, dim_edge, N1, N2, spatial_hidden_size, p, n_head, xavier_gain, **kwargs):
+    def construct_nn(self, adata, dim_z, dim_cond, dim_coord, dim_edge, N1, N2, spatial_hidden_size, p, n_head, xavier_gain, **kwargs):
         self.set_shape(self.n_gene, dim_cond)
         if self.graph_decoder:
             self.net_rho = GraphDecoder(dim_z+dim_cond,
@@ -385,8 +386,8 @@ class Decoder(nn.Module):
             self.net_rho = MLPDecoder(dim_z, self.n_gene, dim_cond, hidden_size=(N1, N2)).to(self.device)
             self.net_rho2 = MLPDecoder(dim_z, self.n_gene, dim_cond, hidden_size=(N1, N2)).to(self.device)
         
-        self.net_coord = MultiLayerGraphDecoder(dim_z+dim_cond+4,
-                                                2,
+        self.net_coord = MultiLayerGraphDecoder(dim_z+dim_cond+2+dim_coord,
+                                                dim_coord,
                                                 hidden_size=spatial_hidden_size,
                                                 attention=self.attention,
                                                 n_head=n_head,
@@ -583,6 +584,15 @@ class Decoder(nn.Module):
                 self.t_init = np.quantile(T_eq, kwargs["init_t_quant"], 1)
             else:
                 self.t_init = np.quantile(T_eq, 0.5, 1)
+
+            # Spatially smooth the initial time
+            if 'spatial_graph_key' in kwargs:
+                adj_mtx = adata.obsp[kwargs['spatial_graph_key']].A[self.train_idx][:, self.train_idx]
+                total_nbs = adj_mtx.sum(1).reshape(-1, 1)
+                total_nbs[total_nbs <= 0] = 1
+                adj_mtx = adj_mtx / total_nbs
+                self.t_init = np.matmul(adj_mtx, self.t_init)
+
             self.toff_init = get_ts_global(self.t_init, u/scaling_u_full, s/scaling_s_full, 95)
             self.alpha_init, self.beta_init, self.gamma_init, self.ton_init = reinit_params(u/scaling_u_full,
                                                                                             s/scaling_s_full,
@@ -603,7 +613,7 @@ class Decoder(nn.Module):
         if self.init_ton_zero:
             self.ton = nn.Parameter(torch.zeros(G, device=self.device))
         else:
-            self.ton = nn.Parameter(torch.tensor(ton+1e-10, device=self.device))
+            self.ton = nn.Parameter(torch.tensor(self.ton_init+1e-10, device=self.device))
         self.register_buffer('sigma_u', torch.tensor(np.log(sigma_u), device=self.device))
         self.register_buffer('sigma_s', torch.tensor(np.log(sigma_s), device=self.device))
         self.register_buffer('zero_vec', torch.zeros_like(self.u0, device=self.device))
@@ -919,6 +929,7 @@ class VAE(VanillaVAE):
                  tmax,
                  dim_z,
                  dim_cond=0,
+                 dim_coord=2,
                  dim_edge=None,
                  device='cpu',
                  hidden_size=(500, 250, 500),
@@ -931,6 +942,7 @@ class VAE(VanillaVAE):
                  batch_key=None,
                  ref_batch=None,
                  slice_key=None,
+                 discrete_dim=None,
                  init_method="steady",
                  init_key=None,
                  tprior=None,
@@ -980,14 +992,13 @@ class VAE(VanillaVAE):
             Enable the full variational Bayes
         discrete : bool, optional
             Enable the discrete count model
-        init_method : {'random', 'tprior', 'steady}, optional
+        init_method : {'tprior', 'steady}, optional
             Initialization method.
             Should choose from
-            (1) random: random initialization
-            (2) tprior: use the capture time to estimate rate parameters. Cell time will be
+            (1) tprior: use the capture time to estimate rate parameters. Cell time will be
                         randomly sampled with the capture time as the mean. The variance can
                         be controlled by changing 'time_overlap' in config.
-            (3) steady: use the steady-state model to estimate gamma, alpha and assume beta = 1.
+            (2) steady: use the steady-state model to estimate gamma, alpha and assume beta = 1.
                         After this, a global cell time is estimated by taking the quantile over
                         all local times. Finally, rate parameters are reinitialized using the
                         global cell time.
@@ -1088,6 +1099,7 @@ class VAE(VanillaVAE):
         self.encode_batch(adata)
         if slice_key is None:
             slice_key = batch_key
+        self.discrete_dim = discrete_dim
         self.encode_slice(adata, slice_key)
 
         self.dim_z = dim_z
@@ -1108,6 +1120,7 @@ class VAE(VanillaVAE):
                                attention=attention,
                                n_head=n_head,
                                dim_cond=self.n_batch,
+                               dim_coord=dim_coord,
                                dim_edge=dim_edge,
                                batch_idx=self.batch_,
                                ref_batch=self.ref_batch,
@@ -2090,14 +2103,25 @@ class VAE(VanillaVAE):
             u0_init = np.mean(self.graph_data.data.x[init_mask][:, :G].detach().cpu().numpy(), 0)
             s0_init = np.mean(self.graph_data.data.x[init_mask][:, G:].detach().cpu().numpy(), 0)
         xy = self.graph_data.xy.detach().cpu().numpy()
+        # Take out the discretized dimension (for 3D multi-slice data)
+        d = xy.shape[1]
+        if self.discrete_dim is None:
+            knn_dim = np.array(range(d))
+        else:
+            if self.discrete_dim == 0:
+                knn_dim = np.array(range(1, d))
+            else:
+                knn_dim = np.array(range(self.discrete_dim))
+                if self.discrete_dim < d-1:
+                    knn_dim = np.concatenate((knn_dim, np.array(range(self.discrete_dim+1, d))))
         if self.x0_index is None:
             if self.slice_label is None:
                 self.x0_index = knnx0_index(t[self.train_idx],
                                             z[self.train_idx],
-                                            xy[self.train_idx],
+                                            xy[self.train_idx][:, knn_dim],
                                             t,
                                             z,
-                                            xy,
+                                            xy[:, knn_dim],
                                             dt,
                                             self.config["n_neighbors"],
                                             self.epsilon_ball,
@@ -2105,11 +2129,11 @@ class VAE(VanillaVAE):
             else:
                 self.x0_index = knnx0_index_batch(t[self.train_idx],
                                                   z[self.train_idx],
-                                                  xy[self.train_idx],
+                                                  xy[self.train_idx][:, knn_dim],
                                                   self.slice_label[self.train_idx],
                                                   t,
                                                   z,
-                                                  xy,
+                                                  xy[:, knn_dim],
                                                   self.slice_label,
                                                   dt,
                                                   self.config["n_neighbors"],
@@ -2127,29 +2151,31 @@ class VAE(VanillaVAE):
             if self.slice_label is None:
                 self.x1_index = knnx0_index(t[self.train_idx],
                                             z[self.train_idx],
-                                            xy[self.train_idx],
+                                            xy[self.train_idx][:, knn_dim],
                                             t,
                                             z,
-                                            xy,
+                                            xy[:, knn_dim],
                                             dt,
                                             self.config["n_neighbors"],
                                             self.epsilon_ball,
                                             forward=True,
-                                            hist_eq=True)
+                                            hist_eq=True,
+                                            connect_adjacent=isinstance(self.discrete_dim, int))
             else:
-                self.x1_index = knnx0_index(t[self.train_idx],
-                                            z[self.train_idx],
-                                            xy[self.train_idx],
-                                            self.slice_label[self.train_idx],
-                                            t,
-                                            z,
-                                            xy,
-                                            self.slice_label,
-                                            dt,
-                                            self.config["n_neighbors"],
-                                            self.epsilon_ball,
-                                            forward=True,
-                                            hist_eq=True)
+                self.x1_index = knnx0_index_batch(t[self.train_idx],
+                                                  z[self.train_idx],
+                                                  xy[self.train_idx][:, knn_dim],
+                                                  self.slice_label[self.train_idx],
+                                                  t,
+                                                  z,
+                                                  xy[:, knn_dim],
+                                                  self.slice_label,
+                                                  dt,
+                                                  self.config["n_neighbors"],
+                                                  self.epsilon_ball,
+                                                  forward=True,
+                                                  hist_eq=True,
+                                                  connect_adjacent=isinstance(self.discrete_dim, int))
             u1, s1, xy1, t1 = get_x0(out["uhat"][self.train_idx],
                                      out["shat"][self.train_idx],
                                      xy[self.train_idx],
