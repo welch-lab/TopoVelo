@@ -5,7 +5,7 @@ from tqdm import tqdm
 from sklearn.neighbors import NearestNeighbors
 from .model.scvelo_util import leastsq_NxN, R_squared
 from scipy.spatial import Delaunay
-from scipy.sparse import csr_matrix
+from scipy.sparse import csr_matrix, eye
 
 
 def count_peak_expression(adata, cluster_key="clusters"):
@@ -319,9 +319,15 @@ def preprocess(adata,
         if "X_umap" in adata.obsm:
             print("Warning: Overwriting existing UMAP coordinates.")
         scanpy.tl.umap(adata, min_dist=umap_min_dist)
-    
 
-def build_spatial_graph(adata, spatial_key, graph_key='spatial_graph', n_neighbors=16, method='KNN', dist_cutoff=None):
+
+def build_spatial_graph(adata,
+                        spatial_key,
+                        graph_key='spatial_graph',
+                        n_neighbors=16,
+                        method='KNN',
+                        dist_cutoff=None,
+                        radius=None):
     """Build spatial graph.
 
     Args:
@@ -335,6 +341,9 @@ def build_spatial_graph(adata, spatial_key, graph_key='spatial_graph', n_neighbo
         dist_cutoff (float): Distance cutoff.
             Remove edges with distance larger than the percentage with a value of dist_cutoff.
             Defaults to None.
+        radius (float): Radius of the neighborhood.
+            We omit all neighbors with distance larger than radius.
+            Defaults to None.
     """
     if method == 'KNN':
         x_pos = adata.obsm[spatial_key]
@@ -345,15 +354,28 @@ def build_spatial_graph(adata, spatial_key, graph_key='spatial_graph', n_neighbo
             dist = nn.kneighbors_graph(mode='distance')
             nonzero_dist = dist.data
             thred = np.percentile(nonzero_dist, dist_cutoff)
+            if isinstance(radius, float) or isinstance(radius, int):
+                thred = min(thred, radius)
             adata.obsp[graph_key] = nn.kneighbors_graph().multiply(dist < thred)
+            
         elif dist_cutoff == 'auto':
             dist = nn.kneighbors_graph(mode='distance')
             nonzero_dist = dist.data
             q1, q3 = np.quantile(nonzero_dist, 0.25), np.quantile(nonzero_dist, 0.75)
             thred = q3 + 1.5 * (q3 - q1)
+            if isinstance(radius, float) or isinstance(radius, int):
+                thred = min(thred, radius)
             adata.obsp[graph_key] = nn.kneighbors_graph().multiply(dist < thred)
         else:
-            adata.obsp[graph_key] = nn.kneighbors_graph()
+            if isinstance(radius, float) or isinstance(radius, int):
+                dist = nn.kneighbors_graph(mode='distance')
+                nonzero_dist = dist.data
+                thred = radius
+                adata.obsp[graph_key] = nn.kneighbors_graph().multiply(dist < radius)
+            else:
+                adata.obsp[graph_key] = nn.kneighbors_graph()
+                thred = np.inf
+
     elif method == 'Delaunay':
         x_pos = adata.obsm[spatial_key]
         tri = Delaunay(x_pos)
@@ -375,6 +397,12 @@ def build_spatial_graph(adata, spatial_key, graph_key='spatial_graph', n_neighbo
             mask = (dist < thred).astype(int)
             mtx = csr_matrix((mask, (idx_1, idx_2)))
             adata.obsp[graph_key] = adata.obsp[graph_key].multiply(mtx)
+    # Record the parameters for building the spatial graph
+    adata.uns['spatial_graph_params'] = {}
+    adata.uns['spatial_graph_params']['method'] = method
+    adata.uns['spatial_graph_params']['n_neighbors'] = n_neighbors
+    adata.uns['spatial_graph_params']['dist_cutoff'] = dist_cutoff
+    adata.uns['spatial_graph_params']['radius'] = radius
 
 
 def pick_ref_batch(adata, batch_key, percent=95, min_r2=0.01, eps=1e-3):
