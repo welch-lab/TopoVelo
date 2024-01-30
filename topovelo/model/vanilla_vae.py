@@ -340,8 +340,7 @@ class VanillaVAE():
         self.sample = self.reparameterize
         if tprior is None:
             self.p_t = torch.stack([torch.ones(adata.n_obs, 1, device=self.device)*tmax*0.5,
-                                    torch.ones(adata.n_obs, 1, device=self.device)*tmax
-                                    * self.config["time_overlap"]]).float()
+                                    torch.ones(adata.n_obs, 1, device=self.device)*tmax*0.5]).float()
         else:
             print('Using informative time prior.')
             t = adata.obs[tprior].to_numpy()

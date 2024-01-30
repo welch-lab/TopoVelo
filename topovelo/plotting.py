@@ -15,10 +15,10 @@ TAB20 = list(plt.get_cmap("tab20").colors)
 TAB20B = list(plt.get_cmap("tab20b").colors)
 TAB20C = list(plt.get_cmap("tab20c").colors)
 RAINBOW = [plt.cm.rainbow(i) for i in range(256)]
-CATEGORICAL = ["#399283", "#eb1241", "#60df82", "#8a2f6b", "#34f50e", "#dc5dd8",
-               "#559310", "#3f16f9", "#a9e81a", "#333dcd", "#ead624", "#2d5192",
-               "#f79302", "#9693f7", "#2c4e2f", "#ffc4de", "#683d0d", "#54b2fc",
-               "#8a1b07", "#accebd", "#123abc"]
+CATEGORICAL = ["#4f8c9d", "#fa756b", "#20b465", "#ce2bbc", "#51f310", "#660081",
+               "#c9dd87", "#3f3369", "#f6bb86", "#0c4152", "#edb4ec", "#0b5313",
+               "#b0579a", "#f4d403", "#7d0af6", "#698e4e", "#fb2076", "#65e6f9",
+               "#74171f", "#b7c8e2", "#473a0a", "#7363e7", "#9f6c3b", "#1f84ec"]
 
 markers = ["o", "x", "s", "v", "+", "d", "1", "*", "^", "p", "h", "8", "1", "2", "|"]
 # change dpi via the function set_dpi()
@@ -54,8 +54,8 @@ def get_colors(n, color_map=None):
     if color_map is None:  # default color
         if n <= 10:
             return TAB10[:n]
-        elif n <= 20:
-            return CATEGORICAL
+        elif n <= 24:
+            return CATEGORICAL[:n]
         elif n <= 40:
             TAB40 = TAB20B+TAB20C
             return TAB40[:n]
@@ -488,7 +488,8 @@ def cellwise_vel(adata,
 
     uhat = adata.layers[f'{key}_uhat'][:, gidx]
     shat = adata.layers[f'{key}_shat'][:, gidx]
-    scaling = adata.var[f'{key}_scaling'].to_numpy()[gidx]
+    scaling_u = adata.var[f'{key}_scaling_u'].to_numpy()[gidx]
+    scaling_s = adata.var[f'{key}_scaling_s'].to_numpy()[gidx]
     rho = adata.layers[f'{key}_rho'][:, gidx]
     try:
         alpha = adata.var[f'{key}_alpha'].to_numpy()[gidx]
@@ -496,33 +497,36 @@ def cellwise_vel(adata,
     except KeyError:
         alpha = np.exp(adata.var[f'{key}_logmu_alpha'].to_numpy()[gidx])
         beta = np.exp(adata.var[f'{key}_logmu_beta'].to_numpy()[gidx])
-    vu = rho * alpha - beta * uhat / scaling
+    vu = rho * alpha - beta * uhat / scaling_u
     v = adata.layers[f'{key}_velocity'][:, gidx]
-    ax[0].plot(t, uhat/scaling, '.', color='grey', alpha=0.1)
-    ax[1].plot(t, shat, '.', color='grey', alpha=0.1)
+    ax[0].plot(t, uhat/scaling_u, '.', color='grey', alpha=0.1)
+    ax[1].plot(t, shat/scaling_s, '.', color='grey', alpha=0.1)
     if plot_raw:
         ax[0].plot(t[plot_indices], u[plot_indices], 'o', color='b', label="Raw Count")
         ax[1].plot(t[plot_indices], s[plot_indices], 'o', color='b')
     if dt > 0:
         ax[0].quiver(t[plot_indices],
-                     uhat[plot_indices]/scaling,
+                     uhat[plot_indices]/scaling_u,
                      dt*np.ones((len(plot_indices),)),
                      vu[plot_indices]*dt,
                      angles='xy')
         ax[1].quiver(t[plot_indices],
-                     shat[plot_indices],
+                     shat[plot_indices]/scaling_s,
                      dt*np.ones((len(plot_indices),)),
                      v[plot_indices]*dt,
                      angles='xy')
     for i, k in enumerate(plot_indices):
         if i == 0:
-            ax[0].plot([t0[k], t[k]], [u0[k]/scaling, uhat[k]/scaling], 'r-o', label='Prediction')
+            ax[0].plot([t0[k], t[k]], [u0[k]/scaling_u, uhat[k]/scaling_u], 'r-o', label='Prediction')
+            ax[0].plot([t0[k]], [u0[k]/scaling_u], 'co', label='Initial Condition')
         else:
-            ax[0].plot([t0[k], t[k]], [u0[k]/scaling, uhat[k]/scaling], 'r-o')
-        ax[1].plot([t0[k], t[k]], [s0[k], shat[k]], 'r-o')
+            ax[0].plot([t0[k], t[k]], [u0[k]/scaling_u, uhat[k]/scaling_u], 'r-o')
+            ax[0].plot([t0[k]], [u0[k]/scaling_u], 'co')
+        ax[1].plot([t0[k], t[k]], [s0[k]/scaling_s, shat[k]/scaling_s], 'r-o')
+        ax[1].plot([t0[k]], [s0[k]/scaling_s], 'co')
         if plot_raw:
-            ax[0].plot(t[k]*np.ones((2,)), [min(u[k], uhat[k]/scaling), max(u[k], uhat[k]/scaling)], 'b--')
-            ax[1].plot(t[k]*np.ones((2,)), [min(s[k], shat[k]), max(s[k], shat[k])], 'b--')
+            ax[0].plot(t[k]*np.ones((2,)), [min(u[k], uhat[k]/scaling_u), max(u[k], uhat[k]/scaling_u)], 'b--')
+            ax[1].plot(t[k]*np.ones((2,)), [min(s[k], shat[k]/scaling_s), max(s[k], shat[k]/scaling_s)], 'b--')
 
     ax[0].set_ylabel("U", fontsize=16)
     ax[1].set_ylabel("S", fontsize=16)
@@ -598,6 +602,270 @@ def cellwise_vel_embedding(adata,
 
     save_fig(fig, save)
     return idx
+
+
+from networkx import DiGraph, Graph
+from matplotlib.collections import LineCollection
+##########################################################
+# Reference: scVelo
+# https://github.com/theislab/scvelo/blob/main/scvelo/plotting/velocity_graph.py#L163
+##########################################################
+def _draw_networkx_edges(
+    G,
+    pos,
+    edgelist=None,
+    width=1.0,
+    edge_color="k",
+    style="solid",
+    alpha=None,
+    arrowstyle="-|>",
+    arrowsize=3,
+    edge_cmap=None,
+    edge_vmin=None,
+    edge_vmax=None,
+    ax=None,
+    arrows=True,
+    label=None,
+    node_size=300,
+    nodelist=None,
+    node_shape="o",
+    connectionstyle=None,
+    min_source_margin=0,
+    min_target_margin=0,
+):
+    """Draw the edges of the graph G. Adjusted from networkx."""
+    try:
+        from numbers import Number
+
+        import matplotlib.pyplot as plt
+        from matplotlib.collections import LineCollection
+        from matplotlib.colors import colorConverter, Colormap, Normalize
+        from matplotlib.patches import FancyArrowPatch
+    except ImportError:
+        raise ImportError("Matplotlib required for draw()")
+    except RuntimeError:
+        print("Matplotlib unable to open display")
+        raise
+    if ax is None:
+        ax = plt.gca()
+
+    if edgelist is None:
+        edgelist = list(G.edges())
+
+    if not edgelist or len(edgelist) == 0:  # no edges!
+        print('No edges!')
+        return None
+
+    if nodelist is None:
+        nodelist = list(G.nodes())
+
+    # FancyArrowPatch handles color=None different from LineCollection
+    if edge_color is None:
+        edge_color = "k"
+
+    # set edge positions
+    edge_pos = np.asarray([(pos[e[0]], pos[e[1]]) for e in edgelist])
+
+    # Check if edge_color is an array of floats and map to edge_cmap.
+    # This is the only case handled differently from matplotlib
+    if (
+        np.iterable(edge_color)
+        and (len(edge_color) == len(edge_pos))
+        and np.alltrue([isinstance(c, Number) for c in edge_color])
+    ):
+        if edge_cmap is not None:
+            assert isinstance(edge_cmap, Colormap)
+        else:
+            edge_cmap = plt.get_cmap()
+        if edge_vmin is None:
+            edge_vmin = min(edge_color)
+        if edge_vmax is None:
+            edge_vmax = max(edge_color)
+        color_normal = Normalize(vmin=edge_vmin, vmax=edge_vmax)
+        edge_color = [edge_cmap(color_normal(e)) for e in edge_color]
+
+    if not G.is_directed() or not arrows:
+        edge_collection = LineCollection(
+            edge_pos,
+            colors=edge_color,
+            linewidths=width,
+            antialiaseds=(1,),
+            linestyle=style,
+            alpha=alpha,
+        )
+
+        edge_collection.set_cmap(edge_cmap)
+        edge_collection.set_clim(edge_vmin, edge_vmax)
+
+        edge_collection.set_zorder(1)  # edges go behind nodes
+        edge_collection.set_label(label)
+        ax.add_collection(edge_collection)
+
+        return edge_collection
+
+    arrow_collection = None
+
+    if G.is_directed() and arrows:
+        # Note: Waiting for someone to implement arrow to intersection with
+        # marker.  Meanwhile, this works well for polygons with more than 4
+        # sides and circle.
+
+        def to_marker_edge(marker_size, marker):
+            if marker in "s^>v<d":  # `large` markers need extra space
+                return np.sqrt(2 * marker_size) / 2
+            else:
+                return np.sqrt(marker_size) / 2
+
+        # Draw arrows with `matplotlib.patches.FancyarrowPatch`
+        arrow_collection = []
+        mutation_scale = arrowsize  # scale factor of arrow head
+
+        # FancyArrowPatch doesn't handle color strings
+        arrow_colors = colorConverter.to_rgba_array(edge_color, alpha)
+        for i, (src, dst) in enumerate(edge_pos):
+            x1, y1 = src
+            x2, y2 = dst
+            shrink_source = 0  # space from source to tail
+            shrink_target = 0  # space from  head to target
+            if np.iterable(node_size):  # many node sizes
+                source, target = edgelist[i][:2]
+                source_node_size = node_size[nodelist.index(source)]
+                target_node_size = node_size[nodelist.index(target)]
+                shrink_source = to_marker_edge(source_node_size, node_shape)
+                shrink_target = to_marker_edge(target_node_size, node_shape)
+            else:
+                shrink_source = shrink_target = to_marker_edge(node_size, node_shape)
+
+            if shrink_source < min_source_margin:
+                shrink_source = min_source_margin
+
+            if shrink_target < min_target_margin:
+                shrink_target = min_target_margin
+
+            if len(arrow_colors) == len(edge_pos):
+                arrow_color = arrow_colors[i]
+            elif len(arrow_colors) == 1:
+                arrow_color = arrow_colors[0]
+            else:  # Cycle through colors
+                arrow_color = arrow_colors[i % len(arrow_colors)]
+
+            if np.iterable(width):
+                if len(width) == len(edge_pos):
+                    line_width = width[i]
+                else:
+                    line_width = width[i % len(width)]
+            else:
+                line_width = width
+
+            arrow = FancyArrowPatch(
+                (x1, y1),
+                (x2, y2),
+                arrowstyle=arrowstyle,
+                shrinkA=shrink_source,
+                shrinkB=shrink_target,
+                mutation_scale=mutation_scale,
+                color=arrow_color,
+                linewidth=line_width,
+                connectionstyle=connectionstyle,
+                linestyle=style,
+                zorder=1,
+            )  # arrows go behind nodes
+
+            # There seems to be a bug in matplotlib to make collections of
+            # FancyArrowPatch instances. Until fixed, the patches are added
+            # individually to the axes instance.
+            arrow_collection.append(arrow)
+            ax.add_patch(arrow)
+
+    # update view
+    minx = np.amin(np.ravel(edge_pos[:, :, 0]))
+    maxx = np.amax(np.ravel(edge_pos[:, :, 0]))
+    miny = np.amin(np.ravel(edge_pos[:, :, 1]))
+    maxy = np.amax(np.ravel(edge_pos[:, :, 1]))
+
+    w = maxx - minx
+    h = maxy - miny
+    padx, pady = 0.05 * w, 0.05 * h
+    corners = (minx - padx, miny - pady), (maxx + padx, maxy + pady)
+    ax.update_datalim(corners)
+    ax.autoscale_view()
+
+    ax.tick_params(
+        axis="both",
+        which="both",
+        bottom=False,
+        left=False,
+        labelbottom=False,
+        labelleft=False,
+    )
+
+    return arrow_collection
+
+def plot_spatial_graph(adata,
+                       graph_key="spatial_graph",
+                       basis="spatial",
+                       palette=None,
+                       fig_height=6,
+                       node_size=30,
+                       edge_width=0.25,
+                       arrowsize=3,
+                       edge_color='gray',
+                       legend_fontsize=12,
+                       show_legend=False,
+                       components=[0, 1],
+                       save=None):
+    T = adata.obsp[graph_key].A
+
+    X_emb = adata.obsm[f"X_{basis}"][:, np.array(components)]
+    
+    xmin, xmax = X_emb[:, 0].min(), X_emb[:, 0].max()
+    ymin, ymax = X_emb[:, 1].min(), X_emb[:, 1].max()
+    ratio = (ymax - ymin)/(xmax - xmin)
+    fig, ax = plt.subplots(figsize=(fig_height/ratio, fig_height))
+    
+    edge_collection = _draw_networkx_edges(
+        Graph(T),
+        X_emb,
+        node_size=node_size,
+        width=edge_width,
+        edge_color=edge_color,
+        arrowsize=arrowsize
+    )
+    edge_segs = edge_collection.get_segments()
+    
+    ax.set_xlim(xmin, xmax)
+    ax.set_ylim(ymin, ymax)
+    
+    # scv.pl.scatter(adata, basis=basis, title="", legend_loc='right margin', size=node_size, ax=ax)
+    ax = plot_cluster_axis(ax,
+                           X_emb,
+                           adata.obs['clusters'].to_numpy(),
+                           palette)
+
+    colors = 'gray'
+
+    line_segments = LineCollection(edge_segs,
+                                   linewidths=edge_width,
+                                   colors=colors,
+                                   linestyle='solid')
+    ax.add_collection(line_segments)
+    # ax.set_title('Spatial Graph', fontsize=28)
+    if show_legend:
+        handles, labels = ax.get_legend_handles_labels()
+        lgd = ax.legend(handles,
+                        labels,
+                        fontsize=legend_fontsize,
+                        markerscale=2.0,
+                        bbox_to_anchor=(1.0, 1.0),
+                        loc='upper left')
+        plt.tight_layout()
+        # box = ax.get_position()
+        # ax.set_position([box.x0, box.y0, box.width * 2, box.height])
+        if save is not None:
+            save_fig(fig, save, (lgd,))
+            return
+    if save is not None:
+        save_fig(fig, save)
 
 
 #########################################################################
@@ -1954,7 +2222,7 @@ def plot_sig_grid(Nr,
         lgd = fig_sig.legend(handles,
                              labels,
                              fontsize=legend_fontsize,
-                             markerscale=2.0,
+                             markerscale=5.0,
                              bbox_to_anchor=(-0.03/Nc, l_indent),
                              loc='upper right')
 
