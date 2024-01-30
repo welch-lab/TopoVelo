@@ -878,6 +878,13 @@ def post_analysis(adata,
                     gene_subset = adata.var_names[~np.isnan(adata.layers[vkey][0])]
                 xkey = 'Ms' if 'xkey' not in kwargs else kwargs['xkey']
                 velocity_graph(adata, vkey=vkey, xkey=xkey, gene_subset=gene_subset, n_jobs=get_n_cpu(adata.n_obs))
+                if 'spatial_graph_params' in adata.uns:
+                    radius = adata.uns['spatial_graph_params']['radius']
+                    if radius is not None:
+                        adata.uns['gat_velocity_graph'] = adata.uns['gat_velocity_graph']\
+                            .multiply(adata.obsp['distances'] < radius)
+                        adata.uns['gat_velocity_graph_neg'] = adata.uns['gat_velocity_graph_neg']\
+                            .multiply(adata.obsp['distances'] < radius)
                 velocity_embedding_stream(adata,
                                           basis=embed,
                                           vkey=vkey,
