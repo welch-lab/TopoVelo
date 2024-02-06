@@ -2020,3 +2020,23 @@ def assign_phase(adata, model='human', embed='umap', save=None):
     adata_cc_genes = adata[:, cell_cycle_genes]
     sc.tl.pca(adata_cc_genes)
     sc.pl.scatter(adata_cc_genes, basis=embed, color='phase', save=save)
+
+
+def knn_smooth_1d(vals, graph, perc=[2, 98]):
+    v_max_to = np.percentile(vals, perc[1])
+    v_min_to = np.percentile(vals, perc[0])
+    vals_sm = graph.dot(vals)
+    v_max_from = vals_sm.max()
+    v_min_from = vals_sm.min()
+    
+    return (vals_sm - v_min_from)/(v_max_from - v_min_from)*(v_max_to - v_min_to) + v_min_to
+
+
+def knn_smooth_2d(vals, graph, perc=[2, 98]):
+    return np.stack([knn_smooth_1d(vals[:, i], graph, perc) for i in range(vals.shape[1])], axis=1)
+
+
+def knn_smooth(vals, graph, perc=[2, 98]):
+    if vals.ndim == 1:
+        return knn_smooth_1d(vals, graph, perc)
+    return knn_smooth_2d(vals, graph, perc)

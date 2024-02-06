@@ -7,7 +7,8 @@ from .evaluation_util import (velocity_consistency,
                               _est_area,
                               _dist_weight,
                               _nearest_boundary_point,
-                              pred_tissue_growth)
+                              pred_tissue_growth,
+                              knn_smooth)
 from .perf_logger import PerfLogger
 
 __all__ = [
@@ -15,4 +16,5 @@ __all__ = [
     "velocity_consistency",
     "spatial_velocity_consistency",
     "use_spatial_knn",
-    "PerfLogger"]
+    "PerfLogger",
+    "knn_smooth"]

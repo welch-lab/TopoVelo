@@ -4,12 +4,14 @@ Performs performance evaluation for various RNA velocity models and generates fi
 import numpy as np
 import pandas as pd
 from os import makedirs
-from .evaluation_util import *
-from topovelo.plotting import set_dpi, get_colors, plot_cluster, plot_phase_grid, plot_sig_grid, plot_time_grid
-from multiprocessing import cpu_count
 from scipy.stats import spearmanr
 from sklearn.neighbors import NearestNeighbors
+from multiprocessing import cpu_count
+from .evaluation_util import *
+from .plot_config import PlotConfig
 from ..scvelo_preprocessing.neighbors import neighbors
+from ..plotting import set_dpi, get_colors, plot_cluster, plot_phase_grid, plot_sig_grid, plot_time_grid
+from ..plotting import compute_figsize
 
 
 def get_n_cpu(n_cell):
@@ -498,7 +500,7 @@ def post_analysis(adata,
                   spatial_key=None,
                   n_spatial_neighbors=8,
                   gene_key='velocity_genes',
-                  compute_metrics=True,
+                  compute_metrics=False,
                   raw_count=False,
                   spatial_velocity_graph=False,
                   genes=[],
@@ -506,17 +508,15 @@ def post_analysis(adata,
                   cluster_key="clusters",
                   cluster_edges=[],
                   nplot=500,
-                  frac=0.0,
                   embed="umap",
-                  time_colormap='plasma',
-                  dot_size=50,
                   grid_size=(1, 1),
-                  sparsity_correction=True,
-                  stream_figsize=None,
-                  colors=None,
+                  phase_plot_config={},
+                  gene_plot_config={},
+                  time_plot_config={},
+                  stream_plot_config={},
                   dpi=80,
                   figure_path=None,
-                  save=None,
+                  save_anndata=None,
                   **kwargs):
     """Performs model evaluation and generates figures.
 
@@ -556,28 +556,24 @@ def post_analysis(adata,
             Defaults to [].
         nplot (int, optional):
             Number of cells to plot. Defaults to 500.
-        frac (float, optional):
-            Fraction of cells to plot. Defaults to 0.0.
         embed (str, optional):
             Low-dimensional embedding name. Defaults to 'umap'.
-        time_colormap (str, optional):
-            Colormap for plotting time. Defaults to 'plasma'.
-        dot_size (int, optional):
-            Dot size for plotting. Defaults to 50.
         grid_size (tuple[int], optional):
             Grid size for plotting. Defaults to (1, 1).
-        sparsity_correction (bool, optional):
-            Whether to apply sparsity correction. Defaults to True.
-        stream_figsize (tuple[int], optional):
-            Figure size for plotting stream plot. Defaults to None.
-        colors (list[str], optional):
-            List of colors for cell types. Defaults to None.
+        phase_plot_config (dict, optional):
+            Configuration for phase plot. Defaults to {}.
+        gene_plot_config (dict, optional):
+            Configuration for gene plot. Defaults to {}.
+        time_plot_config (dict, optional):
+            Configuration for time plot. Defaults to {}.
+        stream_plot_config (dict, optional):
+            Configuration for stream plot. Defaults to {}.
         dpi (int, optional):
             DPI for plotting. Defaults to 80.
         figure_path (str, optional):
             Path for saving figures. Defaults to None.
-        save (str, optional):
-            Filename for saving figures. Defaults to None.
+        save_anndata (str, optional):
+            Filename for saving the AnnData object. Defaults to None.
     Returns:
         dict: Performance metrics.
         dict: Performance metrics for each cell type transition.
@@ -596,7 +592,6 @@ def post_analysis(adata,
         U, S = adata.layers["unspliced"].A, adata.layers["spliced"].A
     else:
         U, S = adata.layers["Mu"], adata.layers["Ms"]
-    X_embed = adata.obsm[f"X_{embed}"]
 
     # Retrieve cell type labels and encode them as integers
     cell_labels_raw = adata.obs[cluster_key].to_numpy()
@@ -755,16 +750,16 @@ def post_analysis(adata,
         pd.set_option("display.precision", 3)
 
     print("---   Plotting  Results   ---")
-    save_format = kwargs["save_format"] if "save_format" in kwargs else "png"
 
     # Generate plots
     if 'cluster' in plot_type or "all" in plot_type:
         plot_cluster(adata.obsm[f"X_{embed}"],
                      adata.obs[cluster_key].to_numpy(),
                      save=(None if figure_path is None else
-                           f"{figure_path}/{test_id}_umap.{save_format}"))
+                           f"{figure_path}/{test_id}_{embed}.png"))
     
     if "time" in plot_type or "all" in plot_type:
+        X_embed = adata.obsm[f"X_{embed}"]
         T = {}
         capture_time = adata.obs["tprior"].to_numpy() if "tprior" in adata.obs else None
         for i, method in enumerate(methods):
@@ -782,17 +777,15 @@ def post_analysis(adata,
         else:
             n_row = 1
             n_col = k
+        plot_config = PlotConfig('time')
+        plot_config.set_multiple(time_plot_config)
+        plot_config.set('path', figure_path)
+        plot_config.set('figname', f'{test_id}_time')
         plot_time_grid(T,
                        X_embed,
                        capture_time,
                        None,
-                       dot_size=dot_size,
-                       down_sample=min(10, max(1, adata.n_obs//5000)),
-                       grid_size=(n_row, n_col),
-                       real_aspect_ratio=True,
-                       color_map=time_colormap,
-                       save=(None if figure_path is None else
-                             f"{figure_path}/{test_id}_time.{save_format}"))
+                       *plot_config.get_all())
 
     if "phase" in plot_type or "all" in plot_type:
         Labels_phase = {}
@@ -804,6 +797,10 @@ def post_analysis(adata,
             Labels_phase[method_] = cell_state(adata, method, keys[i], gene_indices)
             Legends_phase[method_] = ['Induction', 'Repression', 'Off', 'Unknown']
             Labels_phase_demo[method] = None
+        plot_config = PlotConfig('phase')
+        plot_config.set_multiple(phase_plot_config)
+        plot_config.set('path', figure_path)
+        plot_config.set('figname', f'{test_id}_phase')
         plot_phase_grid(grid_size[0],
                         grid_size[1],
                         genes,
@@ -814,9 +811,7 @@ def post_analysis(adata,
                         Uhat,
                         Shat,
                         Labels_phase_demo,
-                        path=figure_path,
-                        figname=test_id,
-                        save_format=save_format)
+                        *plot_config.get_all())
 
     if 'gene' in plot_type or 'all' in plot_type:
         T = {}
@@ -838,7 +833,10 @@ def post_analysis(adata,
                 T[method_] = adata.layers["fit_t"][:, gene_indices]
             else:
                 T[method_] = adata.obs[f"{keys[i]}_time"].to_numpy()
-
+        plot_config = PlotConfig('gene')
+        plot_config.set_multiple(gene_plot_config)
+        plot_config.set('path', figure_path)
+        plot_config.set('figname', f'{test_id}_gene')
         plot_sig_grid(grid_size[0],
                       grid_size[1],
                       genes,
@@ -852,25 +850,17 @@ def post_analysis(adata,
                       Shat,
                       V,
                       Yhat,
-                      frac=frac,
-                      down_sample=min(20, max(1, adata.n_obs//5000)),
-                      sparsity_correction=sparsity_correction,
-                      path=figure_path,
-                      figname=test_id,
-                      save_format=save_format)
+                      *plot_config.get_all())
 
-    if 'stream' in plot_type or 'all' in plot_type:
+    if 'cell velocity' in plot_type or 'all' in plot_type:
+        plot_config = PlotConfig('stream')
+        plot_config.set_multiple(stream_plot_config)
+        if plot_config.get('palette') is None:
+            palette = get_colors(len(cell_types_raw))
+            plot_config.set('palette', palette)
         try:
             from scvelo.tl import velocity_graph
             from scvelo.pl import velocity_embedding_stream
-            if colors is None:
-                colors = get_colors(len(cell_types_raw))
-            if 'stream_legend_loc' in kwargs:
-                stream_legend_loc = kwargs['stream_legend_loc']
-            else:
-                stream_legend_loc = 'on data' if len(colors) <= 10 else 'right margin'
-            legend_fontsize = (kwargs['legend_fontsize'] if 'legend_fontsize' in kwargs else
-                               np.clip(15 - np.clip(len(colors)-10, 0, None), 8, None))
             for i, vkey in enumerate(vkeys):
                 if methods[i] in ['scVelo', 'UniTVelo', 'DeepVelo']:
                     gene_subset = adata.var_names[adata.var['velocity_genes'].to_numpy()]
@@ -881,42 +871,74 @@ def post_analysis(adata,
                 if 'spatial_graph_params' in adata.uns:
                     radius = adata.uns['spatial_graph_params']['radius']
                     if radius is not None:
-                        adata.uns['gat_velocity_graph'] = adata.uns['gat_velocity_graph']\
+                        adata.uns[f'{vkey}_graph'] = adata.uns[f'{vkey}_graph']\
                             .multiply(adata.obsp['distances'] < radius)
-                        adata.uns['gat_velocity_graph_neg'] = adata.uns['gat_velocity_graph_neg']\
+                        adata.uns[f'{vkey}_graph_neg'] = adata.uns[f'{vkey}_graph_neg']\
                             .multiply(adata.obsp['distances'] < radius)
                 velocity_embedding_stream(adata,
                                           basis=embed,
                                           vkey=vkey,
                                           color=cluster_key,
                                           title="",
-                                          figsize=stream_figsize,
-                                          palette=colors,
-                                          size=dot_size,
-                                          legend_loc=stream_legend_loc,
-                                          legend_fontsize=legend_fontsize,
-                                          cutoff_perc=0.0,
+                                          figsize=(plot_config.get('width'), plot_config.get('height')),
+                                          density=plot_config.get('density'),
+                                          palette=plot_config.get('palette'),
+                                          size=plot_config.get('markersize'),
+                                          alpha=plot_config.get('alpha'),
+                                          legend_loc=plot_config.get('legend_loc'),
+                                          legend_fontsize=plot_config.get('legend_fontsize'),
+                                          linewidth=plot_config.get('linewidth'),
+                                          arrow_size=plot_config.get('arrow_size'),
+                                          arrow_color=plot_config.get('arrow_color'),
+                                          perc=plot_config.get('perc'),
+                                          cutoff_perc=plot_config.get('cutoff_perc'),
                                           dpi=dpi,
                                           show=True,
                                           save=(None if figure_path is None else
                                                 f'{figure_path}/{test_id}_{keys[i]}.png'))
-                # Cell veloocity
+        except ImportError:
+            print('Please install scVelo in order to generate stream plots')
+            pass
+    
+    # Cell velocity from the GNN spatial decoder
+    if 'GNN cell velocity' in plot_type or 'all' in plot_type:
+        plot_config = PlotConfig('stream')
+        plot_config.set_multiple(stream_plot_config)
+        if plot_config.get('palette') is None:
+            palette = get_colors(len(cell_types_raw))
+            plot_config.set('palette', palette)
+        try:
+            from scvelo.tl import velocity_graph
+            from scvelo.pl import velocity_embedding_stream
+            for i, vkey in enumerate(vkeys):
                 if 'TopoVelo' in methods[i]:
-                    adata.obsm[f"{vkey}_dec_{embed}"] = adata.obsm[f"{keys[i]}_velocity_{keys[i]}_xy"]
-                    if 'colors_cell_velocity' not in kwargs:
-                        colors = get_colors(len(cell_types_raw))
+                    # Clip the velocity to remove outliers
+                    v = adata.obsm[f"{vkey}_{keys[i]}_xy"]
+                    q1, q3 = np.quantile(v, 0.75, 0), np.quantile(v, 0.25, 0)
+                    v = np.stack([np.clip(v[:, 0], q3[0]-1.5*(q1[0]-q3[0]), q1[0]+1.5*(q1[0]-q3[0])),
+                                  np.clip(v[:, 1], q3[1]-1.5*(q1[0]-q3[0]), q1[1]+1.5*(q1[1]-q3[1]))], 1)
+                    v = knn_smooth(v, adata.obsp["connectivities"])
+                    adata.obsm[f"{vkey}_dec_{keys[i]}_xy"] = v
+                    # Use predicted coordinates
+                    adata.uns[f"{keys[i]}_velocity_params"]["embeddings"] = f"{keys[i]}_xy"
                     velocity_embedding_stream(adata,
-                                              basis=embed,
+                                              basis=f"{keys[i]}_xy",
                                               vkey=f"{vkey}_dec",
                                               recompute=False,
                                               color=cluster_key,
                                               title="",
-                                              figsize=stream_figsize,
-                                              palette=colors,
-                                              size=dot_size,
-                                              legend_loc=stream_legend_loc,
-                                              legend_fontsize=legend_fontsize,
-                                              cutoff_perc=0.0,
+                                              figsize=(plot_config.get('width'), plot_config.get('height')),
+                                              density=plot_config.get('density'),
+                                              palette=plot_config.get('palette'),
+                                              size=plot_config.get('markersize'),
+                                              alpha=plot_config.get('alpha'),
+                                              legend_loc=plot_config.get('legend_loc'),
+                                              legend_fontsize=plot_config.get('legend_fontsize'),
+                                              linewidth=plot_config.get('linewidth'),
+                                              arrow_size=plot_config.get('arrow_size'),
+                                              arrow_color=plot_config.get('arrow_color'),
+                                              perc=plot_config.get('perc'),
+                                              cutoff_perc=plot_config.get('cutoff_perc'),
                                               dpi=dpi,
                                               show=True,
                                               save=(None if figure_path is None else
@@ -925,8 +947,8 @@ def post_analysis(adata,
             print('Please install scVelo in order to generate stream plots')
             pass
 
-    if save is not None:
-        adata.write_h5ad(save)
+    if save_anndata is not None:
+        adata.write_h5ad(save_anndata)
 
     if compute_metrics:
         if figure_path is not None:
