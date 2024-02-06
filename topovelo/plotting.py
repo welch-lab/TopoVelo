@@ -29,15 +29,24 @@ def set_dpi(dpi):
     global DPI
     DPI = dpi
 
-def _set_figsize(X_embed, real_aspect_ratio=False, width=7.5):
-    figsize = (width, width*0.75)
+def _set_figsize(X_embed, real_aspect_ratio=False, width=7.5, height=6, fix='width', margin=0.0):
+    figsize = (width, height)
     if real_aspect_ratio:
         aspect_ratio = (X_embed[:, 1].max() - X_embed[:, 1].min()) / (X_embed[:, 0].max() - X_embed[:, 0].min())
-        figsize = (width, width*aspect_ratio)
+        if fix == 'height':
+            figsize = (height/aspect_ratio+margin, height)
+        else:
+            figsize = (width, (width-margin)*aspect_ratio+margin)
     return figsize
+
+
+def compute_figsize(X_embed, width=7.5, height=6, fix='width', margin=0.0):
+    return _set_figsize(X_embed, True, width, height, fix, margin)
+
 
 def get_colors(n, color_map=None):
     """Get colors for plotting cell clusters.
+    The colors can either be a categorical colormap or a continuous colormap.
 
     Args:
         n (int):
@@ -351,7 +360,8 @@ def plot_cluster(X_embed,
                  cell_labels,
                  color_map=None,
                  embed=None,
-                 real_aspect_ratio=False,
+                 figsize=None,
+                 real_aspect_ratio=True,
                  markersize=20,
                  save=None,):
     """Plot the predicted cell types from the encoder
@@ -365,6 +375,8 @@ def plot_cluster(X_embed,
             User-defined colormap for cell clusters. Defaults to None.
         embed (str, optional):
             Embedding name. Used for labeling axes. Defaults to 'umap'.
+        figsize (tuple, optional):
+            Figure size. Defaults to None.
         real_aspect_ratio (bool, optional):
             Whether to set the aspect ratio of the plot to be the same as the data.
             Defaults to False.
@@ -376,7 +388,8 @@ def plot_cluster(X_embed,
             Figure name for saving (including path). Defaults to None.
     """
     cell_types = np.unique(cell_labels)
-    figsize = _set_figsize(X_embed, real_aspect_ratio)
+    if figsize is None:
+        figsize = _set_figsize(X_embed, real_aspect_ratio)
     fig, ax = plt.subplots(figsize=figsize, facecolor='white')
     x = X_embed[:, 0]
     y = X_embed[:, 1]
@@ -388,7 +401,10 @@ def plot_cluster(X_embed,
     for i, typei in enumerate(cell_types):
         mask = cell_labels == typei
         xbar, ybar = np.mean(x[mask]), np.mean(y[mask])
-        ax.scatter(x[mask], y[mask], s=markersize, color=colors[i % len(colors)], edgecolors='none')
+        ax.scatter(x[mask], y[mask],
+                   s=markersize,
+                   color=colors[i % len(colors)],
+                   edgecolors='none')
         n_char = len(typei)
         txt = ax.text(xbar - x_range*4e-3*n_char, ybar - y_range*4e-3, typei, fontsize=max(15, 100//n_char_max), color='k')
         txt.set_bbox(dict(facecolor='white', alpha=0.5, edgecolor='black'))
@@ -1036,7 +1052,13 @@ def plot_spatial_extrapolation(xy,
         save_fig(fig, save, bbox_extra_artists=(lgd,))
 
 
-def plot_legend(adata, cluster_key='clusters', ncol=1, save='figures/legend.png'):
+def plot_legend(adata,
+                cluster_key='clusters',
+                ncol=1,
+                markerscale=2.0,
+                fontsize=20,
+                palette=None,
+                save='figures/legend.png'):
     """Plots figure legend containing all cell types.
 
     Args:
@@ -1046,22 +1068,34 @@ def plot_legend(adata, cluster_key='clusters', ncol=1, save='figures/legend.png'
             Key for cell type annotations. Defaults to 'clusters'.
         ncol (int, optional):
             Number of columns of the legend. Defaults to 1.
+        markerscale (float, optional):
+            Marker scale. Defaults to 2.0.
+        fontsize (int, optional):
+            Font size. Defaults to 20.
+        palette (list, optional):
+            List of colors for cell types. Defaults to None.
         save (str, optional):
             Figure name for saving (including path). Defaults to 'figures/legend.png'.
     """
     cell_labels = adata.obs[cluster_key].to_numpy()
     cell_labels = np.array([str(x) for x in cell_labels])
     cell_types = np.unique(cell_labels)
-    colors = get_colors(len(cell_types))
+    if palette is None:
+        palette = get_colors(len(cell_types))
+    
     lines = []
 
-    fig, ax = plt.subplots()
+    fig, ax = plt.subplots(figsize=(6, 1))
     for i, x in enumerate(cell_types):
-        line = ax.plot([], 'o', color=colors[i], label=x)
+        line = ax.plot([], 'o', color=palette[i], label=x)
         lines.append(line)
     ax.axis("off")
+    lgd = ax.legend(markerscale=markerscale,
+                    ncol=ncol,
+                    fontsize=fontsize,
+                    loc='center',
+                    frameon=False)
     plt.tight_layout()
-    lgd = ax.legend(markerscale=2.0, ncol=ncol, fontsize=20, loc='center', frameon=False)
     save_fig(fig, save, (lgd,))
 
 
@@ -1071,28 +1105,46 @@ def _plot_heatmap(ax,
                   colorbar_name,
                   colorbar_ticklabels=None,
                   markersize=20,
+                  show_colorbar=True,
+                  colorbar_fontsize=24,
+                  colorbar_limits=None,
+                  colorbar_ticks=None,
+                  colorbar_tick_fontsize=15,
+                  colorbar_pos=[1.04, 0.2, 0.05, 0.6],
                   cmap='plasma',
                   axis_off=False):
     """General heatmap plotting helper function.
     """
+    if isinstance(colorbar_limits, (list, tuple)):
+        vmin, vmax = colorbar_limits[0], colorbar_limits[1]
+    else:
+        vmin = np.quantile(vals, 0.01)
+        vmax = np.quantile(vals, 0.99)
     ax.scatter(X_embed[:, 0],
                X_embed[:, 1],
                s=markersize,
                c=vals,
                cmap=cmap,
+               vmin=vmin,
+               vmax=vmax,
                edgecolors='none')
-    vmin = np.quantile(vals, 0.01)
-    vmax = np.quantile(vals, 0.99)
-    norm = matplotlib.colors.Normalize(vmin=vmin, vmax=vmax)
-    sm = matplotlib.cm.ScalarMappable(norm=norm, cmap=cmap)
-    cbar = plt.colorbar(sm, ax=ax)
-    cbar.ax.get_yaxis().labelpad = 15
-    cbar.ax.set_ylabel(colorbar_name, rotation=270, fontsize=24)
-    if colorbar_ticklabels is not None:
-        if len(colorbar_ticklabels) == 2:
-            cbar.ax.get_yaxis().labelpad = 5
-        cbar.set_ticks(np.linspace(vmin, vmax, len(colorbar_ticklabels)))
-        cbar.ax.set_yticklabels(colorbar_ticklabels, fontsize=15)
+    if show_colorbar:
+        norm = matplotlib.colors.Normalize(vmin=vmin, vmax=vmax)
+        sm = matplotlib.cm.ScalarMappable(norm=norm, cmap=cmap)
+        cax = ax.inset_axes(colorbar_pos)
+        cbar = plt.colorbar(sm, ax=ax, cax=cax)
+        cbar.ax.get_yaxis().labelpad = 15
+        cbar.ax.set_ylabel(colorbar_name, rotation=270, fontsize=colorbar_fontsize)
+
+        if colorbar_ticklabels is not None:
+            if len(colorbar_ticklabels) == 2:
+                cbar.ax.get_yaxis().labelpad = 5
+            cbar.ax.set_yticklabels(colorbar_ticklabels, fontsize=colorbar_tick_fontsize)
+        if colorbar_ticks is None:
+            cbar.set_ticks(np.linspace(vmin, vmax, len(colorbar_ticklabels)))
+        else:
+            cbar.set_ticks(colorbar_ticks)
+        
     if axis_off:
         ax.axis("off")
 
@@ -1274,67 +1326,87 @@ def plot_state_var(std_z,
 def plot_phase_axis(ax,
                     u,
                     s,
-                    marker='.',
+                    marker='o',
                     a=1.0,
-                    D=1,
+                    downsample=1,
+                    markersize=10,
+                    linewidths=0.5,
                     labels=None,
                     legends=None,
                     title=None,
+                    title_fontsize=30,
                     show_legend=False,
-                    label_fontsize=30,
-                    color_map=None):
+                    palette=None):
     """Plot phase in a subplot of a figure."""
+    if legends is not None:
+        n_type = len(legends)
+        types = np.array(range(n_type))
+        if palette is None:
+            palette = get_colors(len(types))
+    elif labels is not None:
+        types = np.unique(labels)
+        n_type = len(types)
+        if palette is None:
+            palette = get_colors(len(types))
     try:
         if labels is None:
-            ax.plot(s[::D], u[::D], marker, color='k')
+            ax.scatter(s[::downsample], u[::downsample],
+                       marker=marker,
+                       color='k',
+                       s=markersize,
+                       linewidths=linewidths,
+                       alpha=a)
         elif legends is None:
-            types = np.unique(labels)
-            colors = get_colors(len(types), color_map)
             for type_int in types:
                 mask = labels == type_int
                 if np.any(mask):
-                    ax.plot(s[mask][::D],
-                            u[mask][::D],
-                            marker,
-                            color=colors[type_int % len(colors)],
-                            alpha=a)
+                    ax.scatter(s[mask][::downsample],
+                               u[mask][::downsample],
+                               marker=marker,
+                               color=palette[type_int % n_type],
+                               s=markersize,
+                               linewidths=linewidths,
+                               alpha=a)
         else:
-            colors = get_colors(len(legends), color_map)
-            cell_types_int = np.unique(labels)
-            for i, type_int in enumerate(cell_types_int):  # type_int: label index, labels are cell types
+            for i, type_int in enumerate(types):  # type_int: label index, labels are cell types
                 mask = labels == type_int
                 if np.any(mask):
                     if show_legend:
-                        ax.plot(s[mask][::D],
-                                u[mask][::D],
-                                marker,
-                                color=colors[type_int % len(colors)],
-                                alpha=a,
-                                label=legends[type_int])
+                        ax.scatter(s[mask][::downsample],
+                                   u[mask][::downsample],
+                                   marker=marker,
+                                   color=palette[type_int % n_type],
+                                   s=markersize,
+                                   linewidths=linewidths,
+                                   alpha=a,
+                                   label=legends[type_int])
                     else:
-                        ax.plot(s[mask][::D],
-                                u[mask][::D],
-                                marker,
-                                color=colors[type_int % len(colors)],
-                                alpha=a)
+                        ax.scatter(s[mask][::downsample],
+                                   u[mask][::downsample],
+                                   marker=marker,
+                                   s=markersize,
+                                   linewidths=linewidths,
+                                   color=palette[type_int % n_type],
+                                   alpha=a)
                 elif show_legend:
-                    ax.plot([np.nan],
-                            [np.nan],
-                            marker,
-                            color=colors[type_int % len(colors)],
-                            alpha=a,
-                            label=legends[type_int])
+                    ax.scatter([np.nan],
+                               [np.nan],
+                               s=markersize,
+                               marker=marker,
+                               color=palette[type_int % n_type],
+                               alpha=a,
+                               label=legends[type_int])
     except TypeError:
         return ax
 
     if title is not None:
-        ax.set_title(title, fontsize=30)
+        ax.set_title(title, fontsize=title_fontsize)
 
     return ax
 
 
-def plot_phase_grid(Nr,
-                    Nc,
+def plot_phase_grid(n_rows,
+                    n_cols,
                     gene_list,
                     U,
                     S,
@@ -1347,21 +1419,33 @@ def plot_phase_grid(Nr,
                     H=3,
                     alpha=0.2,
                     downsample=1,
+                    obs_marker="o",
+                    pred_marker="x",
+                    markersize=10,
+                    linewidths=0.5,
+                    title_fontsize=30,
+                    show_legend=True,
                     legend_fontsize=None,
-                    color_map=None,
+                    legend_loc="upper right",
+                    bbox_to_anchor=None,
+                    label_fontsize=None,
+                    palette=None,
+                    hspace=0.3,
+                    wspace=0.12,
+                    markerscale=3.0,
                     path='figures',
                     figname=None,
                     save_format='png',
                     **kwargs):
-    """Plot the phase portrait of a list of genes in an [Nr x Nc] grid.
+    """Plot the phase portrait of a list of genes in an [n_rows x n_cols] grid.
     Cells are colored according to their dynamical state or cell type.
-    If Nr*Nc < number of genes, the last few genes will be ignored.
-    If Nr*Nc > number of genes, the last few subplots will be blank.
+    If n_rows*n_cols < number of genes, the last few genes will be ignored.
+    If n_rows*n_cols > number of genes, the last few subplots will be blank.
 
     Args:
-        Nr (int):
+        n_rows (int):
             Number of rows of the grid plot.
-        Nc (int):
+        n_cols (int):
             Number of columns of the grid plot.
         gene_list (list[str]):
             Genes to plot.
@@ -1397,11 +1481,21 @@ def plot_phase_grid(Nr,
         alpha (float, optional):
             Transparency of the data points. Defaults to 0.2.
         downsample (int, optional):
-            Down-sampling factor to display the data points.. Defaults to 1.
+            Down-sampling factor to display the data points. Defaults to 1.
+        obs_marker (str, optional):
+            Marker used for plotting observations. Defaults to 'o'.
+        pred_marker (str, optional):
+            Marker used for plotting predictions. Defaults to 'x'.
         legend_fontsize (int/float, optional):
             Defaults to None.
-        color_map (str, optional):
+        palette (str, optional):
             User-defined colormap for cell labels. Defaults to None.
+        hspace (float, optional):
+            Height distance proportion between subplots. Defaults to 0.3.
+        wspace (float, optional):
+            Width distance proportion between subplots. Defaults to 0.12.
+        markerscale (float, optional):
+            Marker scale for the legend. Defaults to 5.0.
         path (str, optional):
             Path to the saved figure. Defaults to 'figures'.
         figname (_type_, optional):
@@ -1416,14 +1510,15 @@ def plot_phase_grid(Nr,
     M = max(1, len(methods))
 
     # Detect whether multiple figures are needed
-    Nfig = len(gene_list) // (Nr*Nc)
-    if Nfig*Nr*Nc < Nfig:
+    Nfig = len(gene_list) // (n_rows*n_cols)
+    if Nfig*n_rows*n_cols < Nfig:
         Nfig += 1
 
-    label_fontsize = W*H
+    if label_fontsize is None:
+        label_fontsize = W*H
     for i_fig in range(Nfig):
-        fig_phase, ax_phase = plt.subplots(Nr, M*Nc, figsize=(W * M * Nc + 1.0, H * Nr), facecolor='white')
-        if Nr == 1 and M * Nc == 1:  # Single Gene, Single Method
+        fig_phase, ax_phase = plt.subplots(n_rows, M*n_cols, figsize=(W * M * n_cols + 1.0, H * n_rows), facecolor='white')
+        if n_rows == 1 and M * n_cols == 1:  # Single Gene, Single Method
             labels = Labels[methods[0]]
             if labels is not None:
                 if labels.ndim == 2:
@@ -1432,98 +1527,115 @@ def plot_phase_grid(Nr,
             ax_phase = plot_phase_axis(ax_phase,
                                        U[:, i_fig],
                                        S[:, i_fig],
-                                       '.',
+                                       obs_marker,
                                        alpha,
-                                       D,
+                                       downsample,
+                                       markersize,
+                                       linewidths,
                                        labels,
                                        Legends[methods[0]],
                                        title,
-                                       show_legend=True,
-                                       color_map=color_map)
+                                       title_fontsize,
+                                       show_legend=show_legend,
+                                       palette=palette)
             try:
                 ax_phase = plot_phase_axis(ax_phase,
                                            Uhat[methods[0]][:, i_fig],
                                            Shat[methods[0]][:, i_fig],
-                                           '.',
+                                           pred_marker,
                                            1.0,
-                                           1,
+                                           downsample,
+                                           markersize,
+                                           linewidths,
                                            Labels_demo[methods[0]],
                                            Legends[methods[0]],
                                            title,
+                                           title_fontsize,
                                            show_legend=False,
-                                           color_map=color_map)
+                                           palette=palette)
             except (KeyError, TypeError):
                 print("[** Warning **]: Skip plotting the prediction because of key value error or invalid data type.")
                 pass
             ax_phase.set_xlabel("S", fontsize=label_fontsize)
             ax_phase.set_ylabel("U", fontsize=label_fontsize)
-        elif Nr == 1:  # Single Gene, Multiple Method
-            for j in range(min(Nc, len(gene_list) - i_fig * Nc)):  # gene
+        elif n_rows == 1:  # Single Gene, Multiple Method
+            for j in range(min(n_cols, len(gene_list) - i_fig * n_cols)):  # gene
                 for k, method in enumerate(methods):  # method
                     labels = Labels[method]
                     if labels is not None:
                         if labels.ndim == 2:
-                            labels = labels[:, i_fig*Nc+j]
-                    title = f"{gene_list[i_fig*Nc+j]} ({method})"
+                            labels = labels[:, i_fig*n_cols+j]
+                    title = f"{gene_list[i_fig*n_cols+j]} ({method})"
                     ax_phase[M*j+k] = plot_phase_axis(ax_phase[M*j+k],
-                                                      U[:, i_fig*Nc+j],
-                                                      S[:, i_fig*Nc+j],
-                                                      '.',
+                                                      U[:, i_fig*n_cols+j],
+                                                      S[:, i_fig*n_cols+j],
+                                                      obs_marker,
                                                       alpha,
-                                                      D,
+                                                      downsample,
+                                                      markersize,
+                                                      linewidths,
                                                       labels,
                                                       Legends[method],
                                                       title,
-                                                      show_legend=True,
-                                                      color_map=color_map)
+                                                      show_legend=show_legend,
+                                                      palette=palette)
                     try:
                         ax_phase[M*j+k] = plot_phase_axis(ax_phase[M*j+k],
-                                                          Uhat[method][:, i_fig*Nc+j],
-                                                          Shat[method][:, i_fig*Nc+j],
-                                                          '.',
+                                                          Uhat[method][:, i_fig*n_cols+j],
+                                                          Shat[method][:, i_fig*n_cols+j],
+                                                          pred_marker,
                                                           1.0,
-                                                          1,
+                                                          downsample,
+                                                          markersize,
+                                                          linewidths,
                                                           Labels_demo[method],
                                                           Legends[method],
                                                           title,
+                                                          title_fontsize,
                                                           show_legend=False,
-                                                          color_map=color_map)
+                                                          palette=palette)
                     except (KeyError, TypeError):
                         print("[** Warning **]: "
                               "Skip plotting the prediction because of key value error or invalid data type.")
                         pass
                     ax_phase[M*j+k].set_xlabel("S", fontsize=label_fontsize)
                     ax_phase[M*j+k].set_ylabel("U", fontsize=label_fontsize)
-        elif M * Nc == 1:  # Multiple Gene, Single Method
-            for i in range(min(Nr, len(gene_list) - i_fig * Nr)):
+        elif M * n_cols == 1:  # Multiple Gene, Single Method
+            for i in range(min(n_rows, len(gene_list) - i_fig * n_rows)):
                 labels = Labels[methods[0]]
                 if labels is not None:
                     if labels.ndim == 2:
-                        labels = labels[:, i_fig * Nr + i]
-                title = f"{gene_list[i_fig*Nr+i]} ({methods[0]})"
+                        labels = labels[:, i_fig * n_rows + i]
+                title = f"{gene_list[i_fig*n_rows+i]} ({methods[0]})"
                 ax_phase[i] = plot_phase_axis(ax_phase[i],
-                                              U[:, i_fig*Nr+i],
-                                              S[:, i_fig*Nr+i],
-                                              '.',
+                                              U[:, i_fig*n_rows+i],
+                                              S[:, i_fig*n_rows+i],
+                                              obs_marker,
                                               alpha,
-                                              D,
+                                              downsample,
+                                              markersize,
+                                              linewidths,
                                               labels,
                                               Legends[methods[0]],
                                               title,
-                                              show_legend=True,
-                                              color_map=color_map)
+                                              title_fontsize,
+                                              show_legend=show_legend,
+                                              palette=palette)
                 try:
                     ax_phase[i] = plot_phase_axis(ax_phase[i],
-                                                  Uhat[methods[0]][:, i_fig*Nr+i],
-                                                  Shat[methods[0]][:, i_fig*Nr+i],
-                                                  '.',
+                                                  Uhat[methods[0]][:, i_fig*n_rows+i],
+                                                  Shat[methods[0]][:, i_fig*n_rows+i],
+                                                  pred_marker,
                                                   1.0,
-                                                  1,
+                                                  downsample,
+                                                  markersize,
+                                                  linewidths,
                                                   Labels_demo[methods[0]],
                                                   Legends[methods[0]],
                                                   title,
+                                                  title_fontsize,
                                                   show_legend=False,
-                                                  color_map=color_map)
+                                                  palette=palette)
                 except (KeyError, TypeError):
                     print("[** Warning **]: "
                           "Skip plotting the prediction because of key value error or invalid data type.")
@@ -1531,9 +1643,9 @@ def plot_phase_grid(Nr,
                 ax_phase[i].set_xlabel("S", fontsize=label_fontsize)
                 ax_phase[i].set_ylabel("U", fontsize=label_fontsize)
         else:
-            for i in range(Nr):
-                for j in range(Nc):  # i, j: row and column gene index
-                    idx = i_fig * Nc * Nr + i * Nc + j
+            for i in range(n_rows):
+                for j in range(n_cols):  # i, j: row and column gene index
+                    idx = i_fig * n_cols * n_rows + i * n_cols + j
                     if idx >= len(gene_list):
                         break
                     for k, method in enumerate(methods):
@@ -1545,61 +1657,73 @@ def plot_phase_grid(Nr,
                         ax_phase[i, M * j + k] = plot_phase_axis(ax_phase[i, M * j + k],
                                                                  U[:, idx],
                                                                  S[:, idx],
-                                                                 '.',
+                                                                 obs_marker,
                                                                  alpha,
-                                                                 D,
+                                                                 downsample,
+                                                                 markersize,
+                                                                 linewidths,
                                                                  labels,
                                                                  Legends[method],
                                                                  title,
-                                                                 show_legend=True,
-                                                                 color_map=color_map)
+                                                                 title_fontsize,
+                                                                 show_legend=show_legend,
+                                                                 palette=palette)
                         try:
                             ax_phase[i, M * j + k] = plot_phase_axis(ax_phase[i, M * j + k],
                                                                      Uhat[method][:, idx],
                                                                      Shat[method][:, idx],
-                                                                     '.',
+                                                                     pred_marker,
                                                                      1.0,
-                                                                     1,
+                                                                     downsample,
+                                                                     markersize,
+                                                                     linewidths,
                                                                      Labels_demo[method],
                                                                      Legends[method],
                                                                      title,
+                                                                     title_fontsize,
                                                                      show_legend=False,
-                                                                     color_map=color_map)
+                                                                     palette=palette)
                         except (KeyError, TypeError):
                             print("[** Warning **]:"
                                   "Skip plotting the prediction because of key value error or invalid data type.")
                             pass
                         ax_phase[i, M * j + k].set_xlabel("S", fontsize=label_fontsize)
                         ax_phase[i, M * j + k].set_ylabel("U", fontsize=label_fontsize)
-        if Nr == 1 and M*Nc == 1:
-            handles, labels = ax_phase.get_legend_handles_labels()
-        elif ax_phase.ndim == 1:
-            handles, labels = ax_phase[0].get_legend_handles_labels()
-        else:
-            handles, labels = ax_phase[0, 0].get_legend_handles_labels()
-        n_label = len(Legends[methods[0]])
+        
+        if show_legend:
+            if n_rows == 1 and M*n_cols == 1:
+                handles, labels = ax_phase.get_legend_handles_labels()
+            elif ax_phase.ndim == 1:
+                handles, labels = ax_phase[0].get_legend_handles_labels()
+            else:
+                handles, labels = ax_phase[0, 0].get_legend_handles_labels()
+            n_label = len(Legends[methods[0]])
 
-        l_indent = 1 - 0.02/Nr
-        if legend_fontsize is None:
-            legend_fontsize = min(int(10*Nr), 300*Nr/n_label)
-        lgd = fig_phase.legend(handles,
-                               labels,
-                               fontsize=legend_fontsize,
-                               markerscale=5.0,
-                               bbox_to_anchor=(-0.03/Nc, l_indent),
-                               loc='upper right')
+            if legend_fontsize is None:
+                legend_fontsize = min(int(10*n_rows), 300*n_rows/n_label)
+            if bbox_to_anchor is None:
+                l_indent = 1 - 0.02/n_rows
+                bbox_to_anchor = (-0.03/n_cols, l_indent)
+            lgd = fig_phase.legend(handles,
+                                   labels,
+                                   fontsize=legend_fontsize,
+                                   markerscale=markerscale,
+                                   bbox_to_anchor=bbox_to_anchor,
+                                   loc=legend_loc)
 
-        fig_phase.subplots_adjust(hspace=0.3, wspace=0.12)
+        fig_phase.subplots_adjust(hspace=hspace, wspace=wspace)
         fig_phase.tight_layout()
 
-        save = None if (path is None or figname is None) else f'{path}/{figname}_phase_{i_fig+1}.{save_format}'
-        save_fig(fig_phase, save, (lgd,))
+        save = None if (path is None or figname is None) else f'{path}/{figname}_{i_fig+1}.{save_format}'
+        if show_legend:
+            save_fig(fig_phase, save, (lgd,))
+        save_fig(fig_phase, save)
 
 
-def sample_scatter_plot(x, down_sample, n_bins=20):
+def sample_scatter_plot(x, downsample, n_bins=20):
     """Sample cells for a scatter plot."""
     idx_downsample = []
-    n_sample = max(1, len(x)//down_sample)
+    n_sample = max(1, len(x)//downsample)
     if n_bins > n_sample:
         n_bins = n_sample
     sample_per_bin = n_sample // n_bins
@@ -1622,45 +1746,48 @@ def plot_sig_axis(ax,
                   x,
                   labels=None,
                   legends=None,
-                  marker='.',
+                  marker='o',
+                  markersize=5,
+                  linewidths=0.5,
                   a=1.0,
-                  D=1,
+                  downsample=1,
                   show_legend=False,
-                  color_map=None,
-                  title=None):
+                  palette=None,
+                  title=None,
+                  title_fontsize=30):
     """Plot a modality versus time in a subplot."""
-    lines = []
     if labels is None or legends is None:
-        lines.append(ax.plot(t[::D], x[::D], marker, markersize=5, color='k', alpha=a)[0])
+        ax.scatter(t[::downsample], x[::downsample], marker, markersize=5, color='k', alpha=a)
     else:
-        colors = (color_map if isinstance(color_map, np.ndarray) or isinstance(color_map, list)
-                  else get_colors(len(legends), color_map))
+        colors = (palette if isinstance(palette, np.ndarray) or isinstance(palette, list)
+                  else get_colors(len(legends)))
         cell_types_int = np.unique(labels)
         for i, type_int in enumerate(cell_types_int):
             mask = labels == type_int
             if np.any(mask):
-                idx_sample = sample_scatter_plot(x[mask], D)
+                idx_sample = sample_scatter_plot(x[mask], downsample)
                 if show_legend:
-                    line = ax.plot(t[mask][idx_sample],
-                                   x[mask][idx_sample],
-                                   marker,
-                                   markersize=5,
-                                   color=colors[i % len(colors)],
-                                   alpha=a,
-                                   label=legends[i])[0]
-                    lines.append(line)
+                    ax.scatter(t[mask][idx_sample],
+                               x[mask][idx_sample],
+                               s=markersize,
+                               marker=marker,
+                               linewidth=linewidths,
+                               color=colors[i % len(colors)],
+                               alpha=a,
+                               label=legends[i])
                 else:
-                    ax.plot(t[mask][idx_sample],
-                            x[mask][idx_sample],
-                            marker,
-                            markersize=5,
-                            color=colors[i % len(colors)],
-                            alpha=a)
+                    ax.scatter(t[mask][idx_sample],
+                               x[mask][idx_sample],
+                               s=markersize,
+                               marker=marker,
+                               linewidth=linewidths,
+                               color=colors[i % len(colors)],
+                               alpha=a)
     ymin, ymax = ax.get_ylim()
     ax.set_yticks([0, ymax])
     if title is not None:
-        ax.set_title(title, fontsize=30)
-    return lines
+        ax.set_title(title, fontsize=title_fontsize)
+    return
 
 
 def plot_sig_pred_axis(ax,
@@ -1668,38 +1795,68 @@ def plot_sig_pred_axis(ax,
                        x,
                        labels=None,
                        legends=None,
-                       marker='.',
+                       line_plot=False,
+                       marker='x',
+                       markersize=10,
+                       linewidths=0.5,
+                       title_fontsize=30,
                        a=1.0,
-                       D=1,
+                       downsample=1,
                        show_legend=False,
                        title=None):
     """Plot predicted modality versus time in a subplot."""
     if labels is None or legends is None:
-        ax.plot(t[::D], x[::D], marker, linewidth=5, color='k', alpha=a)
+        if line_plot:
+            ax.plot(t[::downsample], x[::downsample], 'k-', linewidth=5, alpha=a)
+        else:
+            ax.scatter(t[::downsample],
+                       x[::downsample],
+                       marker=marker,
+                       s=markersize,
+                       linewidths=linewidths,
+                       color='k',
+                       alpha=a)
     else:
-        for i in range(len(legends)):
+        for i, label in enumerate(legends):
             mask = labels == i
             if np.any(mask):
-                idx_ordered = np.argsort(t[mask][::D])
+                idx_ordered = np.argsort(t[mask][::downsample])
                 if show_legend:
-                    ax.plot(t[mask][::D][idx_ordered],
-                            x[mask][::D][idx_ordered],
-                            marker,
-                            linewidth=5,
-                            color='k',
-                            alpha=a,
-                            label=legends[i])
+                    if line_plot:
+                        ax.plot(t[mask][::downsample][idx_ordered],
+                                x[mask][::downsample][idx_ordered],
+                                'k-',
+                                linewidth=5,
+                                alpha=a,
+                                label=label)
+                    else:
+                        ax.scatter(t[mask][::downsample][idx_ordered],
+                                   x[mask][::downsample][idx_ordered],
+                                   marker=marker,
+                                   s=markersize,
+                                   linewidths=linewidths,
+                                   color='k',
+                                   alpha=a,
+                                   label=label)
                 else:
-                    ax.plot(t[mask][::D][idx_ordered],
-                            x[mask][::D][idx_ordered],
-                            marker,
-                            linewidth=5,
-                            color='k',
-                            alpha=a)
+                    if line_plot:
+                        ax.plot(t[mask][::downsample][idx_ordered],
+                                x[mask][::downsample][idx_ordered],
+                                'k-',
+                                linewidth=5,
+                                alpha=a)
+                    else:
+                        ax.scatter(t[mask][::downsample][idx_ordered],
+                                   x[mask][::downsample][idx_ordered],
+                                   marker=marker,
+                                   s=markersize,
+                                   linewidths=linewidths,
+                                   color='k',
+                                   alpha=a)
     ymin, ymax = ax.get_ylim()
     ax.set_yticks([0, ymax])
     if title is not None:
-        ax.set_title(title, fontsize=30)
+        ax.set_title(title, fontsize=title_fontsize)
     return ax
 
 
@@ -1710,12 +1867,13 @@ def plot_sig_loess_axis(ax,
                         legends,
                         frac=0.5,
                         a=1.0,
-                        D=1,
+                        downsample=1,
+                        title_fontsize=30,
                         show_legend=False,
                         title=None,):
     """LOESS plot in a subplot."""
     from loess import loess_1d
-    for i in range(len(legends)):
+    for i, label in enumerate(legends):
         mask = labels == i
         if np.any(mask):
             t_lb, t_ub = np.quantile(t[mask], 0.05), np.quantile(t[mask], 0.95)
@@ -1731,13 +1889,22 @@ def plot_sig_loess_axis(ax,
                                                      sigy=None)
                 torder = np.argsort(tout)
                 if show_legend:
-                    ax.plot(tout[torder][::D], xout[torder][::D], 'k-', linewidth=5, alpha=a, label=legends[i])
+                    ax.plot(tout[torder][::downsample],
+                            xout[torder][::downsample],
+                            'k-',
+                            linewidth=5,
+                            alpha=a,
+                            label=label)
                 else:
-                    ax.plot(tout[torder][::D], xout[torder][::D], 'k-', linewidth=5, alpha=a)
+                    ax.plot(tout[torder][::downsample],
+                            xout[torder][::downsample],
+                            'k-',
+                            linewidth=5,
+                            alpha=a)
     ymin, ymax = ax.get_ylim()
     ax.set_yticks([0, ymax])
     if title is not None:
-        ax.set_title(title, fontsize=30)
+        ax.set_title(title, fontsize=title_fontsize)
     return ax
 
 
@@ -1767,13 +1934,11 @@ def plot_vel_axis(ax,
                   labels=None,
                   legends=None,
                   dt=0.1,
-                  a=1.0,
                   show_legend=False,
                   sparsity_correction=False,
-                  color_map=None,
+                  palette=None,
                   headwidth=5.0,
-                  headlength=8.0,
-                  title=None):
+                  headlength=8.0):
     """Velocity quiver plot on a u/s-t subplot."""
     if labels is None or legends is None:
         dt_sample = (t.max()-t.min())/50
@@ -1797,8 +1962,8 @@ def plot_vel_axis(ax,
                       headlength=headlength,
                       color='k')
     else:
-        colors = (color_map if isinstance(color_map, np.ndarray) or isinstance(color_map, list)
-                  else get_colors(len(legends), color_map))
+        colors = (palette if isinstance(palette, np.ndarray) or isinstance(palette, list)
+                  else get_colors(len(legends)))
         cell_types_int = np.unique(labels)
         for i,  type_int in enumerate(cell_types_int):
             mask = labels == type_int
@@ -1846,8 +2011,8 @@ def plot_vel_axis(ax,
     return ax
 
 
-def plot_sig_grid(Nr,
-                  Nc,
+def plot_sig_grid(n_rows,
+                  n_cols,
                   gene_list,
                   T,
                   U,
@@ -1861,27 +2026,45 @@ def plot_sig_grid(Nr,
                   Labels_demo={},
                   W=6,
                   H=3,
-                  frac=0.0,
                   alpha=1.0,
-                  down_sample=1,
-                  legend_fontsize=None,
+                  downsample=1,
+                  loess_downsample=None,
                   sparsity_correction=False,
                   plot_loess=False,
-                  color_map=None,
+                  frac=0.5,
+                  marker="o",
+                  markersize=5,
+                  linewidths=0.5,
+                  palette=None,
+                  show_legend=True,
+                  legend_fontsize=None,
+                  title_fontsize=30,
+                  headwidth=5.0,
+                  headlength=8.0,
+                  label_fontsize=30,
+                  y_label_pos_x=-0.03,
+                  y_label_pos_y=0.5,
+                  show_xticks=False,
+                  tick_fontsize=15,
+                  hspace=0.3,
+                  wspace=0.12,
+                  markerscale=5.0,
+                  bbox_to_anchor=None,
+                  legend_loc='upper right',
                   path='figures',
                   figname=None,
                   save_format='png'):
-    """Plot u/s of a list of genes vs. time in an [Nr x Nc] grid of subplots.
+    """Plot u/s of a list of genes vs. time in an [n_rows x n_cols] grid of subplots.
     Cells are colored according to their dynamical state or cell type.
 
     Args:
-        Nr (int):
+        n_rows (int):
             Number of rows of the grid plot.
-        Nc (int):
+        n_cols (int):
             Number of columns of the grid plot.
         gene_list (array like):
-            Genes to plot. If the length exceeds Nr*Nc, multiple figures will
-            be generated. If length is less than Nr*Nc, some subplots will be
+            Genes to plot. If the length exceeds n_rows*n_cols, multiple figures will
+            be generated. If length is less than n_rows*n_cols, some subplots will be
             blank.
         T (dict):
             Keys are methods (string) and values are time arrays.
@@ -1923,24 +2106,58 @@ def plot_sig_grid(Nr,
             Subplot width. Defaults to 6.
         H (int, optional):
             Subplot height. Defaults to 3.
-        frac (float, optional):
-            Hyper-parameter for the LOESS plot.
-            This is the window length of the local regression.
-            If it's 0, LOESS will not be plotted. Defaults to 0.0.
         alpha (float, optional):
             Transparency of the data points.. Defaults to 1.0.
-        down_sample (int, optional):
+        downsample (int, optional):
             Down-sampling factor to reduce the overlapping of data points. Defaults to 1.
-        legend_fontsize (int, optional):
-            Defaults to None.
         sparsity_correction (bool, optional):
             Whether to sample u/s uniformly in the range to avoid
             sapling most zeros in sparse expression profiles.
             Defaults to False.
         plot_loess (bool, optional):
             Whether to plot a line fit. Defaults to False.
-        color_map (_type_, optional):
+        frac (float, optional):
+            Hyper-parameter for the LOESS plot.
+            This is the window length of the local regression.
+            Defaults to 0.5.
+        marker (str, optional):
+            Marker for the data points. Defaults to 'o'.
+        markersize (int, optional):
+            Size of the markers. Defaults to 5.
+        linewidths (float, optional):
+            Width of the marker edge. Defaults to 0.5.
+        palette (:class:`numpy.ndarray`, optional):
             User-defined colormap for different cell types. Defaults to None.
+        show_legend (bool, optional):
+            Whether to show the legend. Defaults to True.
+        legend_fontsize (int, optional):
+            Defaults to None.
+        title_fontsize (int, optional):
+            Defaults to None.
+        headwidth (float, optional):
+            Width of the arrow head. Defaults to 5.0.
+        headlength (float, optional):
+            Length of the arrow head. Defaults to 8.0.
+        label_fontsize (int, optional):
+            x/y axis label fontsize. Defaults to 30.
+        y_label_pos_x (float, optional):
+            x position of the y-axis label relative to the y axis. Defaults to -0.03.
+        y_label_pos_y (float, optional):
+            y position of the y-axis label relative to the y axis. Defaults to 0.5.
+        show_xticks (bool, optional):
+            Whether to show xticks. Defaults to False.
+        tick_fontsize (int, optional):
+            Fontsize of the ticks. Defaults to 15.
+        hspace (float, optional):
+            Height distance proportion between subplots. Defaults to 0.3.
+        wspace (float, optional):
+            Width distance proportion between subplots. Defaults to 0.12.
+        markerscale (float, optional):
+            Marker scale for the legend. Defaults to 5.0.
+        bbox_to_anchor (tuple, optional):
+            Bbox to anchor the legend. Defaults to None.
+        legend_loc (str, optional):
+            Location of the legend. Defaults to 'upper right'.
         path (str, optional):
             Saving path. Defaults to 'figures'.
         figname (str, optional):
@@ -1956,16 +2173,16 @@ def plot_sig_grid(Nr,
     M = max(1, len(methods))
 
     # Detect whether multiple figures are needed
-    Nfig = len(gene_list) // (Nr*Nc)
-    if Nfig * Nr * Nc < len(gene_list):
+    Nfig = len(gene_list) // (n_rows*n_cols)
+    if Nfig * n_rows * n_cols < len(gene_list):
         Nfig += 1
 
     # Plotting
     for i_fig in range(Nfig):
-        fig_sig, ax_sig = plt.subplots(3 * Nr, M * Nc, figsize=(W * M * Nc + 1.0, 3 * H * Nr), facecolor='white')
-        if M * Nc == 1:
-            for i in range(min(Nr, len(gene_list) - i_fig * Nr)):
-                idx = i_fig*Nr+i
+        fig_sig, ax_sig = plt.subplots(3 * n_rows, M * n_cols, figsize=(W * M * n_cols + 1.0, 3 * H * n_rows), facecolor='white')
+        if M * n_cols == 1:
+            for i in range(min(n_rows, len(gene_list) - i_fig * n_rows)):
+                idx = i_fig*n_rows+i
                 t = T[methods[0]][:, idx] if T[methods[0]].ndim == 2 else T[methods[0]]
                 if np.any(np.isnan(t)):
                     continue
@@ -1976,21 +2193,27 @@ def plot_sig_grid(Nr,
                               U[:, idx],
                               Labels[methods[0]],
                               Legends[methods[0]],
-                              '.',
+                              marker,
+                              markersize,
+                              linewidths,
                               alpha,
-                              down_sample,
-                              True,
-                              color_map=color_map,
-                              title=title)
+                              downsample,
+                              show_legend,
+                              palette,
+                              title,
+                              title_fontsize)
                 plot_sig_axis(ax_sig[3*i+1],
                               t,
                               S[:, idx],
                               Labels[methods[0]],
                               Legends[methods[0]],
-                              '.',
+                              marker,
+                              markersize,
+                              linewidths,
                               alpha,
-                              down_sample,
-                              color_map=color_map)
+                              downsample,
+                              False,
+                              palette)
 
                 try:
                     if ('VeloVAE' in methods[0])\
@@ -2000,26 +2223,44 @@ def plot_sig_grid(Nr,
                                            'PyroVelocity',
                                            'VeloVI',
                                            'cellDancer']):
-                        K = min(10, max(len(that)//5000, 1))
-                        
-                        if frac > 0 and frac < 1:
+                        if loess_downsample is None:
+                            loess_downsample = min(10, max(len(that)//5000, 1))
+                        if plot_loess:
                             plot_sig_loess_axis(ax_sig[3 * i],
-                                                that[::K],
-                                                Uhat[methods[0]][:, idx][::K],
-                                                Labels_demo[methods[0]][::K],
+                                                that[::loess_downsample],
+                                                Uhat[methods[0]][:, idx][::loess_downsample],
+                                                Labels_demo[methods[0]][::loess_downsample],
                                                 Legends[methods[0]],
-                                                frac=frac)
+                                                frac=frac,
+                                                title_fontsize=title_fontsize)
                             plot_sig_loess_axis(ax_sig[3 * i + 1],
-                                                that[::K],
-                                                Shat[methods[0]][:, idx][::K],
-                                                Labels_demo[methods[0]][::K],
+                                                that[::loess_downsample],
+                                                Shat[methods[0]][:, idx][::loess_downsample],
+                                                Labels_demo[methods[0]][::loess_downsample],
                                                 Legends[methods[0]],
-                                                frac=frac)
+                                                frac=frac,
+                                                title_fontsize=title_fontsize)
                         elif 'Discrete' in methods[0]:
                             uhat_plot = np.random.poisson(Uhat[methods[0]][:, idx])
                             shat_plot = np.random.poisson(Shat[methods[0]][:, idx])
-                            plot_sig_pred_axis(ax_sig[3*i], that, uhat_plot)
-                            plot_sig_pred_axis(ax_sig[3*i+1], that, shat_plot)
+                            plot_sig_pred_axis(ax_sig[3*i],
+                                               that,
+                                               uhat_plot,
+                                               markersize=markersize,
+                                               linewidths=linewidths,
+                                               title_fontsize=title_fontsize,
+                                               a=alpha,
+                                               downsample=downsample,
+                                               show_legend=False)
+                            plot_sig_pred_axis(ax_sig[3*i+1],
+                                               that,
+                                               shat_plot,
+                                               markersize=markersize,
+                                               linewidths=linewidths,
+                                               title_fontsize=title_fontsize,
+                                               a=alpha,
+                                               downsample=downsample,
+                                               show_legend=False)
                         plot_vel_axis(ax_sig[3 * i + 2],
                                       t,
                                       Shat[methods[0]][:, idx],
@@ -2027,24 +2268,26 @@ def plot_sig_grid(Nr,
                                       Labels[methods[0]],
                                       Legends[methods[0]],
                                       sparsity_correction=sparsity_correction,
-                                      color_map=color_map)
-                    else:
+                                      palette=palette,
+                                      headwidth=headwidth,
+                                      headlength=headlength)
+                    else:  # plot line prediction
                         plot_sig_pred_axis(ax_sig[3*i],
                                            that,
                                            Uhat[methods[0]][:, idx],
                                            Labels_demo[methods[0]],
                                            Legends[methods[0]],
-                                           '-',
-                                           1.0,
-                                           1)
+                                           line_plot=True,
+                                           a=1.0,
+                                           downsample=downsample)
                         plot_sig_pred_axis(ax_sig[3*i+1],
                                            that,
                                            Shat[methods[0]][:, idx],
                                            Labels_demo[methods[0]],
                                            Legends[methods[0]],
-                                           '-',
-                                           1.0,
-                                           1)
+                                           line_plot=True,
+                                           a=1.0,
+                                           downsample=downsample)
                         plot_vel_axis(ax_sig[3*i+2],
                                       t,
                                       S[:, idx],
@@ -2052,7 +2295,9 @@ def plot_sig_grid(Nr,
                                       Labels[methods[0]],
                                       Legends[methods[0]],
                                       sparsity_correction=sparsity_correction,
-                                      color_map=color_map)
+                                      palette=palette,
+                                      headwidth=headwidth,
+                                      headlength=headlength)
                 except (KeyError, TypeError):
                     print("[** Warning **]: "
                           "Skip plotting the prediction because of key value error or invalid data type.")
@@ -2062,29 +2307,25 @@ def plot_sig_grid(Nr,
                     ax_sig[3*i+1].set_xlim(t.min(), np.quantile(t, 0.999)+0.1)
                     ax_sig[3*i+2].set_xlim(t.min(), np.quantile(t, 0.999)+0.1)
 
-                ax_sig[3*i].set_ylabel("U", fontsize=30, rotation=0)
-                ax_sig[3*i].yaxis.set_label_coords(-0.03, 0.5)
+                ax_sig[3*i].set_ylabel("U", fontsize=label_fontsize, rotation=0)
+                ax_sig[3*i].yaxis.set_label_coords(y_label_pos_x, y_label_pos_y)
 
-                ax_sig[3*i+1].set_ylabel("S", fontsize=30, rotation=0)
-                ax_sig[3*i+1].yaxis.set_label_coords(-0.03, 0.5)
+                ax_sig[3*i+1].set_ylabel("S", fontsize=label_fontsize, rotation=0)
+                ax_sig[3*i+1].yaxis.set_label_coords(y_label_pos_x, y_label_pos_y)
 
-                ax_sig[3*i+2].set_ylabel("S", fontsize=30, rotation=0)
-                ax_sig[3*i+2].yaxis.set_label_coords(-0.03, 0.5)
+                ax_sig[3*i+2].set_ylabel("S", fontsize=label_fontsize, rotation=0)
+                ax_sig[3*i+2].yaxis.set_label_coords(y_label_pos_x, y_label_pos_y)
 
-                ax_sig[3*i].set_xticks([])
-                ax_sig[3*i+1].set_xticks([])
-                ax_sig[3*i+2].set_xticks([])
-                ax_sig[3*i].set_yticks([])
-                ax_sig[3*i+1].set_yticks([])
-                ax_sig[3*i+2].set_yticks([])
                 for r in range(3):
-                    ax_sig[3*i+r].tick_params(axis='both', which='major', labelsize=15)
+                    ax_sig[3*i+r].set_xticks([])
+                    ax_sig[3*i+r].set_yticks([])
+                    ax_sig[3*i+r].tick_params(axis='both', which='major', labelsize=tick_fontsize)
                     ax_sig[3*i+r].yaxis.set_major_formatter(matplotlib.ticker.FormatStrFormatter('%.2f'))
         else:
             legends = []
-            for i in range(Nr):
-                for j in range(Nc):  # i, j: row and column gene index
-                    idx = i_fig * Nr * Nc + i * Nc + j  # which gene
+            for i in range(n_rows):
+                for j in range(n_cols):  # i, j: row and column gene index
+                    idx = i_fig * n_rows * n_cols + i * n_cols + j  # which gene
                     if idx >= len(gene_list):
                         break
                     for k, method in enumerate(methods):  # k: method index
@@ -2102,21 +2343,27 @@ def plot_sig_grid(Nr,
                                       U[:, idx],
                                       Labels[method],
                                       Legends[method],
-                                      '.',
+                                      marker,
+                                      markersize,
+                                      linewidths,
                                       alpha,
-                                      down_sample,
-                                      True,
-                                      color_map=color_map,
-                                      title=title)
+                                      downsample,
+                                      show_legend,
+                                      palette,
+                                      title,
+                                      title_fontsize)
                         plot_sig_axis(ax_sig[3*i+1, M*j+k],
                                       t,
                                       S[:, idx],
                                       Labels[method],
                                       Legends[method],
-                                      '.',
+                                      marker,
+                                      markersize,
+                                      linewidths,
                                       alpha,
-                                      down_sample,
-                                      color_map=color_map)
+                                      downsample,
+                                      False,
+                                      palette)
 
                         if len(Legends[method]) > len(legends):
                             legends = Legends[method]
@@ -2129,24 +2376,41 @@ def plot_sig_grid(Nr,
                                                'VeloVI',
                                                'cellDancer']):
                                 # These methods don't have line prediction
-                                K = min(10, max(len(that)//5000, 1))
-                                if frac > 0 and frac < 1:
+                                if loess_downsample is None:
+                                    loess_downsample = min(10, max(len(that)//5000, 1))
+                                if plot_loess:
                                     plot_sig_loess_axis(ax_sig[3*i, M*j+k],
-                                                        that[::K],
-                                                        Uhat[method][:, idx][::K],
-                                                        Labels_demo[method][::K],
+                                                        that[::loess_downsample],
+                                                        Uhat[method][:, idx][::loess_downsample],
+                                                        Labels_demo[method][::loess_downsample],
                                                         Legends[method],
                                                         frac=frac)
                                     plot_sig_loess_axis(ax_sig[3*i+1, M*j+k],
                                                         that[::K],
-                                                        Shat[method][:, idx][::K],
-                                                        Labels_demo[method][::K],
+                                                        Shat[method][:, idx][::loess_downsample],
+                                                        Labels_demo[method][::loess_downsample],
                                                         Legends[method], frac=frac)
                                 elif 'Discrete' in method:
                                     uhat_plot = np.random.poisson(Uhat[method][:, idx])
                                     shat_plot = np.random.poisson(Shat[method][:, idx])
-                                    plot_sig_pred_axis(ax_sig[3*i, M*j+k], that, uhat_plot)
-                                    plot_sig_pred_axis(ax_sig[3*i+1, M*j+k], that, shat_plot)
+                                    plot_sig_pred_axis(ax_sig[3*i, M*j+k],
+                                                       that,
+                                                       uhat_plot,
+                                                       markersize=markersize,
+                                                       linewidths=linewidths,
+                                                       title_fontsize=title_fontsize,
+                                                       a=alpha,
+                                                       downsample=downsample,
+                                                       show_legend=False)
+                                    plot_sig_pred_axis(ax_sig[3*i+1, M*j+k],
+                                                       that,
+                                                       shat_plot,
+                                                       markersize=markersize,
+                                                       linewidths=linewidths,
+                                                       title_fontsize=title_fontsize,
+                                                       a=alpha,
+                                                       downsample=downsample,
+                                                       show_legend=False)
                                 plot_vel_axis(ax_sig[3*i+2, M*j+k],
                                               t,
                                               Shat[method][:, idx],
@@ -2154,24 +2418,26 @@ def plot_sig_grid(Nr,
                                               Labels[method],
                                               Legends[method],
                                               sparsity_correction=sparsity_correction,
-                                              color_map=color_map)
+                                              palette=palette,
+                                              headwidth=headwidth,
+                                              headlength=headlength)
                             else:  # plot line prediction
                                 plot_sig_pred_axis(ax_sig[3*i, M*j+k],
                                                    that,
                                                    Uhat[method][:, idx],
                                                    Labels_demo[method],
                                                    Legends[method],
-                                                   '-',
-                                                   1.0,
-                                                   1)
+                                                   line_plot=True,
+                                                   a=1.0,
+                                                   downsample=downsample)
                                 plot_sig_pred_axis(ax_sig[3*i+1, M*j+k],
                                                    that,
                                                    Shat[method][:, idx],
                                                    Labels_demo[method],
                                                    Legends[method],
-                                                   '-',
-                                                   1.0,
-                                                   1)
+                                                   line_plot=True,
+                                                   a=1.0,
+                                                   downsample=downsample)
                                 plot_vel_axis(ax_sig[3*i+2, M*j+k],
                                               t,
                                               S[:, idx],
@@ -2179,73 +2445,81 @@ def plot_sig_grid(Nr,
                                               Labels[method],
                                               Legends[method],
                                               sparsity_correction=sparsity_correction,
-                                              color_map=color_map)
+                                              palette=palette,
+                                              headwidth=headwidth,
+                                              headlength=headlength)
                         except (KeyError, TypeError):
                             print("[** Warning **]: "
                                   "Skip plotting the prediction because of key value error or invalid data type.")
                             pass
                         if np.all(~np.isnan(t)):
-                            ax_sig[3*i,  M*j+k].set_xlim(t.min(), np.quantile(t, 0.999)+0.1)
-                            ax_sig[3*i+1,  M*j+k].set_xlim(t.min(), np.quantile(t, 0.999)+0.1)
-                            ax_sig[3*i+2,  M*j+k].set_xlim(t.min(), np.quantile(t, 0.999)+0.1)
+                            for r in range(3):
+                                ax_sig[3*i+r,  M*j+k].set_xlim(t.min(), np.quantile(t, 0.999)+0.1)
+                                if not show_xticks:
+                                    ax_sig[3*i+r,  M*j+k].set_xticks([])
+                                ax_sig[3*i,  M*j+k].set_xlabel("Time", fontsize=label_fontsize)
 
-                        ax_sig[3*i,  M*j+k].set_xticks([])
-                        ax_sig[3*i+1,  M*j+k].set_xticks([])
-                        ax_sig[3*i+2,  M*j+k].set_xticks([])
+                        ax_sig[3*i,  M*j+k].set_ylabel("U", fontsize=label_fontsize, rotation=0)
+                        ax_sig[3*i,  M*j+k].yaxis.set_label_coords(y_label_pos_x, y_label_pos_y)
 
-                        ax_sig[3*i,  M*j+k].set_ylabel("U", fontsize=30, rotation=0)
-                        ax_sig[3*i,  M*j+k].yaxis.set_label_coords(-0.03, 0.5)
+                        ax_sig[3*i+1,  M*j+k].set_ylabel("S", fontsize=label_fontsize, rotation=0)
+                        ax_sig[3*i+1,  M*j+k].yaxis.set_label_coords(y_label_pos_x, y_label_pos_y)
 
-                        ax_sig[3*i+1,  M*j+k].set_ylabel("S", fontsize=30, rotation=0)
-                        ax_sig[3*i+1,  M*j+k].yaxis.set_label_coords(-0.03, 0.5)
-
-                        ax_sig[3*i+2,  M*j+k].set_ylabel("S", fontsize=30, rotation=0)
-                        ax_sig[3*i+2,  M*j+k].yaxis.set_label_coords(-0.03, 0.5)
-
-                        ax_sig[3*i,  M*j+k].set_xlabel("Time", fontsize=20)
-                        ax_sig[3*i+1,  M*j+k].set_xlabel("Time", fontsize=20)
-                        ax_sig[3*i+2,  M*j+k].set_xlabel("Time", fontsize=20)
+                        ax_sig[3*i+2,  M*j+k].set_ylabel("S", fontsize=label_fontsize, rotation=0)
+                        ax_sig[3*i+2,  M*j+k].yaxis.set_label_coords(y_label_pos_x, y_label_pos_y)
 
                         for r in range(3):
-                            ax_sig[3*i+r, M*j+k].tick_params(axis='both', which='major', labelsize=15)
+                            ax_sig[3*i+r, M*j+k].tick_params(axis='both', which='major', labelsize=tick_fontsize)
                             ax_sig[3*i+r, M*j+k].yaxis.set_major_formatter(matplotlib.ticker.FormatStrFormatter('%.2f'))
-        if ax_sig.ndim == 1:
-            handles, labels = ax_sig[0].get_legend_handles_labels()
-        else:
-            handles, labels = ax_sig[0, 0].get_legend_handles_labels()
+        if show_legend:
+            if ax_sig.ndim == 1:
+                handles, labels = ax_sig[0].get_legend_handles_labels()
+            else:
+                handles, labels = ax_sig[0, 0].get_legend_handles_labels()
 
-        fig_sig.tight_layout()
+            if legend_fontsize is None:
+                legend_fontsize = np.min([int(30*n_rows), 300*n_rows/len(Legends[methods[0]]), int(30*n_cols)])
+            if bbox_to_anchor is None:
+                l_indent = 1 - 0.02/n_rows
+                bbox_to_anchor = (-0.03/n_cols, l_indent)
+            lgd = fig_sig.legend(handles,
+                                 labels,
+                                 fontsize=legend_fontsize,
+                                 markerscale=markerscale,
+                                 bbox_to_anchor=bbox_to_anchor,
+                                 loc=legend_loc)
 
-        l_indent = 1 - 0.02/Nr
-        if legend_fontsize is None:
-            legend_fontsize = np.min([int(30*Nr), 300*Nr/len(Legends[methods[0]]), int(30*Nc)])
-        lgd = fig_sig.legend(handles,
-                             labels,
-                             fontsize=legend_fontsize,
-                             markerscale=5.0,
-                             bbox_to_anchor=(-0.03/Nc, l_indent),
-                             loc='upper right')
-
-        fig_sig.subplots_adjust(hspace=0.3, wspace=0.12)
+        fig_sig.subplots_adjust(hspace=hspace, wspace=wspace)
         plt.tight_layout()
 
-        save = None if (path is None or figname is None) else f'{path}/{figname}_sig_{i_fig+1}.{save_format}'
-        save_fig(fig_sig, save, (lgd,))
+        save = None if (path is None or figname is None) else f'{path}/{figname}_{i_fig+1}.{save_format}'
+        if show_legend:
+            save_fig(fig_sig, save, (lgd,))
+        save_fig(fig_sig, save)
 
 
 def plot_time_grid(T,
                    X_emb,
                    capture_time=None,
                    std_t=None,
-                   down_sample=1,
-                   q=0.99,
+                   downsample=1,
+                   max_quantile=0.99,
+                   color_map='plasma_r',
                    W=6,
                    H=3,
-                   dot_size=10,
+                   marker='o',
+                   markersize=10,
+                   linewidths=0.5,
                    grid_size=None,
                    real_aspect_ratio=True,
-                   color_map='plasma_r',
-                   save="figures/time_grid.png"):
+                   title_fontsize=None,
+                   show_colorbar=True,
+                   colorbar_fontsize=20,
+                   colorbar_labelpad=20,
+                   colorbar_pos=[1.04, 0.2, 0.05, 0.6],
+                   path='figures',
+                   figname='time',
+                   save_format='png'):
     """Plot the latent time of different methods.
 
     Args:
@@ -2259,22 +2533,40 @@ def plot_time_grid(T,
             Keys are method names and values are (N) arrays
             containing standard deviations of cell time.
             Not applicable to some methods. Defaults to None.
-        down_sample (int, optional):
+        downsample (int, optional):
             Down-sampling factor to reduce data point overlapping.. Defaults to 1.
-        q (float, optional):
+        max_quantile (float, optional):
             Top quantile for clipping extreme values. Defaults to 0.99.
         W (int, optional):
             Subplot width. Defaults to 6. Ignored when real_aspect_ratio is True.
         H (int, optional):
             Subplot height. Defaults to 3. Ignored when real_aspect_ratio is True.
-        dot_size (int, optional):
+        marker (str, optional):
+            Marker type. Defaults to 'o'.
+        markersize (int, optional):
             Size of the dots. Defaults to 10.
+        linewidths (float, optional):
+            Width of the marker edges. Defaults to 0.5.
         grid_size (tuple, optional):
             Grid size. Defaults to None.
         real_aspect_ratio (bool, optional):
             Whether to use real aspect ratio. Defaults to True.
-        save (str, optional):
-            Figure name for saving (including path). Defaults to "figures/time_grid.png".
+        title_fontsize (int, optional):
+            Font size of the title. Defaults to None.
+        show_colorbar (bool, optional):
+            Whether to show colorbar. Defaults to True.
+        colorbar_fontsize (int, optional):
+            Font size of the colorbar. Defaults to 20.
+        colorbar_labelpad (int, optional):
+            Label pad of the colorbar. Defaults to 20.
+        color_map (str, optional):
+            Colormap. Defaults to 'plasma_r'.
+        path (str, optional):
+            Saving path. Defaults to 'figures'.
+        figname (str, optional):
+            Name of the figure. Defaults to 'time_grid'.
+        save_format (str, optional):
+            Figure format, could be png, pdf, svg, eps and ps. Defaults to 'png'.
     """
     if capture_time is not None:
         methods =  list(T.keys()) + ["Capture Time"]
@@ -2287,11 +2579,14 @@ def plot_time_grid(T,
     n_row, n_col = grid_size
 
     # Calculate figure size
-    panel_figsize = _set_figsize(X_emb, real_aspect_ratio, W)
     if real_aspect_ratio:
+        panel_figsize = _set_figsize(X_emb, real_aspect_ratio, W, 0)
         figsize = (panel_figsize[0]*n_col, panel_figsize[1]*n_row)
     else:
         figsize = (W*n_col, H*n_row)
+    
+    if title_fontsize is None:
+        title_fontsize = 4 * W
 
     if std_t is not None:
         fig_time, ax = plt.subplots(2*n_row, n_col, figsize=figsize, facecolor='white')
@@ -2299,123 +2594,136 @@ def plot_time_grid(T,
             row = i // n_col
             col = i - row * n_col
             t = capture_time if method == "Capture Time" else T[method]
-            t = np.clip(t, None, np.quantile(t, q))
+            t = np.clip(t, None, np.quantile(t, max_quantile))
             t = t - t.min()
             t = t/(t.max() + (t.max() == 0))
             if n_col > 1:
-                ax[2*row, col].scatter(X_emb[::down_sample, 0],
-                                       X_emb[::down_sample, 1],
-                                       s=dot_size,
-                                       c=t[::down_sample],
+                ax[2*row, col].scatter(X_emb[::downsample, 0],
+                                       X_emb[::downsample, 1],
+                                       s=markersize,
+                                       marker=marker,
+                                       c=t[::downsample],
                                        cmap=color_map,
-                                       edgecolors='none')
+                                       linewidths=linewidths)
                 if method == "Capture Time":
-                    ax[2*row, col].set_title("Expected Temporal Order", fontsize=24)
+                    ax[2*row, col].set_title("Expected Temporal Order", fontsize=title_fontsize)
                 else:
-                    ax[2*row, col].set_title(method, fontsize=24)
+                    ax[2*row, col].set_title(method, fontsize=title_fontsize)
             else:
-                ax[2*row].scatter(X_emb[::down_sample, 0],
-                                  X_emb[::down_sample, 1],
-                                  s=dot_size,
-                                  c=t[::down_sample],
+                ax[2*row].scatter(X_emb[::downsample, 0],
+                                  X_emb[::downsample, 1],
+                                  s=markersize,
+                                  marker=marker,
+                                  c=t[::downsample],
                                   cmap=color_map,
-                                  edgecolors='none')
+                                  linewidths=linewidths)
                 if method == "Capture Time":
-                    ax[2*row].set_title("Expected Temporal Order", fontsize=24)
+                    ax[2*row].set_title("Expected Temporal Order", fontsize=title_fontsize)
                 else:
-                    ax[2*row].set_title(method, fontsize=24)
+                    ax[2*row].set_title(method, fontsize=title_fontsize)
 
             # Plot the Time Variance in a Colormap
             var_t = std_t[method]**2
 
             if np.any(var_t > 0):
                 if M > 1:
-                    ax[2*row+1, col].scatter(X_emb[::down_sample, 0],
-                                             X_emb[::down_sample, 1],
-                                             s=dot_size,
-                                             c=var_t[::down_sample],
+                    ax[2*row+1, col].scatter(X_emb[::downsample, 0],
+                                             X_emb[::downsample, 1],
+                                             s=markersize,
+                                             marker=marker,
+                                             c=var_t[::downsample],
                                              cmap='Reds',
-                                             edgecolors='none')
+                                             linewidths=linewidths)
                     norm1 = matplotlib.colors.Normalize(vmin=np.min(var_t), vmax=np.max(var_t))
                     sm1 = matplotlib.cm.ScalarMappable(norm=norm1, cmap='Reds')
                     cbar1 = fig_time.colorbar(sm1, ax=ax[2*row+1, col])
                     cbar1.ax.get_yaxis().labelpad = 15
-                    cbar1.ax.set_ylabel('Time Variance', rotation=270, fontsize=12)
+                    cbar1.ax.set_ylabel('Time Variance', rotation=270, fontsize=colorbar_fontsize)
                 else:
-                    ax[2*row+1].scatter(X_emb[::down_sample, 0],
-                                        X_emb[::down_sample, 1],
-                                        s=dot_size,
-                                        c=var_t[::down_sample],
+                    ax[2*row+1].scatter(X_emb[::downsample, 0],
+                                        X_emb[::downsample, 1],
+                                        s=markersize,
+                                        marker=marker,
+                                        c=var_t[::downsample],
                                         cmap='Reds',
-                                        edgecolors='none')
+                                        linewidths=linewidths)
                     norm1 = matplotlib.colors.Normalize(vmin=np.min(var_t), vmax=np.max(var_t))
                     sm1 = matplotlib.cm.ScalarMappable(norm=norm1, cmap='Reds')
                     cbar1 = fig_time.colorbar(sm1, ax=ax[2*row+1])
-                    cbar1.ax.get_yaxis().labelpad = 15
-                    cbar1.ax.set_ylabel('Time Variance', rotation=270, fontsize=12)
+                    cbar1.ax.get_yaxis().labelpad = colorbar_labelpad
+                    cbar1.ax.set_ylabel('Time Variance', rotation=270, fontsize=colorbar_fontsize)
     else:
         fig_time, ax = plt.subplots(n_row, n_col, figsize=figsize, facecolor='white')
         for i, method in enumerate(methods):
             row = i // n_col
             col = i - row * n_col
             t = capture_time if method == "Capture Time" else T[method]
-            t = np.clip(t, None, np.quantile(t, q))
+            t = np.clip(t, None, np.quantile(t, max_quantile))
             t = t - t.min()
             t = t/(t.max() + (t.max() == 0))
             if n_col > 1 and n_row > 1:
-                ax[row, col].scatter(X_emb[::down_sample, 0],
-                                     X_emb[::down_sample, 1],
-                                     s=dot_size,
-                                     c=t[::down_sample],
+                ax[row, col].scatter(X_emb[::downsample, 0],
+                                     X_emb[::downsample, 1],
+                                     s=markersize,
+                                     marker=marker,
+                                     c=t[::downsample],
                                      cmap=color_map,
-                                     edgecolors='none')
+                                     linewidths=linewidths)
                 if method == "Capture Time":
-                    ax[row, col].set_title("Expected Temporal Order", fontsize=24)
+                    ax[row, col].set_title("Expected Temporal Order", fontsize=title_fontsize)
                 else:
-                    ax[row, col].set_title(method, fontsize=24)
+                    ax[row, col].set_title(method, fontsize=title_fontsize)
                 ax[row, col].axis('off')
             elif n_col > 1:
-                ax[col].scatter(X_emb[::down_sample, 0],
-                                X_emb[::down_sample, 1],
-                                s=dot_size,
-                                c=t[::down_sample],
+                ax[col].scatter(X_emb[::downsample, 0],
+                                X_emb[::downsample, 1],
+                                s=markersize,
+                                marker=marker,
+                                c=t[::downsample],
                                 cmap=color_map,
-                                edgecolors='none')
+                                linewidths=linewidths)
                 if method == "Capture Time":
-                    ax[col].set_title("Expected Temporal Order", fontsize=24)
+                    ax[col].set_title("Expected Temporal Order", fontsize=title_fontsize)
                 else:
-                    ax[col].set_title(method, fontsize=24)
+                    ax[col].set_title(method, fontsize=title_fontsize)
                 ax[col].axis('off')
             elif n_row > 1:
-                ax[row].scatter(X_emb[::down_sample, 0],
-                                X_emb[::down_sample, 1],
-                                s=dot_size,
-                                c=t[::down_sample],
+                ax[row].scatter(X_emb[::downsample, 0],
+                                X_emb[::downsample, 1],
+                                s=markersize,
+                                marker=marker,
+                                c=t[::downsample],
                                 cmap=color_map,
-                                edgecolors='none')
+                                linewidths=linewidths)
                 if method == "Capture Time":
-                    ax[row].set_title("Expected Temporal Order", fontsize=24)
+                    ax[row].set_title("Expected Temporal Order", fontsize=title_fontsize)
                 else:
-                    ax[row].set_title(method, fontsize=24)
+                    ax[row].set_title(method, fontsize=title_fontsize)
                 ax[row].axis('off')
             else:
-                ax.scatter(X_emb[::down_sample, 0],
-                           X_emb[::down_sample, 1],
-                           s=dot_size,
-                           c=t[::down_sample],
+                ax.scatter(X_emb[::downsample, 0],
+                           X_emb[::downsample, 1],
+                           s=markersize,
+                           marker=marker,
+                           c=t[::downsample],
                            cmap=color_map,
-                           edgecolors='none')
+                           linewidths=linewidths)
                 if method == "Capture Time":
-                    ax.set_title("Expected Temporal Order", fontsize=24)
+                    ax.set_title("Expected Temporal Order", fontsize=title_fontsize)
                 else:
-                    ax.set_title(method, fontsize=24)
+                    ax.set_title(method, fontsize=title_fontsize)
                 ax.axis('off')
-    norm0 = matplotlib.colors.Normalize(vmin=0, vmax=1)
-    sm0 = matplotlib.cm.ScalarMappable(norm=norm0, cmap=color_map)
-    cbar0 = fig_time.colorbar(sm0, ax=ax, location="right") if M > 1 else fig_time.colorbar(sm0, ax=ax)
-    cbar0.ax.get_yaxis().labelpad = 20
-    cbar0.ax.set_ylabel('Cell Time', rotation=270, fontsize=24)
-
+    if show_colorbar:
+        norm0 = matplotlib.colors.Normalize(vmin=0, vmax=1)
+        sm0 = matplotlib.cm.ScalarMappable(norm=norm0, cmap=color_map)
+        if isinstance(ax, np.ndarray):
+            cax = ax[-1].inset_axes(colorbar_pos)
+        else:
+            cax = ax.inset_axes(colorbar_pos)
+        cbar0 = fig_time.colorbar(sm0, ax=ax, cax=cax, location="right") if M > 1 else fig_time.colorbar(sm0, ax=ax, cax=cax)
+        cbar0.ax.get_yaxis().labelpad = colorbar_labelpad
+        cbar0.ax.set_ylabel('Cell Time', rotation=270, fontsize=colorbar_fontsize)
+    save = None if (path is None or figname is None) else f'{path}/{figname}.{save_format}'
     save_fig(fig_time, save)
 
 
@@ -2473,8 +2781,8 @@ def _plot_branch(ax, t, x, graph, label_dic_rev, plot_depth=True, color_map=None
 def plot_rate_grid(adata,
                    key,
                    gene_list,
-                   Nr,
-                   Nc,
+                   n_rows,
+                   n_cols,
                    W=6,
                    H=3,
                    legend_ncol=8,
@@ -2493,9 +2801,9 @@ def plot_rate_grid(adata,
             For example, f"{key}_alpha" will be used to extract the transcription rate from .varm
         gene_list (array like):
             List of genes to plot
-        Nr (int):
+        n_rows (int):
             Number of rows of the subplot grid.
-        Nc (int):
+        n_cols (int):
             Number of columns of the subplot grid.
         W (int, optional):
             Subplot width. Defaults to 6.
@@ -2516,8 +2824,8 @@ def plot_rate_grid(adata,
             Figure format, could be png, pdf, svg, eps and ps. Defaults to 'png'. Defaults to "png".
 
     """
-    Nfig = len(gene_list) // (Nr*Nc)
-    if Nfig * Nr * Nc < len(gene_list):
+    Nfig = len(gene_list) // (n_rows*n_cols)
+    if Nfig * n_rows * n_cols < len(gene_list):
         Nfig += 1
     graph = _adj_mtx_to_map(adata.uns['brode_w'])
     label_dic = adata.uns['brode_label_dic']
@@ -2527,10 +2835,10 @@ def plot_rate_grid(adata,
 
     # Plotting
     for i_fig in range(Nfig):
-        fig, ax = plt.subplots(3*Nr, Nc, figsize=(W*Nc, H*3*Nr), facecolor='white')
-        if Nc == 1:
-            for i in range(Nc):
-                idx = i_fig*Nr * Nc + i
+        fig, ax = plt.subplots(3*n_rows, n_cols, figsize=(W*n_cols, H*3*n_rows), facecolor='white')
+        if n_cols == 1:
+            for i in range(n_cols):
+                idx = i_fig*n_rows * n_cols + i
                 gidx = np.where(adata.var_names == gene_list[idx])[0][0]
                 alpha = adata.varm[f"{key}_alpha"][gidx]
                 beta = adata.varm[f"{key}_beta"][gidx]
@@ -2573,12 +2881,12 @@ def plot_rate_grid(adata,
                     ax[3*i+k].set_title(gene_list[idx], fontsize=30)
             handles, labels = ax[0].get_legend_handles_labels()
         else:
-            for i in range(Nr):
-                for j in range(Nc):  # i, j: row and column gene index
-                    idx = i_fig*Nr*Nc+i*Nc+j  # which gene
+            for i in range(n_rows):
+                for j in range(n_cols):  # i, j: row and column gene index
+                    idx = i_fig*n_rows*n_cols+i*n_cols+j  # which gene
                     if idx >= len(gene_list):
                         break
-                    idx = i_fig*Nr*Nc+i*Nc+j
+                    idx = i_fig*n_rows*n_cols+i*n_cols+j
                     gidx = np.where(adata.var_names == gene_list[idx])[0][0]
                     alpha = adata.varm[f"{key}_alpha"][gidx]
                     beta = adata.varm[f"{key}_beta"][gidx]
@@ -2616,14 +2924,14 @@ def plot_rate_grid(adata,
             handles, labels = ax[0, 0].get_legend_handles_labels()
         plt.tight_layout()
 
-        l_indent = 1 - 0.02/Nr
-        legend_fontsize = np.min([int(30*Nr), int(10*Nc)])
-        # min(Nr*10, Nr*120/len(graph.keys()))
+        l_indent = 1 - 0.02/n_rows
+        legend_fontsize = np.min([int(30*n_rows), int(10*n_cols)])
+        # min(n_rows*10, n_rows*120/len(graph.keys()))
         lgd = fig.legend(handles,
                          labels,
                          fontsize=legend_fontsize,
                          markerscale=1,
-                         bbox_to_anchor=(-0.03/Nc, l_indent),
+                         bbox_to_anchor=(-0.03/n_cols, l_indent),
                          loc='upper right')
 
         save = None if figname is None else f'{path}/{figname}_brode_rates_{i_fig+1}.{save_format}'
