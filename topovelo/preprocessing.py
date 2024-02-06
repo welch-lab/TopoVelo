@@ -1,11 +1,14 @@
 import scanpy
 import numpy as np
-from .scvelo_preprocessing import *
 from tqdm import tqdm
 from sklearn.neighbors import NearestNeighbors
-from .model.scvelo_util import leastsq_NxN, R_squared
 from scipy.spatial import Delaunay
 from scipy.sparse import csr_matrix, eye
+import pandas as pd
+import NaiveDE as nde
+import SpatialDE as spd
+from .scvelo_preprocessing import *
+from .model.scvelo_util import leastsq_NxN, R_squared
 
 
 def count_peak_expression(adata, cluster_key="clusters"):
@@ -162,7 +165,7 @@ def preprocess(adata,
                perform_clustering=False,
                resolution=1.0,
                compute_umap=False,
-               umap_min_dist=0.5,
+               umap_min_dist=0.25,
                keep_raw=True,
                **kwargs):
     """Preprocess the data.
@@ -321,6 +324,49 @@ def preprocess(adata,
         scanpy.tl.umap(adata, min_dist=umap_min_dist)
 
 
+def get_spatialde(adata, min_counts=1, min_counts_u=1):
+    filter_genes(adata, min_counts=min_counts, min_counts_u=min_counts_u)
+    adata.var_names_make_unique()
+    counts = pd.DataFrame(adata.X.todense(), columns=adata.var_names, index=adata.obs_names)
+    if adata.obsm['X_spatial'].shape[1] == 2:
+        coord = pd.DataFrame(adata.obsm['X_spatial'], columns=['x_coord', 'y_coord'], index=adata.obs_names)
+    elif adata.obsm['X_spatial'].shape[1] == 3:
+        coord = pd.DataFrame(adata.obsm['X_spatial'], columns=['x_coord', 'y_coord', 'z_coord'], index=adata.obs_names)
+    else:
+        coord = pd.DataFrame(adata.obsm['X_spatial'][:, :2], columns=['x_coord', 'y_coord'], index=adata.obs_names)
+    norm_expr = nde.stabilize(counts.T).T
+    adata.obs['total_counts'] = adata.X.sum(1).A1
+    coord['total_counts'] = adata.obs['total_counts'].to_numpy()
+    resid_expr = nde.regress_out(coord, norm_expr.T, 'np.log(total_counts)').T
+    results = spd.run(coord, resid_expr)
+    
+    results.index = results["g"].to_numpy().astype(str)
+    results = results.drop_duplicates("g")
+    
+    adata.var = pd.concat([adata.var, results.loc[adata.var.index.values, :]], axis=1)
+    gene_sort = results.sort_values("qval").index.to_numpy().astype(str)
+    return gene_sort
+
+
+def preprocess_spatialde(adata,
+                         n_gene,
+                         min_counts=1,
+                         min_counts_u=1,
+                         n_pcs=30,
+                         n_neighbors=30,
+                         save=None):
+    gene_sort = get_spatialde(adata, min_counts, min_counts_u)
+    
+    normalize_per_cell(adata)
+    adata._inplace_subset_var(list(gene_sort[:n_gene]))
+    log1p(adata)
+    moments(adata, n_pcs=n_pcs, n_neighbors=n_neighbors)
+    
+    if save is None:
+        return
+    adata.write_h5ad(save)
+
+
 def build_spatial_graph(adata,
                         spatial_key,
                         graph_key='spatial_graph',
@@ -345,8 +391,8 @@ def build_spatial_graph(adata,
             We omit all neighbors with distance larger than radius.
             Defaults to None.
     """
+    x_pos = adata.obsm[spatial_key][:, :2]
     if method == 'KNN':
-        x_pos = adata.obsm[spatial_key]
         nn = NearestNeighbors(n_neighbors=n_neighbors)
         nn.fit(x_pos)
         
@@ -377,7 +423,6 @@ def build_spatial_graph(adata,
                 thred = np.inf
 
     elif method == 'Delaunay':
-        x_pos = adata.obsm[spatial_key]
         tri = Delaunay(x_pos)
         adata.obsp[graph_key] = csr_matrix((np.ones((len(tri.vertex_neighbor_vertices[1]))),
                                             tri.vertex_neighbor_vertices[1],

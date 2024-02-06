@@ -19,4 +19,8 @@ from .plotting import (get_colors,
                        plot_velocity,
                        plot_transition_graph,
                        plot_rate_grid)
-from .preprocessing import preprocess, build_spatial_graph, pick_ref_batch
+from .preprocessing import (preprocess,
+                            get_spatialde,
+                            preprocess_spatialde,
+                            build_spatial_graph,
+                            pick_ref_batch)
