@@ -1,7 +1,7 @@
 import scanpy
 import numpy as np
 from tqdm import tqdm
-from sklearn.neighbors import NearestNeighbors
+from sklearn.neighbors import NearestNeighbors, BallTree
 from scipy.spatial import Delaunay
 from scipy.sparse import csr_matrix, eye
 import pandas as pd
@@ -388,11 +388,12 @@ def build_spatial_graph(adata,
             Remove edges with distance larger than the percentage with a value of dist_cutoff.
             Defaults to None.
         radius (float): Radius of the neighborhood.
-            We omit all neighbors with distance larger than radius.
+            When method is 'KNN' or 'Delaunay', we omit all neighbors with distance larger than radius.
+            When method is 'BallTree', we use radius to build the graph.
             Defaults to None.
     """
-    x_pos = adata.obsm[spatial_key][:, :2]
     if method == 'KNN':
+        x_pos = adata.obsm[spatial_key][:, :2]
         nn = NearestNeighbors(n_neighbors=n_neighbors)
         nn.fit(x_pos)
         
@@ -423,6 +424,7 @@ def build_spatial_graph(adata,
                 thred = np.inf
 
     elif method == 'Delaunay':
+        x_pos = adata.obsm[spatial_key][:, :2]
         tri = Delaunay(x_pos)
         adata.obsp[graph_key] = csr_matrix((np.ones((len(tri.vertex_neighbor_vertices[1]))),
                                             tri.vertex_neighbor_vertices[1],
@@ -442,6 +444,14 @@ def build_spatial_graph(adata,
             mask = (dist < thred).astype(int)
             mtx = csr_matrix((mask, (idx_1, idx_2)))
             adata.obsp[graph_key] = adata.obsp[graph_key].multiply(mtx)
+    elif method == 'BallTree':
+        x_pos = adata.obsm[spatial_key]
+        tree = BallTree(x_pos)
+        nbs = tree.query_radius(x_pos, r=radius)
+        row_idx = np.concatenate([np.repeat(i, len(x)) for i, x in enumerate(nbs)])
+        col_idx = np.concatenate(nbs)
+        adata.obsp[graph_key] = csr_matrix((np.ones(len(row_idx)), (row_idx, col_idx)), shape=(len(x_pos), len(x_pos)))
+        
     # Record the parameters for building the spatial graph
     adata.uns['spatial_graph_params'] = {}
     adata.uns['spatial_graph_params']['method'] = method
