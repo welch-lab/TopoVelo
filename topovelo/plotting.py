@@ -3,8 +3,9 @@ import matplotlib
 import matplotlib.pyplot as plt
 import igraph as ig
 import pynndescent
-from sklearn.neighbors import NearestNeighbors
+from sklearn.neighbors import NearestNeighbors, BallTree
 from scipy.stats import norm
+from scipy.ndimage import gaussian_filter
 
 
 #######################################################################################
@@ -1120,6 +1121,10 @@ def _plot_heatmap(ax,
     else:
         vmin = np.quantile(vals, 0.01)
         vmax = np.quantile(vals, 0.99)
+        if vmin > 1e-3:
+            vmin = round(vmin, 3)
+        if vmax > 1e-3:
+            vmax = round(vmax, 3)
     ax.scatter(X_embed[:, 0],
                X_embed[:, 1],
                s=markersize,
@@ -1140,10 +1145,15 @@ def _plot_heatmap(ax,
             if len(colorbar_ticklabels) == 2:
                 cbar.ax.get_yaxis().labelpad = 5
             cbar.ax.set_yticklabels(colorbar_ticklabels, fontsize=colorbar_tick_fontsize)
-        if colorbar_ticks is None:
-            cbar.set_ticks(np.linspace(vmin, vmax, len(colorbar_ticklabels)))
+            if colorbar_ticks is None:
+                cbar.set_ticks(np.linspace(vmin, vmax, len(colorbar_ticklabels)))
+            else:
+                cbar.set_ticks(colorbar_ticks)
         else:
-            cbar.set_ticks(colorbar_ticks)
+            if colorbar_ticks is None:
+                cbar.set_ticks([vmin, vmax])
+            else:
+                cbar.set_ticks(colorbar_ticks)
         
     if axis_off:
         ax.axis("off")
@@ -3028,9 +3038,9 @@ def plot_trajectory_3d(X_embed,
 
         xgrid, ygrid, zgrid = np.meshgrid(x, y, z)
         xgrid, ygrid, zgrid = xgrid.flatten(), ygrid.flatten(), zgrid.flatten()
-        Xgrid = np.stack([xgrid, ygrid, zgrid]).T
+        xyz_grid = np.stack([xgrid, ygrid, zgrid]).T
 
-        neighbors_grid, dist_grid = knn_model.query(Xgrid, k=k)
+        neighbors_grid, dist_grid = knn_model.query(xyz_grid, k=k)
         mask = np.quantile(dist_grid, 0.5, 1) <= dist_thred
 
         # transition probability on UMAP
@@ -3047,7 +3057,7 @@ def plot_trajectory_3d(X_embed,
 
         # Compute velocity based on grid time
         # filter out distant grid points
-        knn_grid = pynndescent.NNDescent(Xgrid[mask], n_neighbors=k_grid, metric="l2")
+        knn_grid = pynndescent.NNDescent(xyz_grid[mask], n_neighbors=k_grid, metric="l2")
         neighbor_grid, dist_grid = knn_grid.neighbor_graph
 
         if eps_t is None:
@@ -3055,7 +3065,7 @@ def plot_trajectory_3d(X_embed,
         delta_t = tgrid[neighbor_grid] - tgrid.reshape(-1, 1) - eps_t
 
         sigma_t = (t_clip.max()-t_clip.min())/n_grid
-        ind_grid_2d, dist_grid_2d = knn_model_2d.query(Xgrid[mask], k=k_grid)
+        ind_grid_2d, dist_grid_2d = knn_model_2d.query(xyz_grid[mask], k=k_grid)
         dist_thred_2d = (dist_grid_2d.mean(1)+dist_grid_2d.std(1)).reshape(-1, 1)
         # Filter out backflow and distant points in 2D space
         P = (np.exp((np.clip(delta_t/sigma_t, -5, 5))**2))*((delta_t >= 0) & (dist_grid_2d <= dist_thred_2d))
@@ -3107,48 +3117,58 @@ def plot_trajectory_3d(X_embed,
     save_fig(fig, save, (lgd,))
 
 
-def plot_trajectory_4d(X_3d,
-                       t,
+def get_inv_degree_mtx(graph):
+    """Get the inversed degree matrix of a graph.
+
+    Args:
+        graph (array-like):
+            An adjacency matrix.
+    """
+    return np.diag(1/np.sum(graph, 1))
+
+
+def plot_trajectory_4d(x_spatial,
+                       v,
                        cell_labels,
+                       radius,
                        plot_arrow=False,
-                       n_grid=50,
-                       k=30,
-                       k_grid=8,
+                       n_grid=30,
                        scale=1.5,
+                       smooth_factor=0.05,
+                       palette=None,
                        angle=(15, 45),
                        figsize=(12, 9),
-                       eps_t=None,
-                       color_map=None,
-                       embed='umap',
+                       arrow_length=10,
+                       arrow_length_ratio=0.5,
+                       zoom=1.0,
+                       embed='spatial',
                        save=None,
                        **kwargs):
     """3D quiver plot. Data are visualized in a 3D embedding such as UMAP.
     Additionally, we use time information to pick a future direction.
 
     Args:
-        X_3d (:class:`numpy.ndarray`):
+        x_spatial (:class:`numpy.ndarray`):
             3D embedding for visualization
+        v (:class:`numpy.ndarray`):
+            Velocity of cells.
         t (:class:`numpy.ndarray`):
             Cell time.
         cell_labels (:class:`numpy.ndarray`):
             Cell type annotations.
+        radius (float):
+            Radius for building an epsilon-ball graph.
         plot_arrow (bool, optional):
             Whether to add a quiver plot upon the background 3D scatter plot.
             Defaults to False.
         n_grid (int, optional):
             Grid size of the x-y plane. Defaults to 50.
-        k (int, optional):
-            Number of neighbors when computing velocity of each grid point. Defaults to 30.
-        k_grid (int, optional):
-            Number of neighbors when averaging across the 3D grid. Defaults to 8.
         scale (float, optional):
             Parameter to control boundary detection. Defaults to 1.5.
         angle (tuple, optional):
             Angle of the 3D plot. Defaults to (15, 45).
         figsize (tuple, optional):
             Defaults to (12, 9).
-        eps_t (float, optional):
-            Parameter to control the relative time order of cells. Defaults to None.
         color_map (str, optional):
             Defaults to None.
         embed (str, optional):
@@ -3157,116 +3177,102 @@ def plot_trajectory_4d(X_3d,
             Figure name for saving (including path). Defaults to None.
 
     """
-    t_clip = np.clip(t, np.quantile(t, 0.01), np.quantile(t, 0.99))
+    #t_clip = np.clip(t, np.quantile(t, 0.01), np.quantile(t, 0.99))
 
     fig = plt.figure(figsize=figsize)
     ax = fig.add_subplot(projection='3d')
     ax.view_init(angle[0], angle[1])
     # Plot cells by label
     cell_types = np.unique(cell_labels)
-    colors = get_colors(len(cell_types), color_map)
+    if palette is None:
+        palette = get_colors(len(cell_types))
     for i, type_ in enumerate(cell_types):
         cell_mask = cell_labels == type_
         d = max(1, np.sum(cell_mask)//3000)
-        ax.scatter(X_3d[:, 0][cell_mask][::d],
-                   X_3d[:, 1][cell_mask][::d],
-                   X_3d[:, 2][cell_mask][::d],
+        ax.scatter(x_spatial[:, 0][cell_mask][::d],
+                   x_spatial[:, 1][cell_mask][::d],
+                   x_spatial[:, 2][cell_mask][::d],
                    s=5.0,
-                   color=colors[i],
+                   color=palette[i],
                    label=type_,
                    edgecolor='none')
     if plot_arrow:
-        # Used for filtering target grid points
-        knn_model_filt = pynndescent.NNDescent(X_3d, n_neighbors=k)
+        # Compute the velocity on a grid
+        #knn_model = pynndescent.NNDescent(x_spatial, n_neighbors=k+20)
+        #ind, dist = knn_model.neighbor_graph
+        #dist_thred = dist.mean() * scale
+        #neighbors_grid, dist_grid = knn_model.query(xyz_grid, k=k)
+        #mask = np.quantile(dist_grid, 0.5, 1) <= dist_thred
+        bt = BallTree(x_spatial)
 
-        # Compute the time on a grid
-        knn_model = pynndescent.NNDescent(X_3d, n_neighbors=k+20)
-        ind, dist = knn_model.neighbor_graph
-        dist_thred = dist.mean() * scale
-
-        x = np.linspace(X_3d[:, 0].min(), X_3d[:, 0].max(), n_grid)
-        y = np.linspace(X_3d[:, 1].min(), X_3d[:, 1].max(), n_grid)
-        z = np.linspace(X_3d[:, 2].min(), X_3d[:, 2].max(), n_grid)
+        x = np.linspace(x_spatial[:, 0].min(), x_spatial[:, 0].max(), n_grid)
+        y = np.linspace(x_spatial[:, 1].min(), x_spatial[:, 1].max(), n_grid)
+        z = np.linspace(x_spatial[:, 2].min(), x_spatial[:, 2].max(), n_grid)
+        grid_dist = np.ptp(x) / (n_grid - 1)
 
         xgrid, ygrid, zgrid = np.meshgrid(x, y, z)
         xgrid, ygrid, zgrid = xgrid.flatten(), ygrid.flatten(), zgrid.flatten()
-        Xgrid = np.stack([xgrid, ygrid, zgrid]).T
-
-        neighbors_grid, dist_grid = knn_model.query(Xgrid, k=k)
-        mask = np.quantile(dist_grid, 0.5, 1) <= dist_thred
+        xyz_grid = np.stack([xgrid, ygrid, zgrid]).T
+        # Find distance thredshold
+        out = bt.query_radius(x_spatial, radius, return_distance=True)
+        spatial_nbs, dist = out[0], out[1]
+        dist = np.concatenate(dist)
+        dist_thred = dist.mean() * scale
+        
+        # Find neighbors
+        out = bt.query_radius(xyz_grid, radius, return_distance=True)
+        spatial_nbs, dist_grid = out[0], out[1]
+        mid_dist_grid = np.array([np.median(x) for x in dist_grid])
+        mask = mid_dist_grid <= dist_thred
 
         # transition probability on UMAP
         def transition_prob(dist, sigma):
-            P = np.exp(-(np.clip(dist/sigma, -5, None))**2)
-            psum = P.sum(1).reshape(-1, 1)
-            psum[psum == 0] = 1.0
-            P = P/psum
-            return P
+            _dist = np.clip(dist/sigma, -5, None)
+            p = np.exp(-_dist)
+            psum = p.sum()
+            psum += int(psum == 0)
+            p = p/psum
+            return p
+        v_grid = np.zeros((len(xyz_grid), 3))
+        for i, (nbs, dist) in enumerate(zip(spatial_nbs, dist_grid)):
+            if mask[i]:
+                p = transition_prob(dist, dist_thred).reshape(-1, 1)
+                v_grid[i] = np.sum(v[nbs] * p, 0)
 
-        P = transition_prob(dist_grid, dist_thred)
-        tgrid = np.sum(np.stack([t[neighbors_grid[i]] for i in range(len(xgrid))])*P, 1)
-        tgrid = tgrid[mask]
+        # gaussian smoothing
+        v_grid = v_grid.reshape(n_grid, n_grid, n_grid, 3)
+        v_grid_sm = np.zeros((n_grid*n_grid*n_grid, 3))
+        for i in range(3):
+            v_grid_sm[:, i] = gaussian_filter(v_grid[:, :, :, i],
+                                              grid_dist*smooth_factor,
+                                              mode="nearest",
+                                              radius=max(int(n_grid*0.1), 3)).flatten()
+        v_grid_sm[~mask] = 0
 
-        # Compute velocity based on grid time
-        # filter out distant grid points
-        knn_grid = pynndescent.NNDescent(Xgrid[mask], n_neighbors=k_grid, metric="l2")
-        neighbor_grid, dist_grid = knn_grid.neighbor_graph
-
-        if eps_t is None:
-            eps_t = (t_clip.max()-t_clip.min())/len(t)*10
-        delta_t = tgrid[neighbor_grid] - tgrid.reshape(-1, 1) - eps_t
-
-        sigma_t = (t_clip.max()-t_clip.min())/n_grid
-        ind_grid_filt, dist_grid_filt = knn_model_filt.query(Xgrid[mask], k=k_grid)
-        dist_thred_2d = (dist_grid_filt.mean(1)+dist_grid_filt.std(1)).reshape(-1, 1)
-        # Filter out backflow and distant points in 3D space
-        P = (np.exp((np.clip(delta_t/sigma_t, -5, 5))**2))*((delta_t >= 0) & (dist_grid_filt <= dist_thred_2d))
-        psum = P.sum(1).reshape(-1, 1)
-        psum[psum == 0] = 1.0
-        P = P/psum
-
-        delta_x = (xgrid[mask][neighbor_grid] - xgrid[mask].reshape(-1, 1))
-        delta_y = (ygrid[mask][neighbor_grid] - ygrid[mask].reshape(-1, 1))
-        delta_z = (zgrid[mask][neighbor_grid] - zgrid[mask].reshape(-1, 1))
-        norm = np.sqrt(delta_x**2+delta_y**2+delta_z**2)
-        norm[norm == 0] = 1.0
-        vx_grid_filter = ((delta_x/norm)*P).sum(1)
-        vy_grid_filter = ((delta_y/norm)*P).sum(1)
-        vz_grid_filter = ((delta_z/norm)*P).sum(1)
-        # KNN Smoothing
-        vx_grid_filter = vx_grid_filter[neighbor_grid].mean(1)
-        vy_grid_filter = vy_grid_filter[neighbor_grid].mean(1)
-        vz_grid_filter = vz_grid_filter[neighbor_grid].mean(1)
-
-        vx_grid = np.zeros((n_grid**3))
-        vy_grid = np.zeros((n_grid**3))
-        vz_grid = np.zeros((n_grid**3))
-        vx_grid[mask] = vx_grid_filter
-        vy_grid[mask] = vy_grid_filter
-        vz_grid[mask] = vz_grid_filter
-
-        range_x = np.mean(X_3d.max(0) - X_3d.min(0))
         ax.quiver(xgrid.reshape(n_grid, n_grid, n_grid),
                   ygrid.reshape(n_grid, n_grid, n_grid),
                   zgrid.reshape(n_grid, n_grid, n_grid),
-                  vx_grid.reshape(n_grid, n_grid, n_grid),
-                  vy_grid.reshape(n_grid, n_grid, n_grid),
-                  vz_grid.reshape(n_grid, n_grid, n_grid),
+                  v_grid_sm[:, 0].reshape(n_grid, n_grid, n_grid),
+                  v_grid_sm[:, 1].reshape(n_grid, n_grid, n_grid),
+                  v_grid_sm[:, 2].reshape(n_grid, n_grid, n_grid),
                   color='k',
-                  length=(0.8*range_x/n_grid + 0.8*range_x/n_grid),
-                  normalize=True)
-
+                  normalize=True,
+                  length=arrow_length,
+                  arrow_length_ratio=arrow_length_ratio)
+    ax.set_box_aspect((np.ptp(x), np.ptp(y), np.ptp(z)), zoom=zoom)
     ax.set_xlabel(f'{embed} 1', fontsize=12)
     ax.set_ylabel(f'{embed} 2', fontsize=12)
-    ax.set_zlabel('Time', fontsize=12)
+    ax.set_zlabel(f'{embed} 3', fontsize=12)
 
     ncol = kwargs['ncol'] if 'ncol' in kwargs else 4
     fontsize = kwargs['legend_fontsize'] if 'legend_fontsize' in kwargs else 12
     lgd = ax.legend(fontsize=fontsize, ncol=ncol, markerscale=5.0, bbox_to_anchor=(0.0, 1.0, 1.0, -0.05), loc='center')
-    fig.tight_layout()
+    plt.tight_layout()
     if 'axis_off' in kwargs:
         ax.axis('off')
-    save_fig(fig, save, (lgd,))
+    if save is not None:
+        save_fig(fig, save)
+    return xyz_grid, v_grid_sm
 
 
 def plot_transition_graph(adata,

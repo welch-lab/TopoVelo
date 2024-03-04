@@ -451,6 +451,7 @@ def build_spatial_graph(adata,
         row_idx = np.concatenate([np.repeat(i, len(x)) for i, x in enumerate(nbs)])
         col_idx = np.concatenate(nbs)
         adata.obsp[graph_key] = csr_matrix((np.ones(len(row_idx)), (row_idx, col_idx)), shape=(len(x_pos), len(x_pos)))
+        print(f'Ball Tree: average number of neighbors: {len(row_idx) / len(nbs):.1f}')
         
     # Record the parameters for building the spatial graph
     adata.uns['spatial_graph_params'] = {}
