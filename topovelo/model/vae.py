@@ -2607,7 +2607,7 @@ class VAE(VanillaVAE):
         return
 
     def pred_all(self, cell_labels, mode='test', output=["uhat", "shat", "t", "z"], gene_idx=None):
-        G = self.graph_data.G
+        G = self.decoder.n_gene
         if gene_idx is None:
             gene_idx = np.array(range(G))
         save_uhat_fw = "uhat_fw" in output and self.use_knn and self.config["vel_continuity_loss"]
@@ -2729,7 +2729,7 @@ class VAE(VanillaVAE):
         print("--------------------------- Reloading a TopoVelo ---------------------------")
         self._set_config(adata, config, spatial_key)
         self._set_cell_type_label(adata, cluster_key)
-        self._load_data(adata, spatial_key, us_keys, embed, edge_attr)
+        self._load_data(adata, graph, spatial_key, us_keys, embed, edge_attr)
 
         self.use_knn = True
         self.train_stage = 2
@@ -2945,6 +2945,365 @@ class VAE(VanillaVAE):
                          real_aspect_ratio=True,
                          save=f"{path}/xy-{testid}-test.png")
         return loss.cpu().item()
+    
+    def pred_inductive(self, output=["uhat", "shat", "t", "z"], gene_idx=None):
+        N, G = self.unseen_data.N, self.unseen_data.G
+        if gene_idx is None:
+            gene_idx = np.array(range(G))
+        save_uhat_fw = "uhat_fw" in output and self.use_knn and self.config["vel_continuity_loss"]
+        save_shat_fw = "shat_fw" in output and self.use_knn and self.config["vel_continuity_loss"]
+
+        with torch.no_grad():
+            w_hard = F.one_hot(torch.argmax(self.decoder.logit_pw.cpu(), 1), num_classes=2).T
+            u0 = self.unseen_data.u0
+            s0 = self.unseen_data.s0
+            t0 = self.unseen_data.t0
+            u1 = self.unseen_data.u1
+            s1 = self.unseen_data.s1
+            t1 = self.unseen_data.t1
+            lu_scale = self.lu_scale_unseen.exp()
+            ls_scale = self.ls_scale_unseen.exp()
+            y_onehot = (torch.zeros(N, self.n_batch).float() if self.enable_cvae else None)
+
+            p_t = self.p_t_unseen.cpu()
+            p_z = torch.stack([torch.zeros(N, self.dim_z),
+                                torch.ones(N, self.dim_z)*self.config["std_z_prior"]]).float()
+            (mu_tx, std_tx,
+             mu_zx, std_zx,
+             uhat, shat,
+             uhat_fw, shat_fw,
+             vu, vs,
+             vu_fw, vs_fw) = self.eval_model_batch(self.unseen_data.data.x,
+                                                   self.unseen_data.data.adj_t,
+                                                   lu_scale,
+                                                   ls_scale,
+                                                   self.unseen_data.edge_weight,
+                                                   u0,
+                                                   s0,
+                                                   t0,
+                                                   t1,
+                                                   y_onehot,
+                                                   return_vel=("vs" in output or "vu" in output),
+                                                   to_cpu=True)
+            lu_scale = lu_scale.cpu()
+            ls_scale = ls_scale.cpu()
+            if uhat.ndim == 3:
+                lu_scale = lu_scale.unsqueeze(-1)
+                ls_scale = ls_scale.unsqueeze(-1)
+            if uhat_fw is not None and shat_fw is not None:
+                uhat_fw = uhat_fw*lu_scale
+                shat_fw = uhat_fw*ls_scale
+                u1 = u1.cpu()
+                s1 = s1.cpu()
+
+            loss_terms = self.vae_risk((mu_tx, std_tx), p_t,
+                                       (mu_zx, std_zx), p_z,
+                                       self.unseen_data.data.x[:, :G].cpu(),
+                                       self.unseen_data.data.x[:, G:].cpu(),
+                                       uhat.cpu()*lu_scale,
+                                       shat.cpu()*ls_scale,
+                                       uhat_fw, shat_fw,
+                                       u1, s1,
+                                       None,
+                                       to_cpu=True)
+
+        out = {}
+        if "uhat" in output:
+            if uhat.ndim == 3:
+                uhat = torch.sum(uhat*w_hard, 1)
+            out["uhat"] = uhat[:, gene_idx].numpy()
+        if "shat" in output:
+            if shat.ndim == 3:
+                shat = torch.sum(shat*w_hard, 1)
+            out["shat"] = shat[:, gene_idx].numpy()
+        if "t" in output:
+            out["t"] = mu_tx.detach().cpu().squeeze().numpy()
+            out["std_t"] = std_tx.detach().cpu().squeeze().numpy()
+        if "z" in output:
+            out["z"] = mu_zx.detach().cpu().numpy()
+            out["std_z"] = std_zx.detach().cpu().numpy()
+        if "vs" in output:
+            out["vs"] = vs[:, gene_idx].detach().cpu().numpy()
+        if "vu" in output:
+            out["vu"] = vu[:, gene_idx].detach().cpu().numpy()
+        if save_uhat_fw:
+            out["uhat_fw"] = uhat_fw[:, gene_idx].detach().cpu().numpy()
+        if save_shat_fw:
+            out["shat_fw"] = shat_fw[:, gene_idx].detach().cpu().numpy()
+        del (mu_tx, std_tx,
+             mu_zx, std_zx,
+             uhat, shat,
+             uhat_fw, shat_fw,
+             vu, vs,
+             vu_fw, vs_fw)
+
+        return out, [-loss_terms[i].cpu().item() for i in range(len(loss_terms))]
+
+    def _update_x0_inductive(self):
+        print("*********           Estimating initial conditions          *********")
+        G = self.unseen_data.G
+        out, _ = self.pred_all(["uhat", "shat", "t", "z"], mode="all")
+        out_query, _ = self.pred_inductive(["uhat", "shat", "t", "z"])
+        t = np.concatenate([out["t"], out_query["t"]])
+        z = np.concatenate([out["z"], out_query["z"]], 0)
+        uhat = np.concatenate([out["uhat"], out_query["uhat"]], 0)
+        shat = np.concatenate([out["shat"], out_query["shat"]], 0)
+        t_query = out_query["t"]
+        z_query = out_query["z"]
+        del out, out_query
+        
+        # Clip the time to avoid outliers
+        t = np.clip(t, 0, np.quantile(t, 0.99))
+        dt = (self.config["dt"][0]*(t.max()-t.min()), self.config["dt"][1]*(t.max()-t.min()))
+        u1, s1, t1 = None, None, None
+        # Compute initial conditions of cells without a valid pool of neighbors
+        with torch.no_grad():
+            init_mask = (t_query <= np.quantile(t_query, 0.01))
+            u0_init = np.mean(self.unseen_data.data.x[init_mask][:, :G].detach().cpu().numpy(), 0)
+            s0_init = np.mean(self.unseen_data.data.x[init_mask][:, G:].detach().cpu().numpy(), 0)
+        xy = self.graph_data.xy.detach().cpu().numpy()
+        xy_query = self.unseen_data.xy.detach().cpu().numpy()
+        xy = np.concatenate([xy, xy_query], 0)
+
+        x0_index = knnx0_index(t,
+                               z,
+                               xy,
+                               t_query,
+                               z_query,
+                               xy_query,
+                               dt,
+                               self.config["n_neighbors"],
+                               self.epsilon_ball,
+                               hist_eq=True)
+        u0, s0, xy0, t0 = get_x0(uhat,
+                                 shat,
+                                 xy,
+                                 t,
+                                 dt,
+                                 x0_index,
+                                 u0_init,
+                                 s0_init)
+        if self.config["vel_continuity_loss"]:
+            x1_index = knnx0_index(t,
+                                   z,
+                                   xy,
+                                   t_query,
+                                   z_query,
+                                   xy_query,
+                                   dt,
+                                   self.config["n_neighbors"],
+                                   self.epsilon_ball,
+                                   forward=True,
+                                   hist_eq=True)
+            u1, s1, xy1, t1 = get_x0(uhat,
+                                     shat,
+                                     xy,
+                                     t,
+                                     dt,
+                                     x1_index,
+                                     None,
+                                     None,
+                                     forward=True)
+
+        self.unseen_data.t = torch.tensor(t_query.reshape(-1, 1), dtype=torch.float32, device=self.device, requires_grad=False)
+        self.unseen_data.z = torch.tensor(z_query, dtype=torch.float32, device=self.device, requires_grad=False)
+        self.unseen_data.u0 = torch.tensor(u0, dtype=torch.float32, device=self.device, requires_grad=False)
+        self.unseen_data.s0 = torch.tensor(s0, dtype=torch.float32, device=self.device, requires_grad=False)
+        self.unseen_data.xy0 = torch.tensor(xy0, dtype=torch.float32, device=self.device, requires_grad=True)
+        self.unseen_data.t0 = torch.tensor(t0.reshape(-1, 1), dtype=torch.float32, device=self.device, requires_grad=False)
+
+        if self.config['vel_continuity_loss']:
+            self.unseen_data.u1 = torch.tensor(u1, dtype=torch.float32, device=self.device, requires_grad=False)
+            self.unseen_data.s1 = torch.tensor(s1, dtype=torch.float32, device=self.device, requires_grad=False)
+            self.unseen_data.xy1 = torch.tensor(xy1, dtype=torch.float32, device=self.device, requires_grad=False)
+            self.unseen_data.t1 = torch.tensor(t1.reshape(-1, 1), dtype=torch.float32, device=self.device, requires_grad=False)
+
+    def _load_unseen_data(self, adata, graph, spatial_key, cluster_key, us_keys=None, edge_attr=None):
+        """Retreive data from an unseen adata for inductive evaluation.
+
+        Args:
+            adata (AnnData): Annotated data matrix.
+            spatial_key (str): Key in adata.obsm storing the spatial coordinates.
+            us_keys (list): Keys in adata.layers storing the unspliced and spliced count matrices.
+            embed (str): Low dimensional embedding in adata.obsm.
+                The actual key storing the embedding should be f'X_{embed}'
+
+        Returns:
+            bool : Whether the data is successfully loaded.
+        """
+        if self.is_discrete:
+            U, S = np.array(adata.layers['unspliced'].todense()), np.array(adata.layers['spliced'].todense())
+            X = np.concatenate((U, S), 1).astype(int)
+        elif us_keys is not None:
+            U, S = adata.layers[us_keys[0]], adata.layers[us_keys[1]]
+            if isinstance(U, csr_matrix) or isinstance(U, csc_matrix) or isinstance(U, coo_matrix):
+                U, S = U.A, S.A
+            X = np.concatenate((U, S), 1)
+        else:
+            X = np.concatenate((adata.layers['Mu'], adata.layers['Ms']), 1).astype(float)
+        
+        print("*********           Creating an unseen Graph Dataset          *********")
+        cell_labels_raw = (adata.obs[cluster_key].to_numpy() if cluster_key in adata.obs
+                           else np.array(['Unknown' for i in range(adata.n_obs)]))
+        # Encode the labels
+        cell_types_raw = np.unique(cell_labels_raw)
+        label_dic, label_dic_rev = encode_type(cell_types_raw)
+        n_type = len(cell_types_raw)
+        cell_labels = np.array([label_dic[x] for x in cell_labels_raw])
+
+        self.unseen_data = SCGraphData(X,
+                                       cell_labels,
+                                       graph,
+                                       adata.obsm[spatial_key],
+                                       None,
+                                       None,
+                                       None,
+                                       self.device,
+                                       edge_attr,
+                                       None,
+                                       self.config['enable_edge_weight'],
+                                       self.config['normalize_pos'])
+        print("*********                      Finished.                      *********")
+        self.lu_scale_unseen = (
+            torch.tensor(np.log(adata.obs['library_scale_u'].to_numpy()), device=self.device).unsqueeze(-1).float()
+            if self.is_discrete else torch.zeros(adata.n_obs, 1, device=self.device).float()
+            )
+        self.ls_scale_unseen = (
+            torch.tensor(np.log(adata.obs['library_scale_s'].to_numpy()), device=self.device).unsqueeze(-1).float()
+            if self.is_discrete else torch.zeros(adata.n_obs, 1, device=self.device).float()
+            )
+
+    def _get_time_prior_unseen(self, adata, tprior=None):
+        print("*********           Setting time prior for test data          *********")
+        _p_t = self.p_t
+        self.get_prior(adata, self.tmax, tprior)
+        temp = self.p_t
+        self.p_t = _p_t
+        self.p_t_unseen = temp
+
+    def _copy_var(self, adata, adata_unseen, key):
+        if self.enable_cvae:
+            if self.is_full_vb:
+                adata_unseen.varm[f"{key}_logmu_alpha"] = adata.varm[f"{key}_logmu_alpha"]
+                adata_unseen.varm[f"{key}_logmu_beta"] = adata.varm[f"{key}_logmu_beta"]
+                adata_unseen.varm[f"{key}_logmu_gamma"] = adata.varm[f"{key}_logmu_gamma"]
+                adata_unseen.varm[f"{key}_logstd_alpha"] = adata.varm[f"{key}_logstd_alpha"]
+                adata_unseen.varm[f"{key}_logstd_beta"] = adata.varm[f"{key}_logstd_beta"]
+                adata_unseen.varm[f"{key}_logstd_gamma"] = adata.varm[f"{key}_logstd_gamma"]
+            else:
+                adata_unseen.varm[f"{key}_alpha"] = adata.varm[f"{key}_alpha"]
+                adata_unseen.varm[f"{key}_beta"] = adata.varm[f"{key}_beta"]
+                adata_unseen.varm[f"{key}_gamma"] = adata.varm[f"{key}_gamma"]
+            adata_unseen.varm[f"{key}_ton"] = adata.varm[f"{key}_ton"]
+            adata_unseen.varm[f"{key}_scaling_u"] = adata.varm[f"{key}_scaling_u"]
+            adata_unseen.varm[f"{key}_scaling_s"] = adata.varm[f"{key}_scaling_s"]
+            adata_unseen.var[f"{key}_sigma_u"] = adata.var[f"{key}_sigma_u"].to_numpy()
+            adata_unseen.var[f"{key}_sigma_s"] = adata.var[f"{key}_sigma_s"].to_numpy()
+        else:
+            if self.is_full_vb:
+                adata_unseen.var[f"{key}_logmu_alpha"] = adata.var[f"{key}_logmu_alpha"].to_numpy()
+                adata_unseen.var[f"{key}_logmu_beta"] = adata.var[f"{key}_logmu_beta"].to_numpy()
+                adata_unseen.var[f"{key}_logmu_gamma"] = adata.var[f"{key}_logmu_gamma"].to_numpy()
+                adata_unseen.var[f"{key}_logstd_alpha"] = adata.var[f"{key}_logstd_alpha"].to_numpy()
+                adata_unseen.var[f"{key}_logstd_beta"] = adata.var[f"{key}_logstd_beta"].to_numpy()
+                adata_unseen.var[f"{key}_logstd_gamma"] = adata.var[f"{key}_logstd_gamma"].to_numpy()
+            else:
+                adata_unseen.var[f"{key}_alpha"] = adata.var[f"{key}_alpha"].to_numpy()
+                adata_unseen.var[f"{key}_beta"] = adata.var[f"{key}_beta"].to_numpy()
+                adata_unseen.var[f"{key}_gamma"] = adata.var[f"{key}_gamma"].to_numpy()
+
+            adata_unseen.var[f"{key}_ton"] = adata.var[f"{key}_ton"].to_numpy()
+            adata_unseen.var[f"{key}_scaling_u"] = adata.var[f"{key}_scaling_u"].to_numpy()
+            adata_unseen.var[f"{key}_scaling_s"] = adata.var[f"{key}_scaling_s"].to_numpy()
+            adata_unseen.var[f"{key}_sigma_u"] = adata.var[f"{key}_sigma_u"].to_numpy()
+            adata_unseen.var[f"{key}_sigma_s"] = adata.var[f"{key}_sigma_s"].to_numpy()
+        adata_unseen.varm[f"{key}_mode"] = F.softmax(self.decoder.logit_pw, 1).detach().cpu().numpy()
+
+    def test_inductive(self,
+                       adata,
+                       adata_unseen,
+                       key,
+                       graph_key,
+                       spatial_key,
+                       cluster_key,
+                       tprior=None,
+                       us_keys=None,
+                       edge_attr=None,
+                       batch_key=None):
+        self._load_unseen_data(adata_unseen,
+                               adata_unseen.obsp[graph_key],
+                               spatial_key,
+                               cluster_key,
+                               us_keys,
+                               edge_attr)
+        self._get_time_prior_unseen(adata_unseen, tprior)
+        self._update_x0_inductive()
+        out, _ = self.pred_inductive(["uhat", "shat", "t", "z", "std_t", "std_z"])
+        uhat, shat, t, std_t, z, std_z = out["uhat"], out["shat"], out["t"], out["std_t"], out["z"], out["std_z"]
+        with torch.no_grad():
+            condition = (torch.zeros(adata_unseen.n_obs, self.n_batch).float()
+                         if self.enable_cvae else None)
+            xy_hat = self.pred_xy(self.unseen_data.t,
+                                  self.unseen_data.z,
+                                  self.unseen_data.t0,
+                                  self.unseen_data.xy0,
+                                  self.unseen_data.data.adj_t,
+                                  self.unseen_data.edge_weight,
+                                  condition,
+                                  None,
+                                  mode='eval')
+            z_in = self.unseen_data.z
+            if self.enable_cvae:
+                z_in = torch.cat((z_in, condition), 1)
+            rho = (self.decoder.net_rho2(z_in, self.unseen_data.data.adj_t, None)
+                   if isinstance(self.decoder.net_rho2, GraphDecoder) else
+                   self.decoder.net_rho2(torch.tensor(z_in, device=self.device).float()))
+        self._copy_var(adata, adata_unseen, key)
+        adata_unseen.layers[f"{key}_rho"] = rho.cpu().numpy()
+        adata_unseen.obs[f"{key}_time"] = t
+        adata_unseen.obs[f"{key}_std_t"] = std_t
+        adata_unseen.obsm[f"{key}_z"] = z
+        adata_unseen.obsm[f"{key}_std_z"] = std_z
+        adata_unseen.obsm[f"X_{key}_xy"] = xy_hat.detach().cpu().numpy()
+        adata_unseen.obsm[f"X_{key}_xy0"] = self.unseen_data.xy0.detach().cpu().numpy()
+        adata_unseen.layers[f"{key}_uhat"] = uhat
+        adata_unseen.layers[f"{key}_shat"] = shat
+        
+        # Attention score
+        enc_att = self.get_enc_att(self.unseen_data.data.x,
+                                   self.unseen_data.data.adj_t,
+                                   self.unseen_data.edge_weight)
+        z_ts = torch.tensor(z, device=self.device)
+        dec_att = self.get_dec_att(z_ts,
+                                   self.unseen_data.data.adj_t,
+                                   self.unseen_data.edge_weight)
+        
+        if enc_att is not None:
+            for i in range(len(enc_att)):
+                adata_unseen.obsp[f"{key}_enc_att_{i}"] = enc_att[i]
+        if dec_att is not None:
+            for i in range(len(dec_att)):
+                adata_unseen.obsp[f"{key}_dec_att_{i}"] = dec_att[i]
+        del z_ts, enc_att, dec_att
+
+        adata_unseen.obs[f"{key}_t0"] = self.unseen_data.t0.detach().cpu().squeeze().numpy()
+        adata_unseen.layers[f"{key}_u0"] = self.unseen_data.u0.detach().cpu().numpy()
+        adata_unseen.layers[f"{key}_s0"] = self.unseen_data.s0.detach().cpu().numpy()
+        if self.config["vel_continuity_loss"]:
+            adata_unseen.obs[f"{key}_t1"] = self.t1.detach().cpu().squeeze().numpy()
+            adata_unseen.layers[f"{key}_u1"] = self.unseen_data.u1.detach().cpu().numpy()
+            adata_unseen.layers[f"{key}_s1"] = self.unseen_data.s1.detach().cpu().numpy()
+
+        adata_unseen.obsm[f"{key}_velocity_{key}_xy"] = self.xy_velocity(self.unseen_data, condition)
+        del condition, rho, out
+
+        rna_velocity_vae(adata_unseen,
+                         key,
+                         batch_key=batch_key,
+                         use_raw=False,
+                         use_scv_genes=False,
+                         full_vb=self.is_full_vb)
+        
 
     def update_std_noise(self):
         """Update the standard deviation of Gaussian noise.
@@ -3146,23 +3505,23 @@ class VAE(VanillaVAE):
         return np.stack(gd_u), np.stack(gd_s)
 
     def xy_velocity(self,
-                    edge_index=None,
-                    edge_weight=None,
+                    graph_data,
                     condition=None,
                     delta_t=0.05):
         self.set_mode('eval')
-        # tau = F.relu(self.graph_data.t-self.graph_data.t0)
-        xy_hat = self.decoder._compute_xy(self.graph_data.t,
-                                          self.graph_data.z,
-                                          self.graph_data.t0,
-                                          self.graph_data.xy0,
+        edge_index = graph_data.data.adj_t
+        edge_weight = graph_data.edge_weight
+        xy_hat = self.decoder._compute_xy(graph_data.t,
+                                          graph_data.z,
+                                          graph_data.t0,
+                                          graph_data.xy0,
                                           edge_index,
                                           edge_weight,
                                           condition)
         # tau = torch.ones((len(xy_hat), 1), dtype=torch.float32, device=self.device)*delta_t
-        xy_hat_1 = self.decoder._compute_xy(self.graph_data.t + delta_t,
-                                            self.graph_data.z,
-                                            self.graph_data.t,
+        xy_hat_1 = self.decoder._compute_xy(graph_data.t + delta_t,
+                                            graph_data.z,
+                                            graph_data.t,
                                             xy_hat,
                                             edge_index,
                                             edge_weight,
@@ -3331,9 +3690,7 @@ class VAE(VanillaVAE):
             adata.uns[f"{key}_test_idx"] = self.test_idx
         adata.uns[f"{key}_run_time"] = self.timer
 
-        adata.obsm[f"{key}_velocity_{key}_xy"] = self.xy_velocity(self.graph_data.data.adj_t,
-                                                                  self.graph_data.edge_weight,
-                                                                  condition)
+        adata.obsm[f"{key}_velocity_{key}_xy"] = self.xy_velocity(self.graph_data, condition)
         del condition, rho, out
 
         rna_velocity_vae(adata,

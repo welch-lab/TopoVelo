@@ -867,7 +867,10 @@ def post_analysis(adata,
                 else:
                     gene_subset = adata.var_names[~np.isnan(adata.layers[vkey][0])]
                 xkey = 'Ms' if 'xkey' not in kwargs else kwargs['xkey']
-                velocity_graph(adata, vkey=vkey, xkey=xkey, gene_subset=gene_subset, n_jobs=get_n_cpu(adata.n_obs))
+                velocity_graph(adata, vkey=vkey, xkey=xkey, gene_subset=gene_subset,
+                               n_jobs=(kwargs['n_jobs']
+                                       if 'n_jobs' in kwargs
+                                       else get_n_cpu(adata.n_obs)))
                 if 'spatial_graph_params' in adata.uns:
                     radius = adata.uns['spatial_graph_params']['radius']
                     if radius is not None:

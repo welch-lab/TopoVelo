@@ -12,8 +12,75 @@ from sklearn.neighbors import BallTree
 from scipy.stats import dirichlet, bernoulli, kstest, linregress
 from scipy.linalg import svdvals
 from scipy.spatial.distance import cosine
-from scipy.sparse import csr_array
+from scipy.sparse import csr_array, csr_matrix
 from .scvelo_util import mRNA, vectorize, tau_inv, R_squared, test_bimodality, leastsq_NxN
+
+###################################################################################
+# Build spatial graph
+###################################################################################
+
+
+def build_spatial_graph(x_spatial,
+                        n_neighbors=16,
+                        method='KNN',
+                        dist_cutoff=None,
+                        radius=None):
+    if method == 'KNN':
+        nn = NearestNeighbors(n_neighbors=n_neighbors)
+        nn.fit(x_spatial)
+        
+        if isinstance(dist_cutoff, float) or isinstance(dist_cutoff, int):
+            dist = nn.kneighbors_graph(mode='distance')
+            nonzero_dist = dist.data
+            thred = np.percentile(nonzero_dist, dist_cutoff)
+            if isinstance(radius, float) or isinstance(radius, int):
+                thred = min(thred, radius)
+            graph = nn.kneighbors_graph().multiply(dist < thred)
+        elif dist_cutoff == 'auto':
+            dist = nn.kneighbors_graph(mode='distance')
+            nonzero_dist = dist.data
+            q1, q3 = np.quantile(nonzero_dist, 0.25), np.quantile(nonzero_dist, 0.75)
+            thred = q3 + 1.5 * (q3 - q1)
+            if isinstance(radius, float) or isinstance(radius, int):
+                thred = min(thred, radius)
+            graph = nn.kneighbors_graph().multiply(dist < thred)
+        else:
+            if isinstance(radius, float) or isinstance(radius, int):
+                dist = nn.kneighbors_graph(mode='distance')
+                nonzero_dist = dist.data
+                thred = radius
+                graph = nn.kneighbors_graph().multiply(dist < radius)
+            else:
+                graph = nn.kneighbors_graph()
+                thred = np.inf
+
+    elif method == 'Delaunay':
+        tri = Delaunay(x_spatial)
+        graph = csr_matrix((np.ones((len(tri.vertex_neighbor_vertices[1]))),
+                                         tri.vertex_neighbor_vertices[1],
+                                         tri.vertex_neighbor_vertices[0]))
+        if isinstance(dist_cutoff, float) or isinstance(dist_cutoff, int):
+            idx_1, idx_2 = graph.nonzero()
+            dist = np.linalg.norm(x_spatial[idx_1] - x_spatial[idx_2], axis=1)
+            thred = np.percentile(dist, dist_cutoff)
+            mask = (dist < thred).astype(int)
+            mtx = csr_matrix((mask, (idx_1, idx_2)))
+            graph = graph.multiply(mtx)
+        elif dist_cutoff == 'auto':
+            idx_1, idx_2 = graph.nonzero()
+            dist = np.linalg.norm(x_spatial[idx_1] - x_spatial[idx_2], axis=1)
+            q1, q3 = np.quantile(dist, 0.25), np.quantile(dist, 0.75)
+            thred = q3 + 1.5 * (q3 - q1)
+            mask = (dist < thred).astype(int)
+            mtx = csr_matrix((mask, (idx_1, idx_2)))
+            graph = graph.multiply(mtx)
+    elif method == 'BallTree':
+        tree = BallTree(x_spatial)
+        nbs = tree.query_radius(x_spatial, r=radius)
+        row_idx = np.concatenate([np.repeat(i, len(x)) for i, x in enumerate(nbs)])
+        col_idx = np.concatenate(nbs)
+        graph = csr_matrix((np.ones(len(row_idx)), (row_idx, col_idx)), shape=(len(x_spatial), len(x_spatial)))
+    return graph
 
 ###################################################################################
 # Spatial time prior estimation based Delaunay triangulation

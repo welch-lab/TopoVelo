@@ -194,18 +194,24 @@ class SCGraphData():
         else:
             self.edge_weight = None
         
-        self.train_idx = torch.tensor(train_idx,
-                                      dtype=torch.int32,
-                                      requires_grad=False,
-                                      device=device)
-        self.validation_idx = torch.tensor(validation_idx,
-                                           dtype=torch.int32,
-                                           requires_grad=False,
-                                           device=device)
-        self.test_idx = torch.tensor(test_idx,
-                                     dtype=torch.int32,
-                                     requires_grad=False,
-                                     device=device)
+        self.train_idx = None
+        self.validation_idx = None
+        self.test_idx = None
+        if train_idx is not None:
+            self.train_idx = torch.tensor(train_idx,
+                                          dtype=torch.int32,
+                                          requires_grad=False,
+                                          device=device)
+        if validation_idx is not None:
+            self.validation_idx = torch.tensor(validation_idx,
+                                               dtype=torch.int32,
+                                               requires_grad=False,
+                                               device=device)
+        if test_idx is not None:
+            self.test_idx = torch.tensor(test_idx,
+                                         dtype=torch.int32,
+                                         requires_grad=False,
+                                         device=device)
 
         self.u0 = None
         self.s0 = None
