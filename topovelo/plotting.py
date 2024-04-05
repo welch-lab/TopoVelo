@@ -3536,8 +3536,7 @@ def plot_trajectory_4d(x_spatial,
         if end_points is None:
             ax.scatter(principal_curve[:, 0], principal_curve[:, 1], principal_curve[:, 2], color='k', edgecolor='none')
         else:
-            for idx in end_points:
-                ax.plot(principal_curve[idx, 0], principal_curve[idx, 1], principal_curve[idx, 2], color='k', linewidth=3)
+            ax.plot(principal_curve[:, 0], principal_curve[:, 1], principal_curve[:, 2], 'k-', linewidth=3)
     xyz_grid, v_grid_sm = None, None
     if plot_arrow:
         # Compute the velocity on a grid
