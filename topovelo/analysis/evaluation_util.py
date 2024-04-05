@@ -1640,13 +1640,13 @@ def time_score(adata, tkey, cluster_key, cluster_edges):
     for i in range(adj_mtx.shape[0]):
         children = np.where(adj_mtx[i] > 0)[0]
         for j in children:
-            p = np.mean(t[cell_labels_int == i] <= t[cell_labels_int == j].reshape(-1, 1))
+            p = np.nanmean(t[cell_labels_int == i] <= t[cell_labels_int == j].reshape(-1, 1))
             tscore[f'{label_dic_rev[i]} -> {label_dic_rev[j]}'] = p
     tscore_out = {}  # only return directly connected cell types in cluster_edges
     for u, v in cluster_edges:
         if (u, v) in cluster_edges:
             tscore_out[f'{u} -> {v}'] = tscore[f'{u} -> {v}']
-    return tscore_out, np.mean([sc for sc in tscore.values()])
+    return tscore_out, np.nanmean([sc for sc in tscore.values()])
 
 
 def inner_cluster_coh(adata, k_cluster, k_velocity, gene_mask=None, return_raw=False):
@@ -1726,7 +1726,7 @@ def velocity_consistency(adata, vkey, gene_mask=None):
     consistency_score = [_pearson_corr(velocities[ith], velocities[nbs[ith]]).mean()
                          for ith in range(adata.n_obs)]
     adata.obs[f'{vkey}_consistency'] = consistency_score
-    return np.mean(consistency_score)
+    return np.nanmean(consistency_score)
 
 
 def spatial_velocity_consistency(adata, vkey, spatial_graph_key, gene_mask=None):
@@ -1758,7 +1758,7 @@ def spatial_velocity_consistency(adata, vkey, spatial_graph_key, gene_mask=None)
             continue;
         consistency_score.append(_pearson_corr(velocities[ith], velocities[nbs_i]).mean())
     # adata.obs[f'{vkey}_consistency'] = consistency_score
-    return np.mean(consistency_score)
+    return np.nanmean(consistency_score)
 
 
 def global_moran_I(vals, nbs):

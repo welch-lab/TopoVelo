@@ -2,7 +2,9 @@ import numpy as np
 import matplotlib
 import matplotlib.pyplot as plt
 import igraph as ig
+import pandas as pd
 import pynndescent
+from seaborn import kdeplot
 from sklearn.neighbors import NearestNeighbors, BallTree
 from scipy.stats import norm
 from scipy.ndimage import gaussian_filter
@@ -1100,6 +1102,39 @@ def plot_legend(adata,
     save_fig(fig, save, (lgd,))
 
 
+def _set_colorbar(ax,
+                  vmin,
+                  vmax,
+                  cmap,
+                  colorbar_name,
+                  colorbar_ticklabels=None,
+                  colorbar_fontsize=24,
+                  colorbar_ticks=None,
+                  colorbar_pos=[1.04, 0.2, 0.05, 0.6],
+                  colorbar_tick_fontsize=15):
+    norm = matplotlib.colors.Normalize(vmin=vmin, vmax=vmax)
+    sm = matplotlib.cm.ScalarMappable(norm=norm, cmap=cmap)
+    cax = ax.inset_axes(colorbar_pos)
+    cbar = plt.colorbar(sm, ax=ax, cax=cax)
+    cbar.ax.get_yaxis().labelpad = 15
+    cbar.ax.set_ylabel(colorbar_name, rotation=270, fontsize=colorbar_fontsize)
+
+    if colorbar_ticklabels is not None:
+        if len(colorbar_ticklabels) == 2:
+            cbar.ax.get_yaxis().labelpad = 5
+        cbar.ax.set_yticklabels(colorbar_ticklabels, fontsize=colorbar_tick_fontsize)
+        if colorbar_ticks is None:
+            cbar.set_ticks(np.linspace(vmin, vmax, len(colorbar_ticklabels)))
+        else:
+            cbar.set_ticks(colorbar_ticks)
+    else:
+        if colorbar_ticks is None:
+            cbar.set_ticks([vmin, vmax])
+        else:
+            cbar.set_ticks(colorbar_ticks)
+    return ax
+
+
 def _plot_heatmap(ax,
                   vals,
                   X_embed,
@@ -1125,14 +1160,25 @@ def _plot_heatmap(ax,
             vmin = round(vmin, 3)
         if vmax > 1e-3:
             vmax = round(vmax, 3)
-    ax.scatter(X_embed[:, 0],
-               X_embed[:, 1],
-               s=markersize,
-               c=vals,
-               cmap=cmap,
-               vmin=vmin,
-               vmax=vmax,
-               edgecolors='none')
+    if X_embed.shape[1] == 2:
+        ax.scatter(X_embed[:, 0],
+                   X_embed[:, 1],
+                   s=markersize,
+                   c=vals,
+                   cmap=cmap,
+                   vmin=vmin,
+                   vmax=vmax,
+                   edgecolors='none')
+    else:
+        ax.scatter(X_embed[:, 0],
+                   X_embed[:, 1],
+                   X_embed[:, 2],
+                   s=markersize,
+                   c=vals,
+                   cmap=cmap,
+                   vmin=vmin,
+                   vmax=vmax,
+                   edgecolors='none')
     if show_colorbar:
         norm = matplotlib.colors.Normalize(vmin=vmin, vmax=vmax)
         sm = matplotlib.cm.ScalarMappable(norm=norm, cmap=cmap)
@@ -1154,7 +1200,7 @@ def _plot_heatmap(ax,
                 cbar.set_ticks([vmin, vmax])
             else:
                 cbar.set_ticks(colorbar_ticks)
-        
+
     if axis_off:
         ax.axis("off")
 
@@ -1182,9 +1228,14 @@ def histeq(x, perc=0.95, Nbin=101):
 def plot_heatmap(vals,
                  X_embed,
                  colorbar_name="Latent Time",
-                 colorbar_ticks=None,
+                 colorbar_ticklabels=None,
                  markersize=20,
+                 colorbar_fontsize=24,
+                 colorbar_limits=None,
+                 colorbar_ticks=None,
                  real_aspect_ratio=False,
+                 colorbar_tick_fontsize=15,
+                 cmap='viridis',
                  save=None):
     """Plots a quantity as a heatmap.
 
@@ -1201,13 +1252,291 @@ def plot_heatmap(vals,
             Marker size. Defaults to 20.
         real_aspect_ratio (bool, optional):
             Whether to use real aspect ratio for the plot. Defaults to False.
+        cmap (str, optional):
+            Colormap name. Defaults to 'viridis'.
         save (str, optional):
             Figure name for saving (including path). Defaults to None.
     """
     figsize = _set_figsize(X_embed, real_aspect_ratio)
     fig, ax = plt.subplots(figsize=figsize)
-    ax = _plot_heatmap(ax, vals, X_embed, colorbar_name, colorbar_ticks, markersize=markersize, axis_off=True)
+    ax = _plot_heatmap(ax,
+                       vals,
+                       X_embed,
+                       colorbar_name,
+                       colorbar_ticklabels=colorbar_ticklabels,
+                       markersize=markersize,
+                       show_colorbar=True,
+                       colorbar_fontsize=colorbar_fontsize,
+                       colorbar_limits=colorbar_limits,
+                       colorbar_ticks=colorbar_ticks,
+                       colorbar_tick_fontsize=colorbar_tick_fontsize,
+                       cmap=cmap,
+                       axis_off=True)
     save_fig(fig, save)
+
+
+def find_mode(arr):
+    if len(arr) == 0:
+        return None
+    vals = np.unique(arr)
+    counts = np.array([np.sum(arr == val) for val in vals])
+    return vals[np.argmax(counts)]
+
+
+def _sample_from_bins(x_embed, sample_per_bin, bin_size):
+    x_min, x_max = np.min(x_embed, 0), np.max(x_embed, 0)
+    xy_grid = np.meshgrid(np.linspace(x_min[0], x_max[0], int((x_max[0]-x_min[0])/bin_size)+1),
+                          np.linspace(x_min[1], x_max[1], int((x_max[1]-x_min[1])/bin_size)+1))
+    xy_grid = np.stack([xy_grid[0].flatten(), xy_grid[1].flatten()]).T
+    samples = []
+    for xy in xy_grid:
+        mask = (x_embed[:, 0] >= xy[0]) & (x_embed[:, 0] <= xy[0]+bin_size) \
+            & (x_embed[:, 1] >= xy[1]) & (x_embed[:, 1] <= xy[1]+bin_size)
+        num = int(np.sum(mask))
+        if np.sum(mask) > sample_per_bin:
+            samples.append(x_embed[mask][np.random.choice(num, sample_per_bin, replace=False)])
+        else:
+            samples.append(x_embed[mask])
+    return np.concatenate(samples, 0)
+
+
+def plot_heat_density(vals,
+                      x_embed,
+                      radius,
+                      cell_labels,
+                      real_aspect_ratio=False,
+                      n_grid=100,
+                      scale=1.5,
+                      bw_adjust=1.0,
+                      sample_per_bin=None,
+                      markersize=5,
+                      legend_fontsize=12,
+                      markerscale=2.0,
+                      colorbar_name='',
+                      colorbar_fontsize=15,
+                      colorbar_limits=None,
+                      colorbar_ticklabels=None,
+                      colorbar_ticks=None,
+                      colorbar_pos=[1.04, 0.2, 0.05, 0.6],
+                      bbox_to_anchor=(1.0, 1.0),
+                      ncols=1,
+                      axis_off=True,
+                      cmap='Reds',
+                      palette=None,
+                      save=None):
+    """Plots a heat density map.
+
+    Args:
+        vals (:class:`numpy.ndarray`): 
+            Values to be plotted as a heatmap, (N,).
+        x_embed (:class:`numpy.ndarray`):
+            2D coordinates for visualization, (N,2).
+        radius (float):
+            Radius for grid interpolation using a ball graph.
+        cell_labels (:class:`numpy.ndarray`):
+            Cell labels for plotting.
+        real_aspect_ratio (bool, optional):
+            Whether to use real aspect ratio for the plot. Defaults to False.
+        n_grid (int, optional):
+            Number of grid points. Defaults to 100.
+        scale (float, optional):
+            Scale factor for distance threshold. Defaults to 1.5.
+        save (str, optional):
+            Figure name for saving (including path). Defaults to None.
+    """
+    # Grid interpolation
+    bt = BallTree(x_embed)
+    x = np.linspace(x_embed[:, 0].min(), x_embed[:, 0].max(), n_grid)
+    y = np.linspace(x_embed[:, 1].min(), x_embed[:, 1].max(), n_grid)
+    xgrid, ygrid = np.meshgrid(x, y)
+    xgrid, ygrid = xgrid.flatten(), ygrid.flatten()
+    xy_grid = np.stack([xgrid, ygrid]).T
+
+    # Find distance thredshold
+    out = bt.query_radius(x_embed, radius, return_distance=True)
+    _, dist = out[0], out[1]
+    dist = np.concatenate(dist)
+    dist_thred = dist.mean() * scale
+
+    # Find neighbors
+    out = bt.query_radius(xy_grid, radius, return_distance=True)
+    spatial_nbs, dist_grid = out[0], out[1]
+    mid_dist_grid = np.array([np.median(x) for x in dist_grid])
+    mask = mid_dist_grid <= dist_thred
+
+    vals_grid = np.array([np.mean(vals[nbs]) for nbs in spatial_nbs])
+    labels_grid = np.array([find_mode(cell_labels[nbs]) for nbs in spatial_nbs])
+    
+    figsize = _set_figsize(x_embed, real_aspect_ratio)
+    fig, ax = plt.subplots(figsize=figsize)
+    
+    # Heatmap
+    df = pd.DataFrame({'x': xgrid[mask], 'y': ygrid[mask], 'kind': labels_grid[mask]})
+    
+    kdeplot(data=df, x='x', y='y',
+            weights=vals_grid[mask],
+            common_norm=True,
+            fill=True,
+            cmap=cmap,
+            bw_adjust=bw_adjust,
+            ax=ax)
+    
+    # color bar
+    if isinstance(colorbar_limits, (list, tuple)):
+        vmin, vmax = colorbar_limits[0], colorbar_limits[1]
+    else:
+        vmin, vmax = round(vals_grid[mask].min(), 2), round(vals_grid[mask].max(), 2)
+    ax = _set_colorbar(ax,
+                       vmin,
+                       vmax,
+                       cmap,
+                       colorbar_name,
+                       colorbar_ticklabels=colorbar_ticklabels,
+                       colorbar_fontsize=colorbar_fontsize,
+                       colorbar_ticks=colorbar_ticks,
+                       colorbar_pos=colorbar_pos)
+
+    cell_types = np.unique(cell_labels)
+    palette = get_colors(len(cell_types)) if palette is None else palette
+    for i, cell_type in enumerate(cell_types):
+        if sample_per_bin is not None:
+            x_sample = _sample_from_bins(x_embed[cell_labels == cell_type], sample_per_bin, radius)
+            ax.scatter(x_sample[:, 0],
+                       x_sample[:, 1],
+                       edgecolors='none',
+                       s=markersize,
+                       color=palette[i],
+                       label=cell_type)
+        else:
+            ax.scatter(x_embed[cell_labels == cell_type, 0],
+                       x_embed[cell_labels == cell_type, 1],
+                       edgecolors='none',
+                       s=markersize,
+                       color=palette[i],
+                       label=cell_type)
+    handles, labels = ax.get_legend_handles_labels()
+    lgd = ax.legend(handles,
+                    labels,
+                    ncol=ncols,
+                    fontsize=legend_fontsize,
+                    markerscale=markerscale,
+                    bbox_to_anchor=bbox_to_anchor,
+                    loc='upper left')
+    plt.tight_layout()
+    if axis_off:
+        ax.axis('off')
+    save_fig(fig, save, bbox_extra_artists=(lgd,))
+
+
+def plot_3d_heatmap(vals,
+                    X_embed,
+                    figsize=None,
+                    angle=(15, 45),
+                    colorbar_name="Latent Time",
+                    colorbar_ticklabels=None,
+                    markersize=20,
+                    colorbar_fontsize=24,
+                    colorbar_limits=None,
+                    colorbar_ticks=None,
+                    colorbar_tick_fontsize=15,
+                    real_aspect_ratio=False,
+                    cmap='viridis',
+                    show_colorbar=True,
+                    colorbar_pos=[1.04, 0.2, 0.05, 0.6],
+                    cbar_height=0.8,
+                    axis_off=False,
+                    zoom=1.0,
+                    embed='Spatial',
+                    save=None):
+    """Plots a quantity as a heatmap.
+
+    Args:
+        vals (:class:`numpy.ndarray`):
+            Values to be plotted as a heatmap, (N,).
+        X_embed (:class:`numpy.ndarray`):
+            3D coordinates for visualization, (N,2).
+        colorbar_name (str, optional):
+            Name shown next to the colorbar. Defaults to "Latent Time".
+        colorbar_ticklabels (list, optional):
+            Tick labels for the colorbar. Defaults to None.
+        markersize (int, optional):
+            Marker size. Defaults to 20.
+        colorbar_fontsize (int, optional):
+            Font size for the colorbar. Defaults to 24.
+        colorbar_ticks (str, optional):
+            Name shown on the colorbar axis. Defaults to None.
+        colorbar_tick_fontsize (int, optional):
+            Font size for the colorbar ticks. Defaults to 15.
+        real_aspect_ratio (bool, optional):
+            Whether to use real aspect ratio for the plot. Defaults to False.
+        cmap (str, optional):
+            Colormap name. Defaults to 'viridis'.
+        show_colorbar (bool, optional):
+            Whether to show the colorbar. Defaults to True.
+        colorbar_pos (list, optional): 
+            Position of the colorbar. Defaults to [1.04, 0.2, 0.05, 0.6].
+        axis_off (bool, optional):
+            Whether to turn off the axis. Defaults to False.
+        zoom (float, optional):
+            Zoom factor for the plot. Defaults to 1.0.
+        save (str, optional):
+            Figure name for saving (including path). Defaults to None.
+    """
+    if figsize is None:
+        figsize = _set_figsize(X_embed, real_aspect_ratio)
+    fig = plt.figure(figsize=figsize)
+    ax = fig.add_subplot(projection='3d')
+    ax.view_init(angle[0], angle[1])
+
+    if isinstance(colorbar_limits, (list, tuple)):
+        vmin, vmax = colorbar_limits[0], colorbar_limits[1]
+    else:
+        vmin = np.quantile(vals, 0.01)
+        vmax = np.quantile(vals, 0.99)
+        if vmin > 1e-3:
+            vmin = round(vmin, 3)
+        if vmax > 1e-3:
+            vmax = round(vmax, 3)
+    ax.scatter(X_embed[:, 0],
+               X_embed[:, 1],
+               X_embed[:, 2],
+               s=markersize,
+               c=vals,
+               cmap=cmap,
+               vmin=vmin,
+               vmax=vmax,
+               edgecolors='none')
+    if show_colorbar:
+        norm = matplotlib.colors.Normalize(vmin=vmin, vmax=vmax)
+        sm = matplotlib.cm.ScalarMappable(norm=norm, cmap=cmap)
+        cax = ax.inset_axes(colorbar_pos)
+        cbar = plt.colorbar(sm, ax=ax, cax=cax)
+        cbar.ax.get_yaxis().labelpad = 15
+        cbar.ax.set_ylabel(colorbar_name, rotation=270, fontsize=colorbar_fontsize)
+
+        if colorbar_ticklabels is not None:
+            if len(colorbar_ticklabels) == 2:
+                cbar.ax.get_yaxis().labelpad = 5
+            cbar.ax.set_yticklabels(colorbar_ticklabels, fontsize=colorbar_tick_fontsize)
+            if colorbar_ticks is None:
+                cbar.set_ticks(np.linspace(vmin, vmax, len(colorbar_ticklabels)))
+            else:
+                cbar.set_ticks(colorbar_ticks)
+        else:
+            if colorbar_ticks is None:
+                cbar.set_ticks([vmin, vmax])
+            else:
+                cbar.set_ticks(colorbar_ticks)
+    ax.set_xlabel(f'{embed} 1', fontsize=12)
+    ax.set_ylabel(f'{embed} 2', fontsize=12)
+    ax.set_zlabel(f'{embed} 3', fontsize=12)
+    # cbar.set_height(cbar_height)
+    if real_aspect_ratio:
+        ax.set_box_aspect((np.ptp(X_embed[:, 0]), np.ptp(X_embed[:, 1]), np.ptp(X_embed[:, 2])), zoom=zoom)
+    if axis_off:
+        ax.axis("off")
+    if save is not None:
+        save_fig(fig, save)
 
 
 def plot_time(t_latent,
@@ -2730,7 +3059,7 @@ def plot_time_grid(T,
             cax = ax[-1].inset_axes(colorbar_pos)
         else:
             cax = ax.inset_axes(colorbar_pos)
-        cbar0 = fig_time.colorbar(sm0, ax=ax, cax=cax, location="right") if M > 1 else fig_time.colorbar(sm0, ax=ax, cax=cax)
+        cbar0 = fig_time.colorbar(sm0, ax=ax, cax=cax)
         cbar0.ax.get_yaxis().labelpad = colorbar_labelpad
         cbar0.ax.set_ylabel('Cell Time', rotation=270, fontsize=colorbar_fontsize)
     save = None if (path is None or figname is None) else f'{path}/{figname}.{save_format}'
@@ -3131,6 +3460,8 @@ def plot_trajectory_4d(x_spatial,
                        v,
                        cell_labels,
                        radius,
+                       principal_curve=None,
+                       end_points=None,
                        plot_arrow=False,
                        n_grid=30,
                        scale=1.5,
@@ -3142,6 +3473,7 @@ def plot_trajectory_4d(x_spatial,
                        arrow_length_ratio=0.5,
                        zoom=1.0,
                        embed='spatial',
+                       real_aspect_ratio=True,
                        save=None,
                        **kwargs):
     """3D quiver plot. Data are visualized in a 3D embedding such as UMAP.
@@ -3158,6 +3490,8 @@ def plot_trajectory_4d(x_spatial,
             Cell type annotations.
         radius (float):
             Radius for building an epsilon-ball graph.
+        principal_curve (:class:`numpy.ndarray`, optional):
+            Principal curve. Defaults to None.
         plot_arrow (bool, optional):
             Whether to add a quiver plot upon the background 3D scatter plot.
             Defaults to False.
@@ -3173,6 +3507,8 @@ def plot_trajectory_4d(x_spatial,
             Defaults to None.
         embed (str, optional):
             Name of the embedding.. Defaults to 'umap'.
+        real_aspect_ratio (bool, optional):
+            Whether to use the aspect ratio proportional to the real coordinate values.
         save (str, optional):
             Figure name for saving (including path). Defaults to None.
 
@@ -3196,6 +3532,13 @@ def plot_trajectory_4d(x_spatial,
                    color=palette[i],
                    label=type_,
                    edgecolor='none')
+    if isinstance(principal_curve, np.ndarray):
+        if end_points is None:
+            ax.scatter(principal_curve[:, 0], principal_curve[:, 1], principal_curve[:, 2], color='k', edgecolor='none')
+        else:
+            for idx in end_points:
+                ax.plot(principal_curve[idx, 0], principal_curve[idx, 1], principal_curve[idx, 2], color='k', linewidth=3)
+    xyz_grid, v_grid_sm = None, None
     if plot_arrow:
         # Compute the velocity on a grid
         #knn_model = pynndescent.NNDescent(x_spatial, n_neighbors=k+20)
@@ -3259,7 +3602,8 @@ def plot_trajectory_4d(x_spatial,
                   normalize=True,
                   length=arrow_length,
                   arrow_length_ratio=arrow_length_ratio)
-    ax.set_box_aspect((np.ptp(x), np.ptp(y), np.ptp(z)), zoom=zoom)
+    if real_aspect_ratio:
+        ax.set_box_aspect((np.ptp(x_spatial[:, 0]), np.ptp(x_spatial[:, 1]), np.ptp(x_spatial[:, 2])), zoom=zoom)
     ax.set_xlabel(f'{embed} 1', fontsize=12)
     ax.set_ylabel(f'{embed} 2', fontsize=12)
     ax.set_zlabel(f'{embed} 3', fontsize=12)

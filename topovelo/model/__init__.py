@@ -1,4 +1,4 @@
-from .vanilla_vae import VanillaVAE, CycleVAE
+from .vanilla_vae import VanillaVAE
 from .vae import VAE
 from .maskvae import MaskVAE
 from .brode import BrODE
@@ -14,7 +14,6 @@ from .velocity_stream import streamplot
 
 __all__ = [
     "VanillaVAE",
-    "CycleVAE",
     "VAE",
     "MaskVAE",
     "BrODE",

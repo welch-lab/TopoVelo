@@ -3,7 +3,7 @@ import pandas as pd
 import os
 import psutil
 import matplotlib.pyplot as plt
-from scipy.sparse import csr_matrix, csc_matrix, coo_matrix
+from scipy.sparse import csr_matrix, csc_matrix, coo_matrix, csr_array
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -366,6 +366,7 @@ class Decoder(nn.Module):
         self.construct_nn(adata, dim_z, dim_cond, dim_coord, dim_edge, N1, N2, spatial_hidden_size, p, n_head, xavier_gain, **kwargs)
 
     def construct_nn(self, adata, dim_z, dim_cond, dim_coord, dim_edge, N1, N2, spatial_hidden_size, p, n_head, xavier_gain, **kwargs):
+        """Construct neural networks for the decoder."""
         self.set_shape(self.n_gene, dim_cond)
         if self.graph_decoder:
             self.net_rho = GraphDecoder(dim_z+dim_cond,
@@ -455,6 +456,7 @@ class Decoder(nn.Module):
         return
 
     def init_ode(self, adata, p, **kwargs):
+        """Initialize the parameters of the ODE model."""
         G = adata.n_vars
         print("Initialization using the steady-state and dynamical models.")
         u = adata.layers['Mu'][self.train_idx]
@@ -551,6 +553,7 @@ class Decoder(nn.Module):
                      assign_gene_mode(adata, w, assign_type, thred, std_prior, n_cluster_thred))
             else:
                 w = assign_gene_mode(adata, w, assign_type, thred, std_prior, n_cluster_thred)
+        self.w_init = w
         print(f"Initial induction: {np.sum(w >= 0.5)}, repression: {np.sum(w < 0.5)}/{G}")
         adata.var["w_init"] = w
         logit_pw = 0.5*(np.log(w+1e-10) - np.log(1-w+1e-10))
@@ -3272,11 +3275,13 @@ class VAE(VanillaVAE):
         # Attention score
         enc_att = self.get_enc_att(self.unseen_data.data.x,
                                    self.unseen_data.data.adj_t,
-                                   self.unseen_data.edge_weight)
+                                   self.unseen_data.edge_weight,
+                                   adata_unseen.n_obs)
         z_ts = torch.tensor(z, device=self.device)
         dec_att = self.get_dec_att(z_ts,
                                    self.unseen_data.data.adj_t,
-                                   self.unseen_data.edge_weight)
+                                   self.unseen_data.edge_weight,
+                                   adata_unseen.n_obs)
         
         if enc_att is not None:
             for i in range(len(enc_att)):
@@ -3325,10 +3330,9 @@ class VAE(VanillaVAE):
         
         return
 
-    def get_enc_att(self, data_in, edge_index, edge_weight):
-        self.set_mode('eval')
+    def _scale_data_for_enc(self, data_in):
         data_in_scale = data_in
-        G = data_in_scale.shape[-1]//2
+        G = self.decoder.n_gene
         condition = (F.one_hot(self.graph_data.batch, self.n_batch).float()
                      if self.enable_cvae else None)
         # optional data scaling_u
@@ -3344,42 +3348,138 @@ class VAE(VanillaVAE):
                                        data_in_scale[:, :, G:]/ls_scale), 1)
         if self.config["log1p"]:
             data_in_scale = torch.log1p(data_in_scale)
+        return data_in_scale
+
+    def get_enc_att(self, data_in, edge_index, edge_weight, n_nodes):
+        self.set_mode('eval')
+        data_in_scale = self._scale_data_for_enc(data_in)
         
         gatconv = self.encoder.conv1
         if not isinstance(gatconv, GATConv):
             print("Skipping encoder attention score computation.")
             return None
-        # with torch.no_grad():
-        _, att = gatconv(data_in_scale, edge_index, edge_weight, return_attention_weights=True)
+        with torch.no_grad():
+            _, att = gatconv(data_in_scale, edge_index, edge_weight, return_attention_weights=True)
         cum_num_col, row, val = att.cpu().csr()
         cum_num_col = cum_num_col.detach().numpy()
         row = row.detach().numpy()
         val = val.detach().numpy()
         return dge2array(cum_num_col, row, val)
 
-    def get_dec_att(self, data_in, edge_index, edge_weight):
+    def get_dec_att(self, data_in, edge_index, edge_weight, n_nodes):
         self.set_mode('eval')
         gatconv = self.decoder.net_rho2.conv1
         if not isinstance(gatconv, GATConv):
             print("Skipping decoder attention score computation.")
             return None
-        if self.enable_cvae:
-            condition = F.one_hot(self.graph_data.batch, self.n_batch).float()
-            _, att = gatconv(torch.cat([data_in, condition], 1),
-                             edge_index,
-                             edge_weight,
-                             return_attention_weights=True)
-        else:
-            _, att = gatconv(data_in,
-                             edge_index,
-                             edge_weight,
-                             return_attention_weights=True)
+        with torch.no_grad():
+            if self.enable_cvae:
+                condition = F.one_hot(self.graph_data.batch, self.n_batch).float()
+                _, att = gatconv(torch.cat([data_in, condition], 1),
+                                 edge_index,
+                                 edge_weight,
+                                 return_attention_weights=True)
+            else:
+                _, att = gatconv(data_in,
+                                 edge_index,
+                                 edge_weight,
+                                 return_attention_weights=True)
         cum_num_col, row, val = att.cpu().csr()
         cum_num_col = cum_num_col.detach().numpy()
         row = row.detach().numpy()
         val = val.detach().numpy()
 
         return dge2array(cum_num_col, row, val)
+    
+    def get_enc_att_all_pairs(self, data_in, n_nodes, batch_size=64):
+        self.set_mode('eval')
+        data_in_scale = self._scale_data_for_enc(data_in)
+
+        gatconv = self.encoder.conv1
+        if not isinstance(gatconv, GATConv):
+            print("Skipping encoder attention score computation.")
+            return None
+        att_score = []
+        n_batch = n_nodes // batch_size
+
+        with torch.no_grad():
+            for i in range(n_batch):
+                edge_index = torch.cartesian_prod(torch.range(start=0, end=n_nodes-1, dtype=int),
+                                                  torch.range(start=i*batch_size, end=(i+1)*batch_size-1, dtype=int)).T.to(self.device)
+                _, att = gatconv(data_in_scale,
+                                 edge_index, None, return_attention_weights=True)
+                col_idx = att[0][1].cpu().numpy()
+                mask = (col_idx >= i*batch_size) & (col_idx < (i+1)*batch_size)
+                n_head = att[1].shape[1]
+                att_score.append(att[1].cpu().numpy()[mask].reshape(n_nodes, batch_size, n_head))
+            if n_batch*batch_size < n_nodes:
+                edge_index = torch.cartesian_prod(torch.range(start=0, end=n_nodes-1, dtype=int),
+                                                  torch.range(start=n_batch*batch_size, end=n_nodes-1, dtype=int)).T.to(self.device)
+                _, att = gatconv(data_in_scale,
+                                 edge_index, None, return_attention_weights=True)
+                col_idx = att[0][1].cpu().numpy()
+                mask = col_idx >= n_batch*batch_size
+                n_head = att[1].shape[1]
+                att_score.append(att[1].cpu().numpy()[mask].reshape(n_nodes, n_nodes-n_batch*batch_size, n_head))
+        return np.concatenate(att_score, 1)
+    
+    def get_dec_att_all_pairs(self, data_in, n_nodes, batch_size=64):
+        self.set_mode('eval')
+        gatconv = self.decoder.net_rho2.conv1
+        if not isinstance(gatconv, GATConv):
+            print("Skipping decoder attention score computation.")
+            return None
+        att_score = []
+        n_batch = n_nodes // batch_size
+        with torch.no_grad():
+            if self.enable_cvae:
+                for i in range(n_batch):
+                    edge_index = torch.cartesian_prod(torch.range(start=0, end=n_nodes-1, dtype=int),
+                                                      torch.range(start=i*batch_size, end=(i+1)*batch_size-1, dtype=int)).T.to(self.device)
+                    condition = F.one_hot(self.graph_data.batch, self.n_batch).float()
+                    _, att = gatconv(torch.cat([data_in, condition], 1),
+                                     edge_index,
+                                     None,
+                                     return_attention_weights=True)
+                    col_idx = att[0][1].cpu().numpy()
+                    mask = (col_idx >= i*batch_size) & (col_idx < (i+1)*batch_size)
+                    n_head = att[1].shape[1]
+                    att_score.append(att[1].cpu().numpy()[mask].reshape(n_nodes, batch_size, n_head))
+                if n_batch*batch_size < n_nodes:
+                    edge_index = torch.cartesian_prod(torch.range(start=0, end=n_nodes-1, dtype=int),
+                                                      torch.range(start=n_batch*batch_size, end=n_nodes-1, dtype=int)).T.to(self.device)
+                    _, att = gatconv(torch.cat([data_in, condition], 1),
+                                     edge_index,
+                                     None,
+                                     return_attention_weights=True)
+                    col_idx = att[0][1].cpu().numpy()
+                    mask = col_idx >= n_batch*batch_size
+                    n_head = att[1].shape[1]
+                    att_score.append(att[1].cpu().numpy()[mask].reshape(n_nodes, n_nodes-n_batch*batch_size, n_head))
+            else:
+                for i in range(n_batch):
+                    edge_index = torch.cartesian_prod(torch.range(start=0, end=n_nodes-1, dtype=int),
+                                                      torch.range(start=i*batch_size, end=(i+1)*batch_size-1, dtype=int)).T.to(self.device)
+                    _, att = gatconv(data_in,
+                                     edge_index,
+                                     None,
+                                     return_attention_weights=True)
+                    col_idx = att[0][1].cpu().numpy()
+                    mask = (col_idx >= i*batch_size) & (col_idx < (i+1)*batch_size)
+                    n_head = att[1].shape[1]
+                    att_score.append(att[1].cpu().numpy()[mask].reshape(n_nodes, batch_size, n_head))
+                if n_batch*batch_size < n_nodes:
+                    edge_index = torch.cartesian_prod(torch.range(start=0, end=n_nodes-1, dtype=int),
+                                                      torch.range(start=n_batch*batch_size, end=n_nodes-1, dtype=int)).T.to(self.device)
+                    _, att = gatconv(data_in,
+                                     edge_index,
+                                     None,
+                                     return_attention_weights=True)
+                    col_idx = att[0][1].cpu().numpy()
+                    mask = col_idx >= n_batch*batch_size
+                    n_head = att[1].shape[1]
+                    att_score.append(att[1].cpu().numpy()[mask].reshape(n_nodes, n_nodes-n_batch*batch_size, n_head))
+        return np.stack(att_score, 1)
 
     def _forward_to_rho(self):
         self.set_mode('eval')
@@ -3660,11 +3760,13 @@ class VAE(VanillaVAE):
         # Attention score
         enc_att = self.get_enc_att(self.graph_data.data.x,
                                    self.graph_data.data.adj_t,
-                                   self.graph_data.edge_weight)
+                                   self.graph_data.edge_weight,
+                                   adata.n_obs)
         z_ts = torch.tensor(z, device=self.device)
         dec_att = self.get_dec_att(z_ts,
                                    self.graph_data.data.adj_t,
-                                   self.graph_data.edge_weight)
+                                   self.graph_data.edge_weight,
+                                   adata.n_obs)
         
         if enc_att is not None:
             for i in range(len(enc_att)):

@@ -461,6 +461,7 @@ def get_metric(adata,
                                                     gene_mask,
                                                     embed,
                                                     n_jobs)
+
     mean_sp_time_consistency = spatial_time_consistency(adata, tkey, spatial_graph_key)
     stats = gather_stats(mse_train=mse_train,
                          mse_test=mse_test,
@@ -757,7 +758,7 @@ def post_analysis(adata,
                      adata.obs[cluster_key].to_numpy(),
                      save=(None if figure_path is None else
                            f"{figure_path}/{test_id}_{embed}.png"))
-    
+
     if "time" in plot_type or "all" in plot_type:
         X_embed = adata.obsm[f"X_{embed}"]
         T = {}
