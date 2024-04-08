@@ -47,18 +47,27 @@ def kl_uniform(mu_t, std_t, t_start, t_end, **kwargs):
 
 
 def kl_gaussian(mu1, std1, mu2, std2, eps=1e-16, **kwargs):
-    # Compute the KL divergence between two Gaussian distributions with diagonal covariance
-    # kl(p1, p2)
+    """KL Divergence between two Gaussian distributions
+
+    Args:
+        mu1 (:class:`torch.tensor1): mean of the first Gaussian
+        std1 (:class:`torch.tensor1): standard deviation of the first Gaussian
+        mu2 (:class:`torch.tensor1): mean of the second Gaussian
+        std2 (:class:`torch.tensor1): standard deviation of the second Gaussian
+
+    Returns:
+        tensor: KL Divergence
+    """
     term_1 = torch.log(std2) - torch.log(std1+eps)
-    term_2 = std1.pow(2)/(2*std2.pow(2))
-    term_3 = (mu1-mu2).pow(2)/(2*std2.pow(2))
+    term_2 = std1.pow(2) / (2*std2.pow(2))
+    term_3 = (mu1 - mu2).pow(2) / (2*std2.pow(2))
     return torch.mean(torch.sum(term_1+term_2-0.5+term_3, 1))
 
 
 ##############################################################
 # Vanilla VAE
 ##############################################################
-class encoder(nn.Module):
+class Encoder(nn.Module):
     """Encoder of the vanilla VAE
     """
     def __init__(self,
@@ -67,7 +76,8 @@ class encoder(nn.Module):
                  N2=250,
                  device=torch.device('cpu'),
                  checkpoint=None):
-        super(encoder, self).__init__()
+        """Encoder of the vanilla VAE"""
+        super(Encoder, self).__init__()
         self.fc1 = nn.Linear(Cin, N1).to(device)
         self.bn1 = nn.BatchNorm1d(num_features=N1).to(device)
         self.dpt1 = nn.Dropout(p=0.2).to(device)
@@ -106,7 +116,7 @@ class encoder(nn.Module):
         return mu_zx, std_zx
 
 
-class decoder(nn.Module):
+class Decoder(nn.Module):
     def __init__(self,
                  adata,
                  tmax,
@@ -116,7 +126,7 @@ class decoder(nn.Module):
                  device=torch.device('cpu'),
                  init_method="steady",
                  init_key=None):
-        super(decoder, self).__init__()
+        super(Decoder, self).__init__()
         U, S = adata.layers['Mu'][train_idx], adata.layers['Ms'][train_idx]
         X = np.concatenate((U, S), 1)
         N, G = U.shape
@@ -303,7 +313,7 @@ class VanillaVAE():
         self.split_train_test(adata.n_obs)
 
         # Create a decoder
-        self.decoder = decoder(adata,
+        self.decoder = Decoder(adata,
                                tmax,
                                self.train_idx,
                                device=self.device,
@@ -313,7 +323,7 @@ class VanillaVAE():
         G = adata.n_vars
         # Create an encoder
         try:
-            self.encoder = encoder(2*G, hidden_size[0], hidden_size[1], self.device, checkpoint=checkpoints).float()
+            self.encoder = Encoder(2*G, hidden_size[0], hidden_size[1], self.device, checkpoint=checkpoints).float()
         except IndexError:
             print('Please provide two dimensions!')
         self.tmax = torch.tensor(tmax, device=self.device)
@@ -750,26 +760,26 @@ class VanillaVAE():
              **kwargs):
         """Evaluate the model upon training/test dataset.
 
-        Arguments
-        ---------
-        test_set : `torch.utils.data.Dataset`
-            Training or validation dataset
-        Xembed : `numpy array`
-            Low-dimensional embedding for plotting
-        testid : string or int, optional
-            Used to name the figures
-        gind : `numpy array`
-            Index of genes in adata.var_names. Used for plotting.
-        gene_plot : `numpy array`, optional
-            Gene names.
-        plot : bool, optional
-            Whether to generate plots.
-        path : str, optional
-            Saving path.
+        Args:
+            test_set (:class:`torch.utils.data.Dataset`):
+                Training or validation dataset.
+            test_set (:class:`torch.utils.data.Dataset`):
+                Training or validation dataset.
+            Xembed (:class:`numpy array`):
+                Low-dimensional embedding for plotting
+            testid (string or int, optional):
+                Used to name the figures.
+            gind (:class:`numpy array`):
+                Index of genes in adata.var_names. Used for plotting.
+            gene_plot (:class:`numpy array`, optional):
+                Gene names.
+            plot (bool, optional):
+                Whether to generate plots.
+            path (str, optional):
+                Path to the folder for saving figures.
 
-        Returns
-        -------
-        elbo : float
+        Returns:
+            float: ELBO
         """
         self.set_mode('eval')
         data = test_set.data
@@ -785,8 +795,7 @@ class VanillaVAE():
             # Plot Time
             plot_time(t, Xembed, save=f"{path}/time-{testid}-vanilla.png")
             # Plot u/s-t and phase portrait for each gene
-            for i in range(len(gind)):
-                idx = gind[i]
+            for i, idx in enumerate(gind):
                 plot_phase(data[:, idx], data[:, idx+G],
                            Uhat[:, i], Shat[:, i],
                            gene_plot[i],
@@ -806,14 +815,13 @@ class VanillaVAE():
     def save_model(self, file_path, enc_name='encoder_vanilla', dec_name='decoder_vanilla'):
         """Save the encoder parameters to a .pt file.
 
-        Arguments
-        ---------
-        file_path : str
-            Path to the folder for saving model parameters
-        enc_name : str, optional
-            Name of the .pt file containing encoder parameters
-        dec_name : str, optional
-            Name of the .pt file containing decoder parameters
+        Args:
+            file_path (str):
+                Path to the folder for saving model parameters
+            enc_name (str, optional):
+                Name of the .pt file containing encoder parameters
+            dec_name (str, optional):
+                Name of the .pt file containing decoder parameters
         """
         os.makedirs(file_path, exist_ok=True)
         torch.save(self.encoder.state_dict(), f"{file_path}/{enc_name}.pt")
@@ -822,15 +830,14 @@ class VanillaVAE():
     def save_anndata(self, adata, key, file_path, file_name=None):
         """Save the ODE parameters and cell time to the anndata object and write it to disk.
 
-        Arguments
-        ---------
-        adata : :class:`anndata.AnnData`
-        key : str
-            Used to store all parameters of the model.
-        file_path : str
-            Saving path.
-        file_name : str, optional
-            If set to a string ending with .h5ad, the updated anndata object will be written to disk.
+        Args:
+            adata (:class:`anndata.AnnData`):
+            key (str):
+                Used to store all parameters of the model.
+            file_path (str):
+                Saving path.
+            file_name (str, optional):
+                If set to a string ending with .h5ad, the updated anndata object will be written to disk.
         """
         os.makedirs(file_path, exist_ok=True)
 

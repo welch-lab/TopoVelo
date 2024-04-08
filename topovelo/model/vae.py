@@ -626,6 +626,7 @@ class Decoder(nn.Module):
         self._check_param_validity()
 
     def get_param(self, x):
+        """Retrieve the parameter of the ODE model."""
         if x == 'ton':
             out = self.ton
         elif x == 'u0':
@@ -651,6 +652,7 @@ class Decoder(nn.Module):
                      mask_idx=None,
                      mask_to=1,
                      detach=False):
+        """Retreive the parameter of the ODE model with a shape of (num_gene) or (num_batch, num_gene)."""
         param = self.get_param(x)
         if detach:
             param = param.detach()
@@ -685,12 +687,10 @@ class Decoder(nn.Module):
         return y
 
     def _sample_ode_param(self, condition=None, sample=True):
-        ####################################################
-        # Sample rate parameters for full vb or
-        # output fixed rate parameters when
-        # (1) random is set to False
-        # (2) full vb is not enabled
-        ####################################################
+        """Sample rate parameters for full vb or output fixed rate parameters when
+        (1) random is set to False
+        (2) full vb is not enabled
+        """
         alpha = self.get_param_1d('alpha', condition, sample=sample)
         beta = self.get_param_1d('beta', condition, sample=sample)
         gamma = self.get_param_1d('gamma', condition, sample=sample)
@@ -709,6 +709,7 @@ class Decoder(nn.Module):
                      edge_index=None,
                      edge_weight=None,
                      condition=None):
+        """Compute cellwise transcription rates of each gene."""
         net_rho = self.net_rho if which_net == 1 else self.net_rho2
         if condition is None:
             rho = (net_rho(z, edge_index, edge_weight)
@@ -728,6 +729,7 @@ class Decoder(nn.Module):
                     edge_index=None,
                     edge_weight=None,
                     condition=None):
+        """Compute spatial coordinates of each cell."""
         if condition is None:
             coord = (self.net_coord(torch.cat((t, z, t0, xy0), 1), edge_index, edge_weight)
                      if isinstance(self.net_coord, MultiLayerGraphDecoder) else
@@ -758,23 +760,23 @@ class Decoder(nn.Module):
         Args:
             t (:class:`torch.tensor`): Time
             alpha (:class:`torch.tensor`):
-                Cellwise transcription rate, (N, G)
+                Cellwise transcription rate, (num_cell, num_gene)
             beta (:class:`torch.tensor`):
-                Splicing rate, (G)
+                Splicing rate, (num_gene)
             gamma (:class:`torch.tensor`):
-                Degradation rate, (G)
+                Degradation rate, (num_gene)
             scaling_u (:class:`torch.tensor`):
                 Gene scaling factor of unspliced reads
             scaling_s (:class:`torch.tensor`):
                 Gene scaling factor of spliced reads (used for multi-batch integration)
             u0 (:class:`torch.tensor`, optional):
-                Initial condition of u in stage 2, (N, G). Defaults to None.
+                Initial condition of u in stage 2, (num_cell, num_gene). Defaults to None.
             s0 (:class:`torch.tensor`, optional):
                 Initial condition of s in stage 2. Defaults to None.
             t0 (:class:`torch.tensor`, optional):
                 Initial time in stage 2. Defaults to None.
             condition (:class:`torch.tensor`, optional):
-                Batch information, (N, num batch). Defaults to None.
+                Batch information, (num_cell, num batch). Defaults to None.
             return_vel (bool, optional):
                 Whether to return velocity. Defaults to False.
             detach (bool, optional):
@@ -824,9 +826,8 @@ class Decoder(nn.Module):
                       eval_mode=False,
                       return_vel=False,
                       neg_slope=0.0):
-        ####################################################
-        # Outputs a (n sample, n basis, n gene) tensor
-        ####################################################
+        """Evaluates the basis functions (ODE solutions).
+        Outputs a (n sample, n basis, n gene) tensor"""
         rho = self._compute_rho(z, 1, edge_index, edge_weight, condition)
         
         if batch_sample is not None:
@@ -880,9 +881,7 @@ class Decoder(nn.Module):
                 eval_mode=False,
                 return_vel=False,
                 neg_slope=0.0):
-        ####################################################
-        # top-level forward function for the decoder class
-        ####################################################
+        """Top-level forward function for the decoder class"""
         if u0 is None or s0 is None or t0 is None:
             return self.forward_basis(t, z,
                                       batch_sample,
@@ -969,66 +968,76 @@ class VAE(VanillaVAE):
                  **kwargs):
         """TopoVelo Model
 
-        Arguments
-        ---------
-
-        adata : :class:`anndata.AnnData`
-            AnnData object containing all relevant data and meta-data
-        tmax : float
-            Time range.
-            This is used to restrict the cell time within certain range. In the
-            case of a Gaussian model without capture time, tmax/2 will be the mean of prior.
-            If capture time is provided, then they are scaled to match a range of tmax.
-            In the case of a uniform model, tmax is strictly the maximum time.
-        dim_z : int
-            Dimension of the latent cell state
-        dim_cond : int, optional
-            Dimension of additional information for the conditional VAE.
-            Set to zero by default, equivalent to a VAE.
-            This feature is not stable now.
-        device : {'gpu','cpu'}, optional
-            Training device
-        hidden_size : tuple of int, optional
-            Width of the hidden layers. Should be a tuple of the form
-            (encoder layer 1, encoder layer 2, decoder layer 1, decoder layer 2)
-        full_vb : bool, optional
-            Enable the full variational Bayes
-        discrete : bool, optional
-            Enable the discrete count model
-        init_method : {'tprior', 'steady}, optional
-            Initialization method.
-            Should choose from
-            (1) tprior: use the capture time to estimate rate parameters. Cell time will be
-                        randomly sampled with the capture time as the mean. The variance can
-                        be controlled by changing 'time_overlap' in config.
-            (2) steady: use the steady-state model to estimate gamma, alpha and assume beta = 1.
-                        After this, a global cell time is estimated by taking the quantile over
-                        all local times. Finally, rate parameters are reinitialized using the
-                        global cell time.
-        init_key : str, optional
-            column in the AnnData object containing the capture time
-        tprior : str, optional
-            key in adata.obs that stores the capture time.
-            Used for informative time prior
-        init_ton_zero : bool, optional
-            Whether to add a non-zero switch-on time for each gene.
-            It's set to True if there's no capture time.
-        filter_gene : bool, optional
-            Whether to remove non-velocity genes
-        count_distriution : {'auto', 'Poisson', 'NB'}, optional
-            Count distribution, effective only when discrete=True
-            The current version only assumes Poisson or negative binomial distributions.
-            When set to 'auto', the program determines a proper one based on over dispersion
-        std_z_prior : float, optional
-            Standard deviation of the prior (isotropical Gaussian) of cell state.
-        checkpoints : list of 2 strings, optional
-            Contains the path to saved encoder and decoder models.
-            Should be a .pt file.
-        rate_prior : dict, optional
-            Prior distribution of rate parameters.
-            Keys are always `alpha',`beta',`gamma'
-            Values are length-2 tuples (mu, sigma), representing the mean and standard deviation
-            of log rates.
+        Args:
+            adata (:class:`anndata.AnnData`):
+                AnnData object containing all relevant data and meta-data
+            tmax (float):
+                Time range.
+                This is used to restrict the cell time within certain range. In the
+                case of a Gaussian model without capture time, tmax/2 will be the mean of prior.
+                If capture time is provided, then they are scaled to match a range of tmax.
+                In the case of a uniform model, tmax is strictly the maximum time.
+            dim_z (int):
+                Dimension of the latent cell state
+            dim_cond : int, optional
+                Dimension of additional information for the conditional VAE.
+                Set to zero by default, equivalent to a VAE.
+                This feature is not stable now.
+            device ({'gpu','cpu'}, optional):
+                Training device
+            hidden_size (tuple of int, optional):
+                Width of the hidden layers. Should be a tuple of the form
+                (encoder layer 1, encoder layer 2, decoder layer 1, decoder layer 2)
+            full_vb (bool, optional):
+                Enable the full variational Bayes
+            discrete (bool, optional):
+                Enable the discrete count model
+            init_method ({'tprior', 'steady}, optional):
+                Initialization method.
+                Should choose from
+                (1) tprior: use the capture time to estimate rate parameters. Cell time will be
+                            randomly sampled with the capture time as the mean. The variance can
+                            be controlled by changing 'time_overlap' in config.
+                (2) steady: use the steady-state model to estimate gamma, alpha and assume beta = 1.
+                            After this, a global cell time is estimated by taking the quantile over
+                            all local times. Finally, rate parameters are reinitialized using the
+                            global cell time.
+            init_key (str, optional):
+                column in the AnnData object containing the capture time
+            tprior (str, optional):
+                key in adata.obs that stores the capture time.
+                Used for informative time prior
+            init_ton_zero (bool, optional):
+                Whether to add a non-zero switch-on time for each gene.
+                It's set to True if there's no capture time.
+            filter_gene (bool, optional):
+                Whether to remove non-velocity genes
+            count_distriution ({'auto', 'Poisson', 'NB'}, optional):
+                Count distribution, effective only when discrete=True
+                The current version only assumes Poisson or negative binomial distributions.
+                When set to 'auto', the program determines a proper one based on over dispersion
+            time_overlap (float, optional):
+                Overlap of two adjacent time intervals when using the capture time as the prior.
+                This is used to control the variance of the prior.
+            std_z_prior (float, optional):
+                Standard deviation of the prior (isotropical Gaussian) of cell state.
+            min_sigma_u (float, optional):
+                Minimum value of Gaussian noise of unspliced counts.
+            min_sigma_s (float, optional):
+                Minimum value of Gaussian noise of spliced counts.
+            xavier_gain (float, optional):
+                Gain of the Xavier initialization. Default to 0.05.
+            checkpoints (list of 2 strings, optional):
+                Contains the path to saved encoder and decoder models.
+                Should be a .pt file.
+            rate_prior (dict, optional):
+                Prior distribution of rate parameters.
+                Keys are always `alpha',`beta',`gamma'
+                Values are length-2 tuples (mu, sigma), representing the mean and standard deviation
+                of log rates.
+            random_state (int, optional):
+                Random seed. Notice that pytorch_geometric graph attention is not entirely reproducible
+                even with the same random seed. See https://github.com/pytorch/pytorch/issues/75179.
         """
         t_start = time.time()
         self.timer = 0
@@ -1214,6 +1223,14 @@ class VAE(VanillaVAE):
         return
 
     def encode_batch(self, adata):
+        """Encode batch information.
+
+        Args:
+            adata (:class:`anndata.AnnData`): AnnData object.
+
+        Raises:
+            ValueError: If the reference batch is not found in the batch field.
+        """
         self.n_batch = 0
         self.batch = None
         self.batch_ = None
@@ -1252,6 +1269,12 @@ class VAE(VanillaVAE):
             print('Warning: number of batch classes is smaller than 1/10 of dim_z. Consider decreasing dim_z.')
 
     def encode_slice(self, adata, slice_key):
+        """Encode slice information when data consists of multiple slices.
+
+        Args:
+            adata (:class:`anndata.AnnData`): AnnData object.
+            slice_key (str): Key in adata.obs that stores the slice information.
+        """
         self.slice_label = None
         self.slices = None
         if slice_key in adata.obs:
@@ -1259,10 +1282,12 @@ class VAE(VanillaVAE):
             self.slices = np.unique(self.slice_label)
 
     def _pick_loss_func(self, adata, count_distribution):
-        ##############################################################
-        # Pick the corresponding loss function (mainly the generative
-        # likelihood function) based on count distribution
-        ##############################################################
+        """Pick the corresponding loss function based on count distribution.
+
+        Args:
+            adata (:class:`anndata.AnnData`): AnnData object.
+            count_distribution (str): Count distribution. Should be 'Gaussian', 'auto', 'Poisson', or 'NB'.
+        """
         if self.is_discrete:
             # Determine Count Distribution
             dispersion_u = adata.var["dispersion_u"].to_numpy()
@@ -1304,57 +1329,52 @@ class VAE(VanillaVAE):
                 condition=None):
         """Standard forward pass.
 
-        Arguments
-        ---------
+        Args:
+            data_in (`torch.tensor`):
+                Input count data, (num_cell, 2*num_gene).
+                edge_index (`torch.tensor`):
+                Row and column indices of non-zero entries of the adjacency matrix, (2, num_cell).
+            xy (`torch.tensor`):
+                Spatial coordinates, (num_cell, 2).
+                batch_sample (`torch.tensor`):
+                Indices of the current batch for ODE evaulation.
+            lu_scale (`torch.tensor`):
+                library size scaling_u factor of unspliced counts, (num_gene)
+                Effective in the discrete mode and set to 1's in the continuouts model
+            ls_scale (`torch.tensor`):
+                Similar to lu_scale, but for spliced counts, (num_gene).
+            u0 : `torch.tensor`, optional
+                Initial condition of u, (num_cell, num_gene).
+                This is set to None in the first stage when cell time is not fixed.
+                It will have some value in the second stage, so the users
+                shouldn't worry about feeding the parameter themselves.
+            s0 : `torch.tensor`, optional
+                Initial condition of s, (num_cell, num_gene).
+            t0 : `torch.tensor`, optional
+                time at the initial condition, (num_cell, 1).
+            t1 : `torch.tensor`, optional
+                Time at the future state.
+                Used only when `vel_continuity_loss` is set to True
+            condition : `torch.tensor`, optional
+                Any additional condition to the VAE, (N, dim_cond)
 
-        data_in : `torch.tensor`
-            input count data, (N, 2G)
-        edge_index: `torch.tensor`
-            Row and column indices of non-zero entries of the adjacency matrix, (2, N)
-        xy : `torch.tensor`
-            Spatial coordinates, (N, 2)
-        batch_sample : `torch.tensor`
-            Indices of the current batch for ODE evaulation
-        lu_scale : `torch.tensor`
-            library size scaling_u factor of unspliced counts, (G)
-            Effective in the discrete mode and set to 1's in the
-            continuouts model
-        ls_scale : `torch.tensor`
-            Similar to lu_scale, but for spliced counts, (G)
-        u0 : `torch.tensor`, optional
-            Initial condition of u, (N, G)
-            This is set to None in the first stage when cell time is
-            not fixed. It will have some value in the second stage, so the users
-            shouldn't worry about feeding the parameter themselves.
-        s0 : `torch.tensor`, optional
-            Initial condition of s, (N,G)
-        t0 : `torch.tensor`, optional
-            time at the initial condition, (N,1)
-        t1 : `torch.tensor`, optional
-            time at the future state.
-            Used only when `vel_continuity_loss` is set to True
-        condition : `torch.tensor`, optional
-            Any additional condition to the VAE, (N, dim_cond)
-
-        Returns
-        -------
-
-        mu_t : `torch.tensor`
-            time mean, (N,1)
-        std_t : `torch.tensor`
-            time standard deviation, (N,1)
-        mu_z : `torch.tensor`
-            cell state mean, (N, Cz)
-        std_z : `torch.tensor`
-            cell state standard deviation, (N, Cz)
-        t : `torch.tensor`
-            sampled cell time, (N,1)
-        z : `torch.tensor`
-            sampled cell sate, (N,Cz)
-        uhat : `torch.tensor`
-            predicted mean u values, (N,G)
-        shat : `torch.tensor`
-            predicted mean s values, (N,G)
+        Returns:
+            mu_t (`torch.tensor`):
+                time mean, (N,1)
+            std_t (`torch.tensor`):
+                time standard deviation, (N,1)
+            mu_z (`torch.tensor`):
+                cell state mean, (N, Cz)
+            std_z (`torch.tensor`):
+                cell state standard deviation, (N, Cz)
+            t (`torch.tensor`):
+                sampled cell time, (N,1)
+            z (`torch.tensor`):
+                sampled cell sate, (N,Cz)
+            uhat : `torch.tensor`
+                predicted mean u values, (N,G)
+            shat : `torch.tensor`
+                predicted mean s values, (N,G)
         """
         data_in_scale = data_in
         G = data_in_scale.shape[-1]//2
@@ -1522,12 +1542,29 @@ class VAE(VanillaVAE):
                 vu, vs,
                 vu_fw, vs_fw)
 
-    def pred_xy(self, t, z, t0, xy0, edge_index, edge_weight, condition, batch_sample=None, mode='train'):
-        self.set_mode(mode)
-        xy_hat = self.decoder._compute_xy(t, z, t0, xy0, edge_index, edge_weight, condition)
-        if batch_sample is not None:
-            return xy_hat[batch_sample]
-        return xy_hat
+    def pred_xy(self, t, z, t0, xy0, edge_index, edge_weight, condition=None, batch_sample=None, mode='train'):
+            """
+            Predicts the xy coordinates for a given time step and latent vector.
+
+            Args:
+                t (torch.Tensor): The latent cell time.
+                z (torch.Tensor): The latent cell state.
+                t0 (torch.Tensor): The initial time .
+                xy0 (torch.Tensor): The initial xy coordinates.
+                edge_index (torch.Tensor): The edge indices.
+                edge_weight (torch.Tensor): The edge weights.
+                condition (torch.Tensor, optional): The condition tensor. Defaults to None.
+                batch_sample (int, optional): The index of the batch sample to return. Defaults to None.
+                mode (str, optional): The mode of the model. Defaults to 'train'.
+
+            Returns:
+                torch.Tensor: The predicted xy coordinates.
+            """
+            self.set_mode(mode)
+            xy_hat = self.decoder._compute_xy(t, z, t0, xy0, edge_index, edge_weight, condition)
+            if batch_sample is not None:
+                return xy_hat[batch_sample]
+            return xy_hat
 
     def _ode_by_batch(self,
                       t,
@@ -1616,9 +1653,36 @@ class VAE(VanillaVAE):
                          condition=None,
                          return_vel=False,
                          to_cpu=False):
-        """Evaluate the model on the validation dataset.
-        The major difference from forward pass is that we use the mean time and
-        cell state instead of random sampling. The input arguments are the same as 'forward'.
+        """Evaluate the model on the validation dataset by batch.
+        
+        Args:
+            data_in (torch.Tensor): Input data tensor.
+            edge_index (torch.Tensor): Edge index tensor.
+            lu_scale (float): Scaling factor for the upstream gene expression.
+            ls_scale (float): Scaling factor for the downstream gene expression.
+            edge_weight (torch.Tensor, optional): Edge weight tensor. Defaults to None.
+            u0 (torch.Tensor, optional): Initial upstream gene expression tensor. Defaults to None.
+            s0 (torch.Tensor, optional): Initial downstream gene expression tensor. Defaults to None.
+            t0 (torch.Tensor, optional): Initial time tensor. Defaults to None.
+            t1 (torch.Tensor, optional): Final time tensor. Defaults to None.
+            condition (torch.Tensor, optional): Condition tensor. Defaults to None.
+            return_vel (bool, optional): Whether to return velocity tensors. Defaults to False.
+            to_cpu (bool, optional): Whether to move tensors to CPU. Defaults to False.
+        
+        Returns:
+            tuple: A tuple containing the following elements:
+            - mu_t (torch.Tensor): Mean time tensor.
+            - std_t (torch.Tensor): Standard deviation of time tensor.
+            - mu_z (torch.Tensor): Mean latent space tensor.
+            - std_z (torch.Tensor): Standard deviation of latent space tensor.
+            - uhat (torch.Tensor): Predicted upstream gene expression tensor.
+            - shat (torch.Tensor): Predicted downstream gene expression tensor.
+            - uhat_fw (torch.Tensor, optional): Forward predicted upstream gene expression tensor. Defaults to None.
+            - shat_fw (torch.Tensor, optional): Forward predicted downstream gene expression tensor. Defaults to None.
+            - vu (torch.Tensor): Velocity of upstream gene expression tensor.
+            - vs (torch.Tensor): Velocity of downstream gene expression tensor.
+            - vu_fw (torch.Tensor, optional): Forward velocity of upstream gene expression tensor. Defaults to None.
+            - vs_fw (torch.Tensor, optional): Forward velocity of downstream gene expression tensor. Defaults to None.
         """
         data_in_scale = data_in
         G = data_in_scale.shape[-1]//2
@@ -1685,10 +1749,16 @@ class VAE(VanillaVAE):
                 vu_fw, vs_fw)
 
     def loss_vel(self, x0, xhat, v):
-        ##############################################################
-        # Velocity correlation loss, optionally
-        # added to the total loss function
-        ##############################################################
+        """Calculates the velocity loss between the reconstructed input and the target velocity.
+
+        Args:
+            x0 (torch.Tensor): The original input tensor.
+            xhat (torch.Tensor): The reconstructed input tensor.
+            v (torch.Tensor): The target velocity tensor.
+
+        Returns:
+            torch.Tensor: The mean cosine similarity loss between the reconstructed input and the target velocity.
+        """
         cossim = nn.CosineSimilarity(dim=1)
         return cossim(xhat-x0, v).mean()
 
@@ -1740,27 +1810,24 @@ class VAE(VanillaVAE):
                           to_cpu=False):
         """Training objective function. This is the negative ELBO.
 
-        Arguments
-        ---------
+        Args:
+            q_tx (tuple of `torch.tensor`):
+                Parameters of time posterior. Mean and std are both (N, 1) tensors.
+            p_t (tuple of `torch.tensor`):
+                Parameters of time prior.
+            q_zx (tuple of `torch.tensor`):
+                Parameters of cell state posterior. Mean and std are both (N, Dz) tensors.
+            p_z (tuple of `torch.tensor`):
+                Parameters of cell state prior.
+            u, s (`torch.tensor`):
+                Input data
+            uhat, shat (torch.tensor):
+                Prediction by TopoVelo
+            weight (`torch.tensor`, optional):
+                Sample weight. This feature is not stable. Please consider setting it to None.
 
-        q_tx : tuple of `torch.tensor`
-            Parameters of time posterior. Mean and std are both (N, 1) tensors.
-        p_t : tuple of `torch.tensor`
-            Parameters of time prior.
-        q_zx : tuple of `torch.tensor`
-            Parameters of cell state posterior. Mean and std are both (N, Dz) tensors.
-        p_z  : tuple of `torch.tensor`
-            Parameters of cell state prior.
-        u, s : `torch.tensor`
-            Input data
-        uhat, shat : torch.tensor
-            Prediction by TopoVelo
-        weight : `torch.tensor`, optional
-            Sample weight. This feature is not stable. Please consider setting it to None.
-
-        Returns
-        -------
-        Negative ELBO : torch.tensor, scalar
+        Returns:
+            torch.tensor - Negative ELBO
         """
         kl_term = self._compute_kl_term(q_tx, p_t, q_zx, p_z)
 
@@ -1806,6 +1873,30 @@ class VAE(VanillaVAE):
                          weight=None,
                          to_cpu=False,
                          eps=1e-2):
+        """
+        Calculates the risk for a Variational Autoencoder (VAE) model using the Poisson distribution.
+
+        Args:
+            q_tx (Tensor): The tensor representing the mean of the latent variable t given x.
+            p_t (Tensor): The tensor representing the prior distribution of the latent variable t.
+            q_zx (Tensor): The tensor representing the mean of the latent variable z given x.
+            p_z (Tensor): The tensor representing the prior distribution of the latent variable z.
+            u (Tensor): The tensor representing the observed variable u.
+            s (Tensor): The tensor representing the observed variable s.
+            uhat (Tensor): The tensor representing the reconstructed variable uhat.
+            shat (Tensor): The tensor representing the reconstructed variable shat.
+            uhat_fw (Tensor, optional): The tensor representing the forward reconstructed variable uhat_fw. Defaults to None.
+            shat_fw (Tensor, optional): The tensor representing the forward reconstructed variable shat_fw. Defaults to None.
+            u1 (Tensor, optional): The tensor representing the future state of u. Defaults to None.
+            s1 (Tensor, optional): The tensor representing the future state of s. Defaults to None.
+            weight (Tensor, optional): The tensor representing the weight for each sample. Defaults to None.
+            to_cpu (bool, optional): Whether to move the softmax output to the CPU. Defaults to False.
+            eps (float, optional): A small value added to the input to avoid numerical instability. Defaults to 1e-2.
+
+        Returns:
+            list: A list containing the negative reconstruction error and the KL divergence term.
+
+        """
         kl_term = self._compute_kl_term(q_tx, p_t, q_zx, p_z)
 
         # poisson
@@ -1831,7 +1922,7 @@ class VAE(VanillaVAE):
             logp = logp*weight
 
         err_rec = torch.mean(logp.sum(1))
-        
+
         return [- err_rec, kl_term]
 
     def _kl_nb(self, m1, m2, p):
@@ -1849,6 +1940,30 @@ class VAE(VanillaVAE):
                     weight=None,
                     to_cpu=False,
                     eps=1e-2):
+        """
+        Computes the negative log-likelihood loss and KL divergence loss for the Variational Autoencoder (VAE) model with negative binomial distribution.
+
+        Args:
+            q_tx (torch.Tensor): The mean of the distribution for t given x.
+            p_t (torch.Tensor): The prior distribution for t.
+            q_zx (torch.Tensor): The mean of the distribution for z given x.
+            p_z (torch.Tensor): The prior distribution for z.
+            u (torch.Tensor): The observed values of the variable u.
+            s (torch.Tensor): The observed values of the variable s.
+            uhat (torch.Tensor): The predicted values of the variable u.
+            shat (torch.Tensor): The predicted values of the variable s.
+            uhat_fw (torch.Tensor, optional): The predicted values of the variable u in the forward pass. Defaults to None.
+            shat_fw (torch.Tensor, optional): The predicted values of the variable s in the forward pass. Defaults to None.
+            u1 (torch.Tensor, optional): The observed values of the variable u in the first stage. Defaults to None.
+            s1 (torch.Tensor, optional): The observed values of the variable s in the first stage. Defaults to None.
+            weight (torch.Tensor, optional): The weight for each sample. Defaults to None.
+            to_cpu (bool, optional): Whether to move the softmax logits to the CPU. Defaults to False.
+            eps (float, optional): A small value to avoid numerical instability. Defaults to 1e-2.
+
+        Returns:
+            list: A list containing the negative log-likelihood loss and KL divergence loss.
+
+        """
         kl_term = self._compute_kl_term(q_tx, p_t, q_zx, p_z)
 
         # NB
@@ -1869,38 +1984,33 @@ class VAE(VanillaVAE):
         if weight is not None:
             logp = logp*weight
         err_rec = torch.mean(torch.sum(logp, 1))
-        
+
         return [- err_rec, kl_term]
 
     def vae_spatial_loss(self, xy, xy_hat):
+        """
+        Calculates the spatial loss for the VAE model.
+
+        Args:
+            xy (torch.Tensor): The ground truth xy coordinates.
+            xy_hat (torch.Tensor): The predicted xy coordinates.
+
+        Returns:
+            torch.Tensor: The spatial loss.
+        """
         return torch.mean(torch.sum(((xy-xy_hat)/self.config['sigma_pos']).pow(2), 1))
 
     def train_epoch(self, optimizer, optimizer2=None):
-        ##########################################################################
-        # Training in each epoch.
-        # Early stopping if enforced by default.
-        # Arguments
-        # ---------
-        # 1.  train_loader [torch.utils.data.DataLoader]
-        #     Data loader of the input data.
-        # 2.  test_set [torch.utils.data.Dataset]
-        #     Validation dataset
-        # 3.  optimizer  [optimizer from torch.optim]
-        # 4.  optimizer2 [optimizer from torch.optim
-        #     (Optional) A second optimizer.
-        #     This is used when we optimize NN and ODE simultaneously in one epoch.
-        #     By default, TopoVelo performs alternating optimization in each epoch.
-        #     The argument will be set to proper value automatically.
-        # 5.  K [int]
-        #     Alternating update period.
-        #     For every K updates of optimizer, there's one update for optimizer2.
-        #     If set to 0, optimizer2 will be ignored and only optimizer will be
-        #     updated. Users can set it to 0 if they want to update sorely NN in one
-        #     epoch and ODE in the next epoch.
-        # Returns
-        # 1.  stop_training [bool]
-        #     Whether to stop training based on the early stopping criterium.
-        ##########################################################################
+        """
+        Train the model for one epoch.
+
+        Args:
+            optimizer (torch.optim.Optimizer): The optimizer used to update the model parameters.
+            optimizer2 (torch.optim.Optimizer, optional): A second optimizer used for alternating optimization. Default is None.
+
+        Returns:
+            bool: Whether to stop training based on the early stopping criterion.
+        """
         G = self.graph_data.G
         self.set_mode('train')
         index_loader = DataLoader(Index(len(self.train_idx)),
@@ -2010,24 +2120,16 @@ class VAE(VanillaVAE):
 
         return False
 
-    def sample_descendant(self, t, batch_sample):
-        # returns future time and samples with at least one descendant and sampled descendants
-        # obtain future time points
-        future_samples = np.array([np.random.choice(self.spatial_index[idx]) for idx in range(len(t))])
-        mask = torch.tensor((future_samples >= 0).reshape(-1, 1), dtype=torch.float).to(self.device)
-        t_future = t * (1-mask) + t[future_samples] * mask
-
-        # obtain valid samples from batch_sample
-        future_samples_batch = future_samples[batch_sample]
-        valid_samples = batch_sample[future_samples_batch >= 0]
-        future_samples = future_samples_batch[future_samples_batch >= 0]
-
-        return t_future[valid_samples], valid_samples, future_samples
-
     def train_spatial_epoch(self, optimizer):
-        ##########################################################################
-        # Training the spatial decoder in each epoch.
-        ##########################################################################
+        """
+        Trains the spatial epoch of the VAE model.
+
+        Args:
+            optimizer: The optimizer used for training.
+
+        Returns:
+            bool: True if early stopping criteria is met, False otherwise.
+        """
         self.set_mode('train')
         index_loader = DataLoader(Index(len(self.train_idx)),
                                   batch_size=self.config["batch_size"],
@@ -2071,29 +2173,29 @@ class VAE(VanillaVAE):
         return False
 
     def update_x0(self):
-        ##########################################################################
-        # Estimate the initial conditions using KNN
-        # < Input Arguments >
-        # 1.  U [tensor (N,G)]
-        #     Input unspliced count matrix
-        # 2   S [tensor (N,G)]
-        #     Input spliced count matrix
-        # 3.  n_bin [int]
-        #     (Optional) Set to a positive integer if binned KNN is used.
-        # < Output >
-        # 1.  u0 [tensor (N,G)]
-        #     Initial condition for u
-        # 2.  s0 [tensor (N,G)]
-        #     Initial condition for s
-        # 3. t0 [tensor (N,1)]
-        #    Initial time
-        ##########################################################################
+        """
+        Updates the initial conditions of the VAE model.
+
+        This method sets the mode to 'eval' and performs the following steps:
+        1. Predicts the output and computes the ELBO (Evidence Lower Bound) using the cell labels.
+        2. Clips the time values to avoid outliers.
+        3. Computes the initial conditions of cells without a valid pool of neighbors.
+        4. Computes the knn indices for x0 and x1.
+        5. Retrieves the initial conditions for x0 and x1.
+        6. Updates the graph data with the computed values.
+
+        Args:
+            None
+
+        Returns:
+            None
+        """
         self.set_mode('eval')
         G = self.graph_data.G
         out, elbo = self.pred_all(self.cell_labels,
-                                  "both",
-                                  ["uhat", "shat", "t", "z"],
-                                  np.array(range(G)))
+                                    "both",
+                                    ["uhat", "shat", "t", "z"],
+                                    np.array(range(G)))
         t, z = out["t"], out["z"]
         
         # Clip the time to avoid outliers
@@ -2207,16 +2309,6 @@ class VAE(VanillaVAE):
             self.u1 = u1
             self.s1 = s1
             self.t1 = t1.reshape(-1, 1)
-
-    def update_spatial_x0(self, s):
-        xy = self.graph_data.xy.detach().cpu().numpy()
-        out, _ = self.pred_all(self.cell_labels, "both", ["t", "vs"], None)
-        tmax, tmin = out["t"].max(), out["t"].min()
-        dt = (self.config["dt"][0]*(tmax-tmin), self.config["dt"][1]*(tmax-tmin))
-        self.spatial_index = spatial_x1_index(xy, out["vs"], s, out["t"], self.config['n_neighbors'], self.graph_data.graph, dt)
-        xy0, t1_spatial = get_x1_spatial(xy, out["t"], self.spatial_index)
-        self.graph_data.xy0 = torch.tensor(xy0, dtype=torch.float32, device=self.device)
-        self.graph_data.t1_spatial = torch.tensor(t1_spatial.reshape(-1, 1), dtype=torch.float32, device=self.device)
 
     def _set_lr(self, p):
         if self.is_discrete:
@@ -2353,33 +2445,33 @@ class VAE(VanillaVAE):
               random_state=2022):
         """The high-level API for training.
 
-        Arguments
-        ---------
-
-        adata : :class:`anndata.AnnData`
-            Annotated data matrix.
-        graph : :class:`torch_geometric.data.Data`
-            Graph data object.
-        spatial_key : str
-            Key in adata.obsm storing the spatial coordinates.
-        edge_attr : :class:`numpy.ndarray`, optional
-            Edge attributes. Has a shape of (n_edge, dim_feature).
-            The order should follow the edge_index in graph.
-            Defaults to None.
-        config : dictionary, optional
-            Contains all hyper-parameters.
-        plot : bool, optional
-            Whether to plot some sample genes during training. Used for debugging.
-        gene_plot : string list, optional
-            List of gene names to plot. Used only if plot==True
-        cluster_key : str, optional
-            Key in adata.obs storing the cell type annotation.
-        figure_path : str, optional
-            Path to the folder for saving plots.
-        embed : str, optional
-            Low dimensional embedding in adata.obsm. The actual key storing the embedding should be f'X_{embed}'
-        test_samples : :class:`numpy.array`
-            Indices of samples included in the test set (unseen data)
+        Args:
+            adata (:class:`anndata.AnnData`):
+                Annotated data matrix.
+            graph (:class:`torch_geometric.data.Data`):
+                Graph data object.
+            spatial_key (str):
+                Key in adata.obsm storing the spatial coordinates.
+            edge_attr (:class:`numpy.ndarray`, optional):
+                Edge attributes. Has a shape of (n_edge, dim_feature).
+                The order should follow the edge_index in graph.
+                Defaults to None.
+            config (dictionary, optional):
+                Contains all hyper-parameters.
+            plot (bool, optional):
+                Whether to plot some sample genes during training. Used for debugging.
+            gene_plot (string list, optional):
+                List of gene names to plot. Used only if plot==True
+            cluster_key (str, optional):
+                Key in adata.obs storing the cell type annotation.
+            us_keys (list, optional):
+                Keys in adata.layers storing the unspliced and spliced count matrices.
+            figure_path (str, optional):
+                Path to the folder for saving plots.
+            embed (str, optional):
+                Low dimensional embedding in adata.obsm. The actual key storing the embedding should be f'X_{embed}'
+            random_state (int, optional):
+                Random seed for reproducibility.
         """
         seed_everything(random_state)
         self._set_config(adata, config, spatial_key)
@@ -2610,7 +2702,24 @@ class VAE(VanillaVAE):
         return
 
     def pred_all(self, cell_labels, mode='test', output=["uhat", "shat", "t", "z"], gene_idx=None):
-        G = self.decoder.n_gene
+        """
+        Predicts the values of various variables for all cells.
+
+        Args:
+            cell_labels (array-like): The labels of the cells.
+            mode (str, optional): The mode of prediction, choose from {'train', 'test', 'both'}. Defaults to 'test'.
+            output (list, optional): The variables to be predicted. Defaults to ["uhat", "shat", "t", "z"].
+            gene_idx (array-like, optional): The indices of the genes to be predicted. Defaults to None.
+
+        Returns:
+            dict: A dictionary containing the predicted values of the specified variables.
+
+        Notes:
+            - The predicted values are based on the trained model.
+            - If gene_idx is not specified, all genes will be predicted.
+            - The output dictionary will contain the predicted values for each specified variable.
+        """
+        N, G = self.graph_data.N, self.graph_data.G
         if gene_idx is None:
             gene_idx = np.array(range(G))
         save_uhat_fw = "uhat_fw" in output and self.use_knn and self.config["vel_continuity_loss"]
@@ -2660,8 +2769,8 @@ class VAE(VanillaVAE):
                 lu_scale = lu_scale.unsqueeze(-1)
                 ls_scale = ls_scale.unsqueeze(-1)
             if uhat_fw is not None and shat_fw is not None:
-                uhat_fw = uhat_fw[sample_idx]*lu_scale[sample_idx]
-                shat_fw = uhat_fw[sample_idx]*ls_scale[sample_idx]
+                uhat_fw = uhat_fw[sample_idx] * lu_scale[sample_idx]
+                shat_fw = uhat_fw[sample_idx] * ls_scale[sample_idx]
                 u1 = u1[sample_idx].cpu()
                 s1 = s1[sample_idx].cpu()
 
@@ -2766,14 +2875,9 @@ class VAE(VanillaVAE):
     
     def resume_train_stage_3(self,
                              adata,
-                             graph,
-                             spatial_key,
                              lr=1e-3,
-                             config={},
                              plot=False,
                              gene_plot=[],
-                             cluster_key="clusters",
-                             us_keys=None,
                              figure_path="figures",
                              embed="umap",
                              random_state=2022):
@@ -2791,10 +2895,10 @@ class VAE(VanillaVAE):
         self.loss_test_sp = []
         self.config["early_stop_thred"] = 0
         try:
-            Xembed = adata.obsm[f"X_{embed}"]
+            x_embed = adata.obsm[f"X_{embed}"]
         except KeyError:
             print("Embedding not found! Set to None.")
-            Xembed = np.nan*np.ones((adata.n_obs, 2))
+            x_embed = np.nan*np.ones((adata.n_obs, 2))
             plot = False
         for epoch in range(self.config['n_epochs']):
             stop_training = self.train_spatial_epoch(optimizer)
@@ -2821,7 +2925,7 @@ class VAE(VanillaVAE):
         self.loss_test_sp.append(mse_test)
         # Plot final results
         if plot:
-            self.loss_train = np.stack(self.loss_train)
+            self.loss_train_sp = np.stack(self.loss_train_sp)
             plot_train_loss(self.loss_train_sp,
                             range(1, len(self.loss_train_sp)+1),
                             save=f'{figure_path}/xyloss_train.png')
@@ -2846,27 +2950,25 @@ class VAE(VanillaVAE):
              **kwargs):
         """Evaluate the model upon training/test dataset.
 
-        Arguments
-        ---------
-        x_embed : `numpy array`
-            Low-dimensional embedding for plotting
-        testid : str or int, optional
-            Used to name the figures.
-        test_mode : bool, optional
-            Whether dataset is training or validation dataset. This is used when retreiving certain class variable,
-            e.g. cell-specific initial condition.
-        gind : `numpy array`, optional
-            Index of genes in adata.var_names. Used for plotting.
-        gene_plot : `numpy array`, optional
-            Gene names.
-        plot : bool, optional
-            Whether to generate plots.
-        path : str
-            Saving path.
+        Args:
+            x_embed (`numpy array`):
+                Low-dimensional embedding for plotting
+            testid (str or int, optional):
+                Used to name the figures.
+            test_mode (bool, optional):
+                Whether dataset is training or validation dataset. This is used when retreiving certain class variable,
+                e.g. cell-specific initial condition.
+            gind (`numpy array`, optional):
+                Index of genes in adata.var_names. Used for plotting.
+            gene_plot (`numpy array`, optional):
+                Gene names.
+            plot (bool, optional):
+                Whether to generate plots.
+            path (str):
+                Saving path.
 
-        Returns
-        -------
-        elbo_terms : list[float]
+        Returns:
+            list[float] : elbo_terms
         """
         self.set_mode('eval')
         mode = "test" if test_mode else "train"
@@ -2916,38 +3018,60 @@ class VAE(VanillaVAE):
 
     def test_spatial(self,
                      testid,
-                     test_mode=True,
+                     mode,
                      plot=False,
                      path='figures'):
-        
-        with torch.no_grad():
-            y_onehot = (F.one_hot(self.graph_data.batch, self.n_batch).float()
-                        if self.enable_cvae else None)
-            xy_hat = self.pred_xy(self.graph_data.t,
-                                  self.graph_data.z,
-                                  self.graph_data.t0,
-                                  self.graph_data.xy0,
-                                  self.graph_data.data.adj_t,
-                                  self.graph_data.edge_weight,
-                                  y_onehot,
-                                  None,
-                                  mode='eval')
-            loss = self.vae_spatial_loss(self.graph_data.xy, xy_hat) 
-            loss *= self.config['sigma_pos']
-            loss *= self.config['sigma_pos']
-        if plot:
-            cell_labels = np.array([self.label_dic_rev[x] for x in self.cell_labels])
-            plot_cluster(xy_hat.cpu().numpy()[self.train_idx],
-                         cell_labels[self.train_idx],
-                         embed='Predicted Coordinates',
-                         real_aspect_ratio=True,
-                         save=f"{path}/xy-{testid}-train.png")
-            plot_cluster(xy_hat.cpu().numpy()[self.test_idx],
-                         cell_labels[self.test_idx],
-                         embed='Predicted Coordinates',
-                         real_aspect_ratio=True,
-                         save=f"{path}/xy-{testid}-test.png")
-        return loss.cpu().item()
+            """Evaluate the spatial decoder model upon training/test dataset.
+
+            Args:
+                testid (int): The identifier for the test.
+                mode (str): Which part of the data to evaluate, should be one of {'train', 'test', 'both'}.
+                plot (bool, optional): Flag to indicate if the results should be plotted. Defaults to False.
+                path (str, optional): The path to save the figures. Defaults to 'figures'.
+
+            Returns:
+                float: The loss value.
+
+            Notes:
+                This method evaluates the spatial decoder model using the training/test dataset. It calculates the loss
+                between the predicted and actual coordinates and returns the loss value. If the `plot` flag is set to True,
+                it also generates and saves the plots of the predicted coordinates.
+            """
+            if mode == "test":
+                sample_idx = self.validation_idx
+            elif mode == "train":
+                sample_idx = self.train_idx
+            else:
+                sample_idx = np.array(range(self.graph_data.N))
+
+            with torch.no_grad():
+                y_onehot = (F.one_hot(self.graph_data.batch, self.n_batch).float()
+                            if self.enable_cvae else None)
+                xy_hat = self.pred_xy(self.graph_data.t,
+                                      self.graph_data.z,
+                                      self.graph_data.t0,
+                                      self.graph_data.xy0,
+                                      self.graph_data.data.adj_t,
+                                      self.graph_data.edge_weight,
+                                      y_onehot,
+                                      None,
+                                      mode='eval')
+                loss = self.vae_spatial_loss(self.graph_data.xy[sample_idx], xy_hat[sample_idx]) 
+                loss *= self.config['sigma_pos']
+                loss *= self.config['sigma_pos']
+            if plot:
+                cell_labels = np.array([self.label_dic_rev[x] for x in self.cell_labels])
+                plot_cluster(xy_hat.cpu().numpy()[self.train_idx],
+                             cell_labels[self.train_idx],
+                             embed='Predicted Coordinates',
+                             real_aspect_ratio=True,
+                             save=f"{path}/xy-{testid}-train.png")
+                plot_cluster(xy_hat.cpu().numpy()[self.test_idx],
+                             cell_labels[self.test_idx],
+                             embed='Predicted Coordinates',
+                             real_aspect_ratio=True,
+                             save=f"{path}/xy-{testid}-test.png")
+            return loss.cpu().item()
     
     def pred_inductive(self, output=["uhat", "shat", "t", "z"], gene_idx=None):
         N, G = self.unseen_data.N, self.unseen_data.G
@@ -3233,6 +3357,20 @@ class VAE(VanillaVAE):
                        us_keys=None,
                        edge_attr=None,
                        batch_key=None):
+        """Evaluate the model inductively on unseen graph data.
+        
+        Args:
+            adata (:class:`anndata.AnnData`): AnnData object.
+            adata_unseen (:class:`anndata.AnnData`): AnnData object for unseen data.
+            key (str): Key for storing pretrained model parameters in AnnData
+            graph_key (str): Key for extracting spatial graph.
+            spatial_key (str): Key for extracting spatial coordinates.
+            cluster_key (str): Key for cell type labels.
+            tprior (list): Time prior.
+            us_keys (list): Keys for unspliced and spliced count matrices.
+            edge_attr (str): Key for edge attributes.
+            batch_key (str): Key for batch information.
+        """
         self._load_unseen_data(adata_unseen,
                                adata_unseen.obsp[graph_key],
                                spatial_key,
@@ -3311,9 +3449,7 @@ class VAE(VanillaVAE):
         
 
     def update_std_noise(self):
-        """Update the standard deviation of Gaussian noise.
-        .. deprecated:: 1.0
-        """
+        """Update the standard deviation of Gaussian noise."""
         G = self.graph_data.G
         out, _ = self.pred_all(self.cell_labels,
                                mode='train',
@@ -3351,6 +3487,17 @@ class VAE(VanillaVAE):
         return data_in_scale
 
     def get_enc_att(self, data_in, edge_index, edge_weight, n_nodes):
+        """Retreive the encoder attention score.
+        
+        Args:
+            data_in (torch.Tensor): Input data (cell by gene, with unspliced and spliced concatenated at dim=1).
+            edge_index (torch.Tensor): Edge index.
+            edge_weight (torch.Tensor): Edge weight.
+            n_nodes (int): Number of nodes.
+        
+        Returns:
+            numpy.array : Attention score of shape (num_cell, num_cell, num_att_head).
+        """
         self.set_mode('eval')
         data_in_scale = self._scale_data_for_enc(data_in)
         
@@ -3367,6 +3514,17 @@ class VAE(VanillaVAE):
         return dge2array(cum_num_col, row, val)
 
     def get_dec_att(self, data_in, edge_index, edge_weight, n_nodes):
+        """Retreive the decoder attention score.
+        
+        Args:
+            data_in (torch.Tensor): Input data (cell by gene, with unspliced and spliced concatenated at dim=1).
+            edge_index (torch.Tensor): Edge index.
+            edge_weight (torch.Tensor): Edge weight.
+            n_nodes (int): Number of nodes.
+
+        Returns:
+            numpy.array : Attention score of shape (num_cell, num_cell, num_att_head).
+        """
         self.set_mode('eval')
         gatconv = self.decoder.net_rho2.conv1
         if not isinstance(gatconv, GATConv):
@@ -3392,6 +3550,16 @@ class VAE(VanillaVAE):
         return dge2array(cum_num_col, row, val)
     
     def get_enc_att_all_pairs(self, data_in, n_nodes, batch_size=64):
+        """Retreive the encoder attention score for all pairs of nodes.
+        
+        Args:
+            data_in (torch.Tensor): Input data (cell by gene, with unspliced and spliced concatenated at dim=1).
+            n_nodes (int): Number of nodes.
+            batch_size (int): Batch size.
+        
+        Returns:
+            numpy.array : Attention score of shape (num_cell, num_cell, num_att_head).
+        """
         self.set_mode('eval')
         data_in_scale = self._scale_data_for_enc(data_in)
 
@@ -3412,7 +3580,7 @@ class VAE(VanillaVAE):
                 mask = (col_idx >= i*batch_size) & (col_idx < (i+1)*batch_size)
                 n_head = att[1].shape[1]
                 att_score.append(att[1].cpu().numpy()[mask].reshape(n_nodes, batch_size, n_head))
-            if n_batch*batch_size < n_nodes:
+            if n_batch * batch_size < n_nodes:
                 edge_index = torch.cartesian_prod(torch.range(start=0, end=n_nodes-1, dtype=int),
                                                   torch.range(start=n_batch*batch_size, end=n_nodes-1, dtype=int)).T.to(self.device)
                 _, att = gatconv(data_in_scale,
@@ -3424,6 +3592,16 @@ class VAE(VanillaVAE):
         return np.concatenate(att_score, 1)
     
     def get_dec_att_all_pairs(self, data_in, n_nodes, batch_size=64):
+        """Retreive the decoder attention score for all pairs of nodes.
+        
+        Args:
+            data_in (torch.Tensor): Input data (cell by gene, with unspliced and spliced concatenated at dim=1).
+            n_nodes (int): Number of nodes.
+            batch_size (int): Batch size.
+        
+        Returns:
+            numpy.array : Attention score of shape (num_cell, num_cell, num_att_head).
+        """
         self.set_mode('eval')
         gatconv = self.decoder.net_rho2.conv1
         if not isinstance(gatconv, GATConv):
@@ -3608,6 +3786,16 @@ class VAE(VanillaVAE):
                     graph_data,
                     condition=None,
                     delta_t=0.05):
+        """Compute the velocity of spatial coordinates using the spatial decoder.
+        
+        Args:
+            graph_data (:class:`SCGraphData`): Graph data.
+            condition (:class:`torch.Tensor`, optional): Condition tensor.
+            delta_t (float, optional): Time interval.
+        
+        Returns:
+            :class:`numpy.ndarray`: Velocity of spatial coordinates.
+        """
         self.set_mode('eval')
         edge_index = graph_data.data.adj_t
         edge_weight = graph_data.edge_weight
@@ -3634,6 +3822,14 @@ class VAE(VanillaVAE):
                               cluster_key,
                               time_interval,
                               figure_path=None):
+        """Predict the future spatial coordinates of cells.
+
+        Args:
+            adata (:class:`anndata.AnnData`): AnnData object.
+            cluster_key (str): Key for cell type labels.
+            time_interval (list[float]): Time intervals. 
+            figure_path (str, optional): Path for saving figures.
+        """
         cell_labels = adata.obs[cluster_key].to_numpy()
         condition = (F.one_hot(self.graph_data.batch, self.n_batch).float()
                      if self.enable_cvae else None)
@@ -3674,15 +3870,14 @@ class VAE(VanillaVAE):
     def save_anndata(self, adata, key, file_path, file_name=None):
         """Save the ODE parameters and cell time to the anndata object and write it to disk.
 
-        Arguments
-        ---------
-        adata : :class:`anndata.AnnData`
-        key : str
-            Used to store all parameters of the model.
-        file_path : str
-            Saving path.
-        file_name : str, optional
-            If set to a string ending with .h5ad, the updated anndata object will be written to disk.
+        Args:
+            adata (:class:`anndata.AnnData`):
+            key (str):
+                Used to store all parameters of the model.
+            file_path (str):
+                Saving path.
+            file_name (str, optional):
+                If set to a string ending with .h5ad, the updated anndata object will be written to disk.
         """
         self.set_mode('eval')
         os.makedirs(file_path, exist_ok=True)

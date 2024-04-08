@@ -32,10 +32,10 @@ def set_dpi(dpi):
     global DPI
     DPI = dpi
 
-def _set_figsize(X_embed, real_aspect_ratio=False, width=7.5, height=6, fix='width', margin=0.0):
+def _set_figsize(x_embed, real_aspect_ratio=False, width=7.5, height=6, fix='width', margin=0.0):
     figsize = (width, height)
     if real_aspect_ratio:
-        aspect_ratio = (X_embed[:, 1].max() - X_embed[:, 1].min()) / (X_embed[:, 0].max() - X_embed[:, 0].min())
+        aspect_ratio = (x_embed[:, 1].max() - x_embed[:, 1].min()) / (x_embed[:, 0].max() - x_embed[:, 0].min())
         if fix == 'height':
             figsize = (height/aspect_ratio+margin, height)
         else:
@@ -43,8 +43,10 @@ def _set_figsize(X_embed, real_aspect_ratio=False, width=7.5, height=6, fix='wid
     return figsize
 
 
-def compute_figsize(X_embed, width=7.5, height=6, fix='width', margin=0.0):
-    return _set_figsize(X_embed, True, width, height, fix, margin)
+def compute_figsize(x_embed, width=7.5, height=6, fix='width', margin=0.0):
+    """Compute the figure size based on the aspect ratio of the data embedding.
+    """
+    return _set_figsize(x_embed, True, width, height, fix, margin)
 
 
 def get_colors(n, color_map=None):
@@ -331,7 +333,7 @@ def plot_phase(u, s,
 
 
 def plot_cluster_axis(ax,
-                      X_embed,
+                      x_embed,
                       cell_labels,
                       palette=None,
                       color_map=None,
@@ -341,8 +343,8 @@ def plot_cluster_axis(ax,
     """Same as plot_cluster but returns the axes object.
     """
     cell_types = np.unique(cell_labels)
-    x = X_embed[:, 0]
-    y = X_embed[:, 1]
+    x = x_embed[:, 0]
+    y = x_embed[:, 1]
     x_range = x.max()-x.min()
     y_range = y.max()-y.min()
     if palette is None:
@@ -359,7 +361,7 @@ def plot_cluster_axis(ax,
     return ax
 
 
-def plot_cluster(X_embed,
+def plot_cluster(x_embed,
                  cell_labels,
                  color_map=None,
                  embed=None,
@@ -370,7 +372,7 @@ def plot_cluster(X_embed,
     """Plot the predicted cell types from the encoder
 
     Args:
-        X_embed (:class:`numpy.ndarray`):
+        x_embed (:class:`numpy.ndarray`):
             2D embedding for visualization, (N,2)
         cell_labels (:class:`numpy.ndarray`):
              Cell type annotation, (N,)
@@ -392,10 +394,10 @@ def plot_cluster(X_embed,
     """
     cell_types = np.unique(cell_labels)
     if figsize is None:
-        figsize = _set_figsize(X_embed, real_aspect_ratio)
+        figsize = _set_figsize(x_embed, real_aspect_ratio)
     fig, ax = plt.subplots(figsize=figsize, facecolor='white')
-    x = X_embed[:, 0]
-    y = X_embed[:, 1]
+    x = x_embed[:, 0]
+    y = x_embed[:, 1]
     x_range = x.max()-x.min()
     y_range = y.max()-y.min()
     colors = get_colors(len(cell_types), color_map)
@@ -592,12 +594,12 @@ def cellwise_vel_embedding(adata,
     A = np.array(adata.uns[f"{key}_velocity_graph"].todense())
     A_neg = np.array(adata.uns[f"{key}_velocity_graph_neg"].todense())
     v_embed = adata.obsm[f'{key}_velocity_{embed}']
-    X_embed = adata.obsm[f'X_{embed}']
-    x_embed_1, x_embed_2 = X_embed[:, 0], X_embed[:, 1]
+    x_embed = adata.obsm[f'X_{embed}']
+    x_embed_1, x_embed_2 = x_embed[:, 0], x_embed[:, 1]
 
     if idx is None:
         if type_name is None:
-            idx = np.random.choice(X_embed.shape[0])
+            idx = np.random.choice(x_embed.shape[0])
         else:
             cell_labels = adata.obs["clusters"].to_numpy()
             idx = np.random.choice(np.where(cell_labels == type_name)[0])
@@ -605,7 +607,7 @@ def cellwise_vel_embedding(adata,
     neighbors = np.where((A[idx] > 0) | (A_neg[idx] < 0))[0]
     t = adata.obs[f'{key}_time'].to_numpy()
 
-    figsize = _set_figsize(X_embed, real_aspect_ratio)
+    figsize = _set_figsize(x_embed, real_aspect_ratio)
     fig, ax = plt.subplots(1, 2, figsize=figsize, facecolor='white')
     ax[0].plot(x_embed_1, x_embed_2, '.', color='grey', alpha=0.25)
     tmask = t[neighbors] > t[idx]
@@ -615,7 +617,7 @@ def cellwise_vel_embedding(adata,
     ax[0].legend(loc=1)
 
     corr = A[idx, neighbors]+A_neg[idx, neighbors]
-    _plot_heatmap(ax[1], corr, X_embed[neighbors], 'Cosine Similarity', markersize=markersize)
+    _plot_heatmap(ax[1], corr, x_embed[neighbors], 'Cosine Similarity', markersize=markersize)
     ax[1].quiver(x_embed_1[[idx]], x_embed_2[[idx]], [v_embed[idx, 0]], [v_embed[idx, 1]], angles='xy')
     ax[1].plot(x_embed_1[[idx]], x_embed_2[[idx]], 'ks', markersize=10, label="Target Cell")
 
@@ -820,6 +822,7 @@ def _draw_networkx_edges(
 
     return arrow_collection
 
+
 def plot_spatial_graph(adata,
                        graph_key="spatial_graph",
                        basis="spatial",
@@ -833,6 +836,36 @@ def plot_spatial_graph(adata,
                        show_legend=False,
                        components=[0, 1],
                        save=None):
+    """Plot the spatial graph on the spatial embedding.
+    
+    Args:
+        adata (:class:`anndata.AnnData`):
+            AnnData object.
+        graph_key (str, optional):
+            Key for the spatial graph. Defaults to "spatial_graph".
+        basis (str, optional):
+            Basis for spatial embedding. Defaults to "spatial".
+        palette (str, optional):
+            Color palette for cell types. Defaults to None.
+        fig_height (int, optional):
+            Figure height. Defaults to 6.
+        node_size (int, optional):
+            Node size. Defaults to 30.
+        edge_width (float, optional):
+            Edge width. Defaults to 0.25.
+        arrowsize (int, optional):
+            Arrow size. Defaults to 3.
+        edge_color (str, optional):
+            Edge color. Defaults to 'gray'.
+        legend_fontsize (int, optional):
+            Legend fontsize. Defaults to 12.
+        show_legend (bool, optional):
+            Whether to show legend. Defaults to False.
+        components (list[int], optional):
+            Components to plot. Used in the case of more than 2 dimensions. Defaults to [0, 1].
+        save (str, optional):
+            Figure name for saving (including path). Defaults to None.
+    """
     T = adata.obsp[graph_key].A
 
     X_emb = adata.obsm[f"X_{basis}"][:, np.array(components)]
@@ -985,11 +1018,11 @@ def plot_phase_vel(adata,
     save_fig(fig, save)
 
 
-def plot_velocity(X_embed, vx, vy, real_aspect_ratio=False, save=None):
+def plot_velocity(x_embed, vx, vy, real_aspect_ratio=False, save=None):
     """2D quiver plot of velocity
 
     Args:
-        X_embed (:class:`numpy.ndarray`):
+        x_embed (:class:`numpy.ndarray`):
             2D coordinates for visualization, (N, 2)
         vx (:class:`numpy.ndarray`):
             Velocity in the x direction.
@@ -1001,8 +1034,8 @@ def plot_velocity(X_embed, vx, vy, real_aspect_ratio=False, save=None):
         save (str, optional):
             Figure name for saving (including path). Defaults to None.
     """
-    umap1, umap2 = X_embed[:, 0], X_embed[:, 1]
-    figsize = _set_figsize(X_embed, real_aspect_ratio)
+    umap1, umap2 = x_embed[:, 0], x_embed[:, 1]
+    figsize = _set_figsize(x_embed, real_aspect_ratio)
     fig, ax = plt.subplots(figsize=figsize)
     v = np.sqrt(vx**2+vy**2)
     vmax, vmin = np.quantile(v, 0.95), np.quantile(v, 0.05)
@@ -1025,6 +1058,30 @@ def plot_spatial_extrapolation(xy,
                                legend_fontsize=12,
                                figsize=(6, 4),
                                save=None):
+    """
+    Plots the spatial extrapolation of data points.
+
+    This function takes in the coordinates of original data points (xy), the extrapolated coordinates (xy_ext),
+    the labels of the cells (cell_labels), and optional parameters for customizing the plot.
+    It creates a scatter plot with the original data points shown in gray and the extrapolated data points
+    shown in different colors based on their cell labels.
+
+    Args:
+        xy (ndarray): The coordinates of the original data points. Shape (n, 2).
+        xy_ext (ndarray): The extrapolated coordinates. Shape (m, 2).
+        cell_labels (ndarray): The labels of the cells. Shape (m,).
+        colors (list, optional): The colors to use for different cell labels. If not provided, default colors will be used.
+        dot_size (int, optional): The size of the dots in the scatter plot. Default is 10.
+        legend_fontsize (int, optional): The font size of the legend. Default is 12.
+        figsize (tuple, optional): The size of the figure. Default is (6, 4).
+        save (str, optional): The file path to save the figure. If not provided, the figure will not be saved.
+
+    Returns:
+        None
+
+    Note:
+        This function is tentative and not stable. It may undergo changes in future versions.
+    """
     fig, ax = plt.subplots(figsize=figsize)
     ax.scatter(xy[:, 0],
                xy[:, 1],
@@ -1137,7 +1194,7 @@ def _set_colorbar(ax,
 
 def _plot_heatmap(ax,
                   vals,
-                  X_embed,
+                  x_embed,
                   colorbar_name,
                   colorbar_ticklabels=None,
                   markersize=20,
@@ -1160,9 +1217,9 @@ def _plot_heatmap(ax,
             vmin = round(vmin, 3)
         if vmax > 1e-3:
             vmax = round(vmax, 3)
-    if X_embed.shape[1] == 2:
-        ax.scatter(X_embed[:, 0],
-                   X_embed[:, 1],
+    if x_embed.shape[1] == 2:
+        ax.scatter(x_embed[:, 0],
+                   x_embed[:, 1],
                    s=markersize,
                    c=vals,
                    cmap=cmap,
@@ -1170,9 +1227,9 @@ def _plot_heatmap(ax,
                    vmax=vmax,
                    edgecolors='none')
     else:
-        ax.scatter(X_embed[:, 0],
-                   X_embed[:, 1],
-                   X_embed[:, 2],
+        ax.scatter(x_embed[:, 0],
+                   x_embed[:, 1],
+                   x_embed[:, 2],
                    s=markersize,
                    c=vals,
                    cmap=cmap,
@@ -1226,7 +1283,7 @@ def histeq(x, perc=0.95, Nbin=101):
 
 
 def plot_heatmap(vals,
-                 X_embed,
+                 x_embed,
                  colorbar_name="Latent Time",
                  colorbar_ticklabels=None,
                  markersize=20,
@@ -1242,7 +1299,7 @@ def plot_heatmap(vals,
     Args:
         vals (:class:`numpy.ndarray`):
             Values to be plotted as a heatmap, (N,).
-        X_embed (:class:`numpy.ndarray`):
+        x_embed (:class:`numpy.ndarray`):
             2D coordinates for visualization, (N,2).
         colorbar_name (str, optional):
             Name shown next to the colorbar. Defaults to "Latent Time".
@@ -1257,11 +1314,11 @@ def plot_heatmap(vals,
         save (str, optional):
             Figure name for saving (including path). Defaults to None.
     """
-    figsize = _set_figsize(X_embed, real_aspect_ratio)
+    figsize = _set_figsize(x_embed, real_aspect_ratio)
     fig, ax = plt.subplots(figsize=figsize)
     ax = _plot_heatmap(ax,
                        vals,
-                       X_embed,
+                       x_embed,
                        colorbar_name,
                        colorbar_ticklabels=colorbar_ticklabels,
                        markersize=markersize,
@@ -1429,7 +1486,7 @@ def plot_heat_density(vals,
 
 
 def plot_3d_heatmap(vals,
-                    X_embed,
+                    x_embed,
                     figsize=None,
                     angle=(15, 45),
                     colorbar_name="Latent Time",
@@ -1453,7 +1510,7 @@ def plot_3d_heatmap(vals,
     Args:
         vals (:class:`numpy.ndarray`):
             Values to be plotted as a heatmap, (N,).
-        X_embed (:class:`numpy.ndarray`):
+        x_embed (:class:`numpy.ndarray`):
             3D coordinates for visualization, (N,2).
         colorbar_name (str, optional):
             Name shown next to the colorbar. Defaults to "Latent Time".
@@ -1483,7 +1540,7 @@ def plot_3d_heatmap(vals,
             Figure name for saving (including path). Defaults to None.
     """
     if figsize is None:
-        figsize = _set_figsize(X_embed, real_aspect_ratio)
+        figsize = _set_figsize(x_embed, real_aspect_ratio)
     fig = plt.figure(figsize=figsize)
     ax = fig.add_subplot(projection='3d')
     ax.view_init(angle[0], angle[1])
@@ -1497,9 +1554,9 @@ def plot_3d_heatmap(vals,
             vmin = round(vmin, 3)
         if vmax > 1e-3:
             vmax = round(vmax, 3)
-    ax.scatter(X_embed[:, 0],
-               X_embed[:, 1],
-               X_embed[:, 2],
+    ax.scatter(x_embed[:, 0],
+               x_embed[:, 1],
+               x_embed[:, 2],
                s=markersize,
                c=vals,
                cmap=cmap,
@@ -1532,7 +1589,7 @@ def plot_3d_heatmap(vals,
     ax.set_zlabel(f'{embed} 3', fontsize=12)
     # cbar.set_height(cbar_height)
     if real_aspect_ratio:
-        ax.set_box_aspect((np.ptp(X_embed[:, 0]), np.ptp(X_embed[:, 1]), np.ptp(X_embed[:, 2])), zoom=zoom)
+        ax.set_box_aspect((np.ptp(x_embed[:, 0]), np.ptp(x_embed[:, 1]), np.ptp(x_embed[:, 2])), zoom=zoom)
     if axis_off:
         ax.axis("off")
     if save is not None:
@@ -1540,7 +1597,7 @@ def plot_3d_heatmap(vals,
 
 
 def plot_time(t_latent,
-              X_embed,
+              x_embed,
               cmap='plasma',
               legend_label='Latent Time',
               real_aspect_ratio=False,
@@ -1551,7 +1608,7 @@ def plot_time(t_latent,
     Args:
         t_latent (`numpy.ndarray`):
             Mean latent time, (N,)
-        X_embed (`numpy.ndarray`):
+        x_embed (`numpy.ndarray`):
             2D coordinates for visualization, (N,2)
         cmap (str, optional):
             Colormap name. Defaults to 'plasma'.
@@ -1564,11 +1621,11 @@ def plot_time(t_latent,
         save (str, optional):
             Figure name for saving (including path). Defaults to None.
     """
-    figsize = _set_figsize(X_embed, real_aspect_ratio)
+    figsize = _set_figsize(x_embed, real_aspect_ratio)
     fig, ax = plt.subplots(figsize=figsize)
     _plot_heatmap(ax,
                   t_latent,
-                  X_embed,
+                  x_embed,
                   legend_label,
                   ['early', 'late'],
                   cmap=cmap,
@@ -1578,7 +1635,7 @@ def plot_time(t_latent,
 
 
 def plot_time_var(std_t,
-                  X_embed,
+                  x_embed,
                   t=None,
                   hist_eq=True,
                   cmap='viridis',
@@ -1590,7 +1647,7 @@ def plot_time_var(std_t,
     Args:
         std_t (:class:`numpy.ndarray`):
             Standard deviation of latent time, (N,)
-        X_embed (:class:`numpy.ndarray`):
+        x_embed (:class:`numpy.ndarray`):
             2D coordinates for visualization, (N,2)
         t (:class:`numpy.ndarray`, optional):
             Mean latent time. Defaults to None.
@@ -1607,11 +1664,11 @@ def plot_time_var(std_t,
     if hist_eq:
         diff_entropy = histeq(diff_entropy, Nbin=len(diff_entropy)//50)
 
-    figsize = _set_figsize(X_embed, real_aspect_ratio)
+    figsize = _set_figsize(x_embed, real_aspect_ratio)
     fig, ax = plt.subplots(figsize=figsize)
     ax = _plot_heatmap(ax,
                        diff_entropy,
-                       X_embed,
+                       x_embed,
                        "Time Variance",
                        ['low', 'high'],
                        cmap=cmap,
@@ -1621,7 +1678,7 @@ def plot_time_var(std_t,
 
 
 def plot_state_var(std_z,
-                   X_embed,
+                   x_embed,
                    z=None,
                    hist_eq=True,
                    cmap='viridis',
@@ -1633,7 +1690,7 @@ def plot_state_var(std_z,
     Args:
         std_z (:class:`numpy.ndarray`):
             Standard deviation of cell state, assuming diagonal covariance, (N, dim z)
-        X_embed (:class:`numpy.ndarray`):
+        x_embed (:class:`numpy.ndarray`):
             2D coordinates for visualization, (N,2)
         z (:class:`numpy.ndarray`, optional):
             Mean cell state, (N, dim z). Defaults to None.
@@ -1649,11 +1706,11 @@ def plot_state_var(std_z,
     if hist_eq:
         diff_entropy = histeq(diff_entropy, Nbin=len(diff_entropy)//50)
 
-    figsize = _set_figsize(X_embed, real_aspect_ratio)
+    figsize = _set_figsize(x_embed, real_aspect_ratio)
     fig, ax = plt.subplots(figsize=figsize)
     ax = _plot_heatmap(ax,
                        diff_entropy,
-                       X_embed,
+                       x_embed,
                        "State Uncertainty",
                        ['low', 'high'],
                        cmap=cmap,
@@ -3278,7 +3335,7 @@ def plot_rate_grid(adata,
     return
 
 
-def plot_trajectory_3d(X_embed,
+def plot_trajectory_3d(x_embed,
                        t,
                        cell_labels,
                        plot_arrow=False,
@@ -3298,7 +3355,7 @@ def plot_trajectory_3d(X_embed,
     z axis is the cell time. Arrows follow the direction of time to nearby points.
 
     Args:
-        X_embed (:class:`numpy.ndarray`):
+        x_embed (:class:`numpy.ndarray`):
             2D embedding for visualization
         t (:class:`numpy.ndarray`):
             Cell time.
@@ -3332,9 +3389,9 @@ def plot_trajectory_3d(X_embed,
 
     """
     t_clip = np.clip(t, np.quantile(t, 0.01), np.quantile(t, 0.99))
-    range_z = np.max(X_embed.max(0) - X_embed.min(0))
+    range_z = np.max(x_embed.max(0) - x_embed.min(0))
     w = range_z/(t_clip.max()-t_clip.min())
-    x_3d = np.concatenate((X_embed, (t_clip - t_clip.min()).reshape(-1, 1)*w), 1)
+    x_3d = np.concatenate((x_embed, (t_clip - t_clip.min()).reshape(-1, 1)*w), 1)
 
     fig = plt.figure(figsize=figsize)
     ax = fig.add_subplot(projection='3d')
@@ -3354,7 +3411,7 @@ def plot_trajectory_3d(X_embed,
                    edgecolor='none')
     if plot_arrow:
         # Used for filtering target grid points
-        knn_model_2d = pynndescent.NNDescent(X_embed, n_neighbors=k)
+        knn_model_2d = pynndescent.NNDescent(x_embed, n_neighbors=k)
 
         # Compute the time on a grid
         knn_model = pynndescent.NNDescent(x_3d, n_neighbors=k+20)
@@ -3422,7 +3479,7 @@ def plot_trajectory_3d(X_embed,
         vy_grid[mask] = vy_grid_filter
         vz_grid[mask] = vz_grid_filter
 
-        range_x = np.mean(X_embed.max(0) - X_embed.min(0))
+        range_x = np.mean(x_embed.max(0) - x_embed.min(0))
         ax.quiver(xgrid.reshape(n_grid, n_grid, n_time),
                   ygrid.reshape(n_grid, n_grid, n_time),
                   zgrid.reshape(n_grid, n_grid, n_time),
@@ -3540,11 +3597,6 @@ def plot_trajectory_4d(x_spatial,
     xyz_grid, v_grid_sm = None, None
     if plot_arrow:
         # Compute the velocity on a grid
-        #knn_model = pynndescent.NNDescent(x_spatial, n_neighbors=k+20)
-        #ind, dist = knn_model.neighbor_graph
-        #dist_thred = dist.mean() * scale
-        #neighbors_grid, dist_grid = knn_model.query(xyz_grid, k=k)
-        #mask = np.quantile(dist_grid, 0.5, 1) <= dist_thred
         bt = BallTree(x_spatial)
 
         x = np.linspace(x_spatial[:, 0].min(), x_spatial[:, 0].max(), n_grid)

@@ -1579,7 +1579,6 @@ def _encode_type(cell_types_raw):
     # Use integer to encode the cell types
     # Each cell type has one unique integer label.
     #######################################################################
-
     # Map cell types to integers
     label_dic = {}
     label_dic_rev = {}
