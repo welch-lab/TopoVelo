@@ -25,14 +25,48 @@ CATEGORICAL = ["#4f8c9d", "#fa756b", "#20b465", "#ce2bbc", "#51f310", "#660081",
 
 markers = ["o", "x", "s", "v", "+", "d", "1", "*", "^", "p", "h", "8", "1", "2", "|"]
 # change dpi via the function set_dpi()
-DPI = 'figure'
+DPI = 300
+MAX_WIDTH = 18 / 2.54
+MAX_HEIGHT = 21 / 2.54
+WIDTH = 6 / 2.54
+HEIGHT = 4 / 2.54
+FONTSIZE = 7
+LABEL_FONTSIZE = 7
+LEGEND_FONTSIZE = 5
+TICK_FONTSIZE = 5
+COLORBAR_FONTSIZE = 7
+COLORBAR_TICK_FONTSIZE = 5
+TITLE_FONTSIZE = 7
+MARKERSIZE = 3
+LINEWIDTH = 1.0
+MARKERSCALE = 1.0
 
 
 def set_dpi(dpi):
     global DPI
     DPI = dpi
 
-def _set_figsize(x_embed, real_aspect_ratio=False, width=7.5, height=6, fix='width', margin=0.0):
+
+def set_figure_size(width, height):
+    global WIDTH, HEIGHT
+    WIDTH = width
+    HEIGHT = height
+
+
+def set_fontsize(fontsize, legend_fontsize=None, tick_fontsize=None, colorbar_fontsize=None, title_fontsize=None):
+    global FONTSIZE, LEGEND_FONTSIZE, TICK_FONTSIZE, COLORBAR_FONTSIZE, TITLE_FONTSIZE
+    FONTSIZE = fontsize
+    if legend_fontsize is not None:
+        LEGEND_FONTSIZE = legend_fontsize
+    if tick_fontsize is not None:
+        TICK_FONTSIZE = tick_fontsize
+    if colorbar_fontsize is not None:
+        COLORBAR_FONTSIZE = colorbar_fontsize
+    if title_fontsize is not None:
+        TITLE_FONTSIZE = title_fontsize
+
+
+def _set_figsize(x_embed, real_aspect_ratio=False, width=WIDTH, height=HEIGHT, fix='width', margin=0.0):
     figsize = (width, height)
     if real_aspect_ratio:
         aspect_ratio = (x_embed[:, 1].max() - x_embed[:, 1].min()) / (x_embed[:, 0].max() - x_embed[:, 0].min())
@@ -43,8 +77,23 @@ def _set_figsize(x_embed, real_aspect_ratio=False, width=7.5, height=6, fix='wid
     return figsize
 
 
-def compute_figsize(x_embed, width=7.5, height=6, fix='width', margin=0.0):
+def compute_figsize(x_embed, real_aspect_ratio=False, width=WIDTH, height=HEIGHT, fix='width', margin=0.0):
     """Compute the figure size based on the aspect ratio of the data embedding.
+
+    Args:
+        x_embed (:class:`numpy.ndarray`):
+            2D embedding for visualization, (N,2)
+        real_aspect_ratio (bool, optional):
+            Whether to set the aspect ratio of the plot to be the same as the data.
+            Defaults to False.
+        width (float, optional):
+            Figure width. Defaults to WIDTH.
+        height (float, optional):
+            Figure height. Defaults to HEIGHT.
+        fix (str, optional):
+            Whether to fix the width or height of the figure. Defaults to 'width'.
+        margin (float, optional):
+            Margin of the figure. Defaults to 0.0.
     """
     return _set_figsize(x_embed, True, width, height, fix, margin)
 
@@ -85,7 +134,10 @@ def get_colors(n, color_map=None):
     return colors
 
 
-def save_fig(fig, save, bbox_extra_artists=None):
+def save_fig(fig,
+             save,
+             bbox_extra_artists=None,
+             disable_display=False):
     """Save a figure
 
     Args:
@@ -104,10 +156,13 @@ def save_fig(fig, save, bbox_extra_artists=None):
                         dpi=DPI,
                         bbox_extra_artists=bbox_extra_artists,
                         format=save[idx+1:],
-                        bbox_inches='tight')
+                        bbox_inches='tight',
+                        transparent=True)
         except FileNotFoundError:
             print("Saving failed. File path doesn't exist!")
-        # plt.close(fig)
+
+        if disable_display:
+            plt.close(fig)
 
 
 ############################################################
@@ -827,13 +882,16 @@ def plot_spatial_graph(adata,
                        graph_key="spatial_graph",
                        basis="spatial",
                        palette=None,
-                       fig_height=6,
+                       width=WIDTH,
+                       height=HEIGHT,
+                       fix='width',
                        node_size=30,
                        edge_width=0.25,
                        arrowsize=3,
                        edge_color='gray',
-                       legend_fontsize=12,
+                       legend_fontsize=LEGEND_FONTSIZE,
                        show_legend=False,
+                       real_aspect_ratio=True,
                        components=[0, 1],
                        save=None):
     """Plot the spatial graph on the spatial embedding.
@@ -847,8 +905,12 @@ def plot_spatial_graph(adata,
             Basis for spatial embedding. Defaults to "spatial".
         palette (str, optional):
             Color palette for cell types. Defaults to None.
-        fig_height (int, optional):
-            Figure height. Defaults to 6.
+        width (int, optional):
+            Figure width. Defaults to WIDTH.
+        height (int, optional):
+            Figure height. Defaults to HEIGHT.
+        fix (str, optional):
+            Fix one of the dimensions, either 'width' or 'height'. Defaults to 'width'.
         node_size (int, optional):
             Node size. Defaults to 30.
         edge_width (float, optional):
@@ -858,7 +920,7 @@ def plot_spatial_graph(adata,
         edge_color (str, optional):
             Edge color. Defaults to 'gray'.
         legend_fontsize (int, optional):
-            Legend fontsize. Defaults to 12.
+            Legend fontsize. Defaults to LEGEND_FONTSIZE.
         show_legend (bool, optional):
             Whether to show legend. Defaults to False.
         components (list[int], optional):
@@ -868,16 +930,16 @@ def plot_spatial_graph(adata,
     """
     T = adata.obsp[graph_key].A
 
-    X_emb = adata.obsm[f"X_{basis}"][:, np.array(components)]
+    x_emb = adata.obsm[f"X_{basis}"][:, np.array(components)]
     
-    xmin, xmax = X_emb[:, 0].min(), X_emb[:, 0].max()
-    ymin, ymax = X_emb[:, 1].min(), X_emb[:, 1].max()
-    ratio = (ymax - ymin)/(xmax - xmin)
-    fig, ax = plt.subplots(figsize=(fig_height/ratio, fig_height))
+    xmin, xmax = x_emb[:, 0].min(), x_emb[:, 0].max()
+    ymin, ymax = x_emb[:, 1].min(), x_emb[:, 1].max()
+    figsize = compute_figsize(x_emb, real_aspect_ratio, width, height)
+    fig, ax = plt.subplots(figsize=figsize)
     
     edge_collection = _draw_networkx_edges(
         Graph(T),
-        X_emb,
+        x_emb,
         node_size=node_size,
         width=edge_width,
         edge_color=edge_color,
@@ -890,7 +952,7 @@ def plot_spatial_graph(adata,
     
     # scv.pl.scatter(adata, basis=basis, title="", legend_loc='right margin', size=node_size, ax=ax)
     ax = plot_cluster_axis(ax,
-                           X_emb,
+                           x_emb,
                            adata.obs['clusters'].to_numpy(),
                            palette)
 
@@ -972,6 +1034,8 @@ def plot_phase_vel(adata,
                    grid_size=(30, 30),
                    percentile=25,
                    markersize=20,
+                   width=WIDTH,
+                   height=HEIGHT,
                    save=None):
     """Plots RNA velocity stream on a phase portrait.
 
@@ -991,10 +1055,16 @@ def plot_phase_vel(adata,
             Defaults to (30, 30).
         percentile (int, optional):
             Hyperparameter for grid point picking. Defaults to 25.
+        markersize (int, optional):
+            Marker size. Defaults to 20.
+        width (int, optional):
+            Figure width. Defaults to WIDTH.
+        height (int, optional):
+            Figure height. Defaults to HEIGHT.
         save (str, optional):
             Figure name for saving (including path). Defaults to None.
     """
-    fig, ax = plt.subplots(figsize=(12, 8))
+    fig, ax = plt.subplots(figsize=(width, height))
     gidx = np.where(adata.var_names == gene)[0][0]
     scaling = adata.var[f'{key}_scaling'].iloc[gidx]
     t = adata.obs[f'{key}_time'].to_numpy()
@@ -1018,7 +1088,14 @@ def plot_phase_vel(adata,
     save_fig(fig, save)
 
 
-def plot_velocity(x_embed, vx, vy, real_aspect_ratio=False, save=None):
+def plot_velocity(x_embed,
+                  vx,
+                  vy,
+                  width=WIDTH,
+                  height=HEIGHT,
+                  fix='width',
+                  real_aspect_ratio=False,
+                  save=None):
     """2D quiver plot of velocity
 
     Args:
@@ -1028,6 +1105,12 @@ def plot_velocity(x_embed, vx, vy, real_aspect_ratio=False, save=None):
             Velocity in the x direction.
         vy (:class:`numpy.ndarray`):
             Velocity in the y direction.
+        width (int, optional):
+            Figure width. Defaults to WIDTH.
+        height (int, optional):
+            Figure height. Defaults to HEIGHT.
+        fix (str, optional):
+            Whether to fix the width or height of the figure. Defaults to 'width'.
         real_aspect_ratio (bool, optional):
             Whether to set the aspect ratio of the plot to be the same as the data.
             Defaults to False.
@@ -1035,7 +1118,7 @@ def plot_velocity(x_embed, vx, vy, real_aspect_ratio=False, save=None):
             Figure name for saving (including path). Defaults to None.
     """
     umap1, umap2 = x_embed[:, 0], x_embed[:, 1]
-    figsize = _set_figsize(x_embed, real_aspect_ratio)
+    figsize = _set_figsize(x_embed, real_aspect_ratio, width, height, fix=fix)
     fig, ax = plt.subplots(figsize=figsize)
     v = np.sqrt(vx**2+vy**2)
     vmax, vmin = np.quantile(v, 0.95), np.quantile(v, 0.05)
@@ -1054,9 +1137,9 @@ def plot_spatial_extrapolation(xy,
                                xy_ext,
                                cell_labels,
                                colors=None,
-                               dot_size=10,
-                               legend_fontsize=12,
-                               figsize=(6, 4),
+                               markersize=MARKERSIZE,
+                               legend_fontsize=LEGEND_FONTSIZE,
+                               figsize=(WIDTH, HEIGHT),
                                save=None):
     """
     Plots the spatial extrapolation of data points.
@@ -1071,9 +1154,9 @@ def plot_spatial_extrapolation(xy,
         xy_ext (ndarray): The extrapolated coordinates. Shape (m, 2).
         cell_labels (ndarray): The labels of the cells. Shape (m,).
         colors (list, optional): The colors to use for different cell labels. If not provided, default colors will be used.
-        dot_size (int, optional): The size of the dots in the scatter plot. Default is 10.
-        legend_fontsize (int, optional): The font size of the legend. Default is 12.
-        figsize (tuple, optional): The size of the figure. Default is (6, 4).
+        markersize (int, optional): The size of the dots in the scatter plot. Default is MARKERSIZE.
+        legend_fontsize (int, optional): The font size of the legend. Default is LEGEND_FONTSIZE.
+        figsize (tuple, optional): The size of the figure. Default is (WIDTH, HEIGHT).
         save (str, optional): The file path to save the figure. If not provided, the figure will not be saved.
 
     Returns:
@@ -1086,7 +1169,7 @@ def plot_spatial_extrapolation(xy,
     ax.scatter(xy[:, 0],
                xy[:, 1],
                color='gray',
-               s=dot_size,
+               s=markersize,
                alpha=0.1,
                edgecolors='none')
     cell_types = np.unique(cell_labels)
@@ -1096,7 +1179,7 @@ def plot_spatial_extrapolation(xy,
         ax.scatter(xy_ext[cell_labels == type_, 0],
                    xy_ext[cell_labels == type_, 1],
                    label=type_,
-                   s=dot_size,
+                   s=markersize,
                    color=colors[i],
                    edgecolors=None)
     
@@ -1115,10 +1198,10 @@ def plot_spatial_extrapolation(xy,
 def plot_legend(adata,
                 cluster_key='clusters',
                 ncol=1,
-                markerscale=2.0,
-                fontsize=20,
+                markerscale=MARKERSCALE,
+                fontsize=LEGEND_FONTSIZE,
                 palette=None,
-                save='figures/legend.png'):
+                save='figures/legend.pdf'):
     """Plots figure legend containing all cell types.
 
     Args:
@@ -1129,9 +1212,9 @@ def plot_legend(adata,
         ncol (int, optional):
             Number of columns of the legend. Defaults to 1.
         markerscale (float, optional):
-            Marker scale. Defaults to 2.0.
+            Marker scale. Defaults to MARKERSCALE.
         fontsize (int, optional):
-            Font size. Defaults to 20.
+            Font size. Defaults to LEGEND_FONTSIZE.
         palette (list, optional):
             List of colors for cell types. Defaults to None.
         save (str, optional):
@@ -1165,30 +1248,31 @@ def _set_colorbar(ax,
                   cmap,
                   colorbar_name,
                   colorbar_ticklabels=None,
-                  colorbar_fontsize=24,
+                  colorbar_fontsize=7,
                   colorbar_ticks=None,
                   colorbar_pos=[1.04, 0.2, 0.05, 0.6],
-                  colorbar_tick_fontsize=15):
+                  colorbar_tick_fontsize=5):
     norm = matplotlib.colors.Normalize(vmin=vmin, vmax=vmax)
     sm = matplotlib.cm.ScalarMappable(norm=norm, cmap=cmap)
     cax = ax.inset_axes(colorbar_pos)
     cbar = plt.colorbar(sm, ax=ax, cax=cax)
-    cbar.ax.get_yaxis().labelpad = 15
+    cbar.ax.get_yaxis().labelpad = 5
     cbar.ax.set_ylabel(colorbar_name, rotation=270, fontsize=colorbar_fontsize)
 
     if colorbar_ticklabels is not None:
         if len(colorbar_ticklabels) == 2:
-            cbar.ax.get_yaxis().labelpad = 5
+            cbar.ax.get_yaxis().labelpad = 3
         cbar.ax.set_yticklabels(colorbar_ticklabels, fontsize=colorbar_tick_fontsize)
         if colorbar_ticks is None:
-            cbar.set_ticks(np.linspace(vmin, vmax, len(colorbar_ticklabels)))
+            cbar.set_ticks(np.linspace(vmin, vmax, len(colorbar_ticklabels)), fontsize=colorbar_tick_fontsize)
         else:
-            cbar.set_ticks(colorbar_ticks)
+            cbar.set_ticks(colorbar_ticks, fontsize=colorbar_tick_fontsize)
     else:
         if colorbar_ticks is None:
-            cbar.set_ticks([vmin, vmax])
+            cbar.set_ticks([vmin, vmax], fontsize=colorbar_tick_fontsize)
         else:
-            cbar.set_ticks(colorbar_ticks)
+            cbar.set_ticks(colorbar_ticks, fontsize=colorbar_tick_fontsize)
+        cbar.ax.tick_params(labelsize=colorbar_tick_fontsize)
     return ax
 
 
@@ -1197,12 +1281,12 @@ def _plot_heatmap(ax,
                   x_embed,
                   colorbar_name,
                   colorbar_ticklabels=None,
-                  markersize=20,
+                  markersize=MARKERSIZE,
                   show_colorbar=True,
-                  colorbar_fontsize=24,
+                  colorbar_fontsize=COLORBAR_FONTSIZE,
                   colorbar_limits=None,
                   colorbar_ticks=None,
-                  colorbar_tick_fontsize=15,
+                  colorbar_tick_fontsize=COLORBAR_TICK_FONTSIZE,
                   colorbar_pos=[1.04, 0.2, 0.05, 0.6],
                   cmap='plasma',
                   axis_off=False):
@@ -1241,12 +1325,12 @@ def _plot_heatmap(ax,
         sm = matplotlib.cm.ScalarMappable(norm=norm, cmap=cmap)
         cax = ax.inset_axes(colorbar_pos)
         cbar = plt.colorbar(sm, ax=ax, cax=cax)
-        cbar.ax.get_yaxis().labelpad = 15
+        cbar.ax.get_yaxis().labelpad = 5
         cbar.ax.set_ylabel(colorbar_name, rotation=270, fontsize=colorbar_fontsize)
 
         if colorbar_ticklabels is not None:
             if len(colorbar_ticklabels) == 2:
-                cbar.ax.get_yaxis().labelpad = 5
+                cbar.ax.get_yaxis().labelpad = 3
             cbar.ax.set_yticklabels(colorbar_ticklabels, fontsize=colorbar_tick_fontsize)
             if colorbar_ticks is None:
                 cbar.set_ticks(np.linspace(vmin, vmax, len(colorbar_ticklabels)))
@@ -1284,14 +1368,17 @@ def histeq(x, perc=0.95, Nbin=101):
 
 def plot_heatmap(vals,
                  x_embed,
-                 colorbar_name="Latent Time",
+                 width=WIDTH,
+                 height=HEIGHT,
+                 fix='width',
+                 colorbar_name="",
                  colorbar_ticklabels=None,
-                 markersize=20,
-                 colorbar_fontsize=24,
+                 markersize=MARKERSIZE,
+                 colorbar_fontsize=COLORBAR_FONTSIZE,
                  colorbar_limits=None,
                  colorbar_ticks=None,
-                 real_aspect_ratio=False,
-                 colorbar_tick_fontsize=15,
+                 colorbar_tick_fontsize=COLORBAR_TICK_FONTSIZE,
+                 real_aspect_ratio=True,
                  cmap='viridis',
                  save=None):
     """Plots a quantity as a heatmap.
@@ -1306,7 +1393,15 @@ def plot_heatmap(vals,
         colorbar_ticks (str, optional):
             Name shown on the colorbar axis. Defaults to None.
         markersize (int, optional):
-            Marker size. Defaults to 20.
+            Marker size. Defaults to MARKERSIZE.
+        colorbar_fontsize (int, optional):
+            Font size for the colorbar label. Defaults to COLORBAR_FONTSIZE.
+        colorbar_limits (list, optional):
+            Colorbar limits. Defaults to None.
+        colorbar_ticklabels (list, optional):
+            Tick labels for the colorbar. Defaults to None.
+        colorbar_tick_fontsize (int, optional):
+            Font size for the colorbar ticks. Defaults to COLORBAR_TICK_FONTSIZE.
         real_aspect_ratio (bool, optional):
             Whether to use real aspect ratio for the plot. Defaults to False.
         cmap (str, optional):
@@ -1314,7 +1409,7 @@ def plot_heatmap(vals,
         save (str, optional):
             Figure name for saving (including path). Defaults to None.
     """
-    figsize = _set_figsize(x_embed, real_aspect_ratio)
+    figsize = _set_figsize(x_embed, real_aspect_ratio, width, height, fix)
     fig, ax = plt.subplots(figsize=figsize)
     ax = _plot_heatmap(ax,
                        vals,
@@ -1332,7 +1427,8 @@ def plot_heatmap(vals,
     save_fig(fig, save)
 
 
-def find_mode(arr):
+def _find_mode(arr):
+    """Find the mode of an array."""
     if len(arr) == 0:
         return None
     vals = np.unique(arr)
@@ -1341,6 +1437,7 @@ def find_mode(arr):
 
 
 def _sample_from_bins(x_embed, sample_per_bin, bin_size):
+    """Sample from bins."""
     x_min, x_max = np.min(x_embed, 0), np.max(x_embed, 0)
     xy_grid = np.meshgrid(np.linspace(x_min[0], x_max[0], int((x_max[0]-x_min[0])/bin_size)+1),
                           np.linspace(x_min[1], x_max[1], int((x_max[1]-x_min[1])/bin_size)+1))
@@ -1361,21 +1458,25 @@ def plot_heat_density(vals,
                       x_embed,
                       radius,
                       cell_labels,
-                      real_aspect_ratio=False,
+                      real_aspect_ratio=True,
                       n_grid=100,
                       scale=1.5,
                       bw_adjust=1.0,
                       sample_per_bin=None,
-                      markersize=5,
-                      legend_fontsize=12,
-                      markerscale=2.0,
+                      width=WIDTH,
+                      height=HEIGHT,
+                      fix='width',
+                      markersize=MARKERSIZE,
+                      legend_fontsize=LEGEND_FONTSIZE,
+                      markerscale=MARKERSCALE,
+                      show_colorbar=True,
                       colorbar_name='',
-                      colorbar_fontsize=15,
+                      colorbar_fontsize=COLORBAR_FONTSIZE,
                       colorbar_limits=None,
                       colorbar_ticklabels=None,
                       colorbar_ticks=None,
                       colorbar_pos=[1.04, 0.2, 0.05, 0.6],
-                      bbox_to_anchor=(1.0, 1.0),
+                      bbox_to_anchor=(-0.05, 1.0),
                       ncols=1,
                       axis_off=True,
                       cmap='Reds',
@@ -1398,6 +1499,46 @@ def plot_heat_density(vals,
             Number of grid points. Defaults to 100.
         scale (float, optional):
             Scale factor for distance threshold. Defaults to 1.5.
+        bw_adjust (float, optional):
+            Bandwidth adjustment for KDE. Defaults to 1.0.
+        sample_per_bin (int, optional):
+            Number of samples per bin. Defaults to None.
+        width (int, optional):
+            Figure width. Defaults to WIDTH.
+        height (int, optional):
+            Figure height. Defaults to HEIGHT.
+        fix (str, optional):
+            Whether to fix the width or height of the figure. Defaults to 'width'.
+        markersize (int, optional):
+            Marker size. Defaults to MARKERSIZE.
+        legend_fontsize (int, optional):
+            Font size for the legend. Defaults to LEGEND_FONTSIZE.
+        markerscale (float, optional):
+            Marker scale. Defaults to MARKERSCALE.
+        show_colorbar (bool, optional):
+            Whether to show the colorbar. Defaults to True.
+        colorbar_name (str, optional):
+            Name shown next to the colorbar. Defaults to ''.
+        colorbar_fontsize (int, optional):
+            Font size for the colorbar label. Defaults to COLORBAR_FONTSIZE.
+        colorbar_limits (list, optional):
+            Colorbar limits. Defaults to None.
+        colorbar_ticklabels (list, optional):
+            Tick labels for the colorbar. Defaults to None.
+        colorbar_ticks (list, optional):
+            Tick positions for the colorbar. Defaults to None.
+        colorbar_pos (list, optional):
+            Position of the colorbar. Defaults to [1.04, 0.2, 0.05, 0.6].
+        bbox_to_anchor (tuple, optional):
+            Bounding box for the legend. Defaults to (-0.05, 1.0).
+        ncols (int, optional):
+            Number of columns for the legend. Defaults to 1.
+        axis_off (bool, optional):
+            Whether to turn off the axis. Defaults to True.
+        cmap (str, optional):
+            Colormap name. Defaults to 'Reds'.
+        palette (list, optional):
+            List of colors for cell types. Defaults to None.
         save (str, optional):
             Figure name for saving (including path). Defaults to None.
     """
@@ -1422,9 +1563,9 @@ def plot_heat_density(vals,
     mask = mid_dist_grid <= dist_thred
 
     vals_grid = np.array([np.mean(vals[nbs]) for nbs in spatial_nbs])
-    labels_grid = np.array([find_mode(cell_labels[nbs]) for nbs in spatial_nbs])
+    labels_grid = np.array([_find_mode(cell_labels[nbs]) for nbs in spatial_nbs])
     
-    figsize = _set_figsize(x_embed, real_aspect_ratio)
+    figsize = _set_figsize(x_embed, real_aspect_ratio, width, height, fix)
     fig, ax = plt.subplots(figsize=figsize)
     
     # Heatmap
@@ -1439,19 +1580,20 @@ def plot_heat_density(vals,
             ax=ax)
     
     # color bar
-    if isinstance(colorbar_limits, (list, tuple)):
-        vmin, vmax = colorbar_limits[0], colorbar_limits[1]
-    else:
-        vmin, vmax = round(vals_grid[mask].min(), 2), round(vals_grid[mask].max(), 2)
-    ax = _set_colorbar(ax,
-                       vmin,
-                       vmax,
-                       cmap,
-                       colorbar_name,
-                       colorbar_ticklabels=colorbar_ticklabels,
-                       colorbar_fontsize=colorbar_fontsize,
-                       colorbar_ticks=colorbar_ticks,
-                       colorbar_pos=colorbar_pos)
+    if show_colorbar:
+        if isinstance(colorbar_limits, (list, tuple)):
+            vmin, vmax = colorbar_limits[0], colorbar_limits[1]
+        else:
+            vmin, vmax = round(vals_grid[mask].min(), 2), round(vals_grid[mask].max(), 2)
+        ax = _set_colorbar(ax,
+                           vmin,
+                           vmax,
+                           cmap,
+                           colorbar_name,
+                           colorbar_ticklabels=colorbar_ticklabels,
+                           colorbar_fontsize=colorbar_fontsize,
+                           colorbar_ticks=colorbar_ticks,
+                           colorbar_pos=colorbar_pos)
 
     cell_types = np.unique(cell_labels)
     palette = get_colors(len(cell_types)) if palette is None else palette
@@ -1478,8 +1620,7 @@ def plot_heat_density(vals,
                     fontsize=legend_fontsize,
                     markerscale=markerscale,
                     bbox_to_anchor=bbox_to_anchor,
-                    loc='upper left')
-    plt.tight_layout()
+                    loc='upper center')
     if axis_off:
         ax.axis('off')
     save_fig(fig, save, bbox_extra_artists=(lgd,))
@@ -1487,21 +1628,25 @@ def plot_heat_density(vals,
 
 def plot_3d_heatmap(vals,
                     x_embed,
-                    figsize=None,
+                    figsize=(6, 4),
                     angle=(15, 45),
-                    colorbar_name="Latent Time",
+                    colorbar_name="",
                     colorbar_ticklabels=None,
-                    markersize=20,
-                    colorbar_fontsize=24,
+                    markersize=MARKERSIZE,
+                    colorbar_fontsize=COLORBAR_FONTSIZE,
                     colorbar_limits=None,
                     colorbar_ticks=None,
-                    colorbar_tick_fontsize=15,
+                    colorbar_tick_fontsize=COLORBAR_TICK_FONTSIZE,
                     real_aspect_ratio=False,
                     cmap='viridis',
+                    show_background=False,
+                    marker_amp=3.0,
                     show_colorbar=True,
                     colorbar_pos=[1.04, 0.2, 0.05, 0.6],
-                    cbar_height=0.8,
+                    tick_fontsize=TICK_FONTSIZE,
                     axis_off=False,
+                    label_off=False,
+                    ticks_off=False,
                     zoom=1.0,
                     embed='Spatial',
                     save=None):
@@ -1512,35 +1657,49 @@ def plot_3d_heatmap(vals,
             Values to be plotted as a heatmap, (N,).
         x_embed (:class:`numpy.ndarray`):
             3D coordinates for visualization, (N,2).
+        figsize (tuple, optional):
+            Figure size. Defaults to (6, 4).
+        angle (tuple, optional):
+            Angle for viewing the plot. Defaults to (15, 45).
         colorbar_name (str, optional):
             Name shown next to the colorbar. Defaults to "Latent Time".
         colorbar_ticklabels (list, optional):
             Tick labels for the colorbar. Defaults to None.
         markersize (int, optional):
-            Marker size. Defaults to 20.
+            Marker size. Defaults to MARKERSIZE.
         colorbar_fontsize (int, optional):
-            Font size for the colorbar. Defaults to 24.
+            Font size for the colorbar. Defaults to COLORBAR_FONTSIZE.
+        colorbar_limits (list, optional):
+            Colorbar limits. Defaults to None.
         colorbar_ticks (str, optional):
             Name shown on the colorbar axis. Defaults to None.
         colorbar_tick_fontsize (int, optional):
-            Font size for the colorbar ticks. Defaults to 15.
+            Font size for the colorbar ticks. Defaults to COLORBAR_TICK_FONTSIZE.
         real_aspect_ratio (bool, optional):
             Whether to use real aspect ratio for the plot. Defaults to False.
         cmap (str, optional):
             Colormap name. Defaults to 'viridis'.
+        show_background (bool, optional):
+            Whether to show the background. Defaults to False.
+        marker_amp (float, optional):
+            Amplify the marker size for non-background dots. Defaults to 3.0.
         show_colorbar (bool, optional):
             Whether to show the colorbar. Defaults to True.
         colorbar_pos (list, optional): 
             Position of the colorbar. Defaults to [1.04, 0.2, 0.05, 0.6].
         axis_off (bool, optional):
             Whether to turn off the axis. Defaults to False.
+        label_off (bool, optional):
+            Whether to turn off the axis labels. Defaults to False.
+        ticks_off (bool, optional):
+            Whether to turn off the axis ticks. Defaults to False.
         zoom (float, optional):
             Zoom factor for the plot. Defaults to 1.0.
+        embed (str, optional):
+            Embedding name. Defaults to 'Spatial'.
         save (str, optional):
             Figure name for saving (including path). Defaults to None.
     """
-    if figsize is None:
-        figsize = _set_figsize(x_embed, real_aspect_ratio)
     fig = plt.figure(figsize=figsize)
     ax = fig.add_subplot(projection='3d')
     ax.view_init(angle[0], angle[1])
@@ -1554,54 +1713,94 @@ def plot_3d_heatmap(vals,
             vmin = round(vmin, 3)
         if vmax > 1e-3:
             vmax = round(vmax, 3)
-    ax.scatter(x_embed[:, 0],
-               x_embed[:, 1],
-               x_embed[:, 2],
-               s=markersize,
-               c=vals,
-               cmap=cmap,
-               vmin=vmin,
-               vmax=vmax,
-               edgecolors='none')
+    # emphasize the color of high values
+    mask = vals > np.quantile(vals, 0.05)
+    if show_background:
+        ax.scatter(x_embed[~mask, 0],
+                   x_embed[~mask, 1],
+                   x_embed[~mask, 2],
+                   s=markersize,
+                   alpha=0.1,
+                   color='gray',
+                   vmin=vmin,
+                   vmax=vmax,
+                   edgecolors='none')
+        ax.scatter(x_embed[mask, 0],
+                   x_embed[mask, 1],
+                   x_embed[mask, 2],
+                   s=markersize * marker_amp,
+                   c=vals[mask],
+                   cmap=cmap,
+                   vmin=vmin,
+                   vmax=vmax,
+                   edgecolors='none')
+    else:
+        ax.scatter(x_embed[:, 0],
+                   x_embed[:, 1],
+                   x_embed[:, 2],
+                   s=markersize,
+                   c=vals,
+                   cmap=cmap,
+                   vmin=vmin,
+                   vmax=vmax,
+                   edgecolors='none')
     if show_colorbar:
-        norm = matplotlib.colors.Normalize(vmin=vmin, vmax=vmax)
-        sm = matplotlib.cm.ScalarMappable(norm=norm, cmap=cmap)
-        cax = ax.inset_axes(colorbar_pos)
-        cbar = plt.colorbar(sm, ax=ax, cax=cax)
-        cbar.ax.get_yaxis().labelpad = 15
-        cbar.ax.set_ylabel(colorbar_name, rotation=270, fontsize=colorbar_fontsize)
-
-        if colorbar_ticklabels is not None:
-            if len(colorbar_ticklabels) == 2:
-                cbar.ax.get_yaxis().labelpad = 5
-            cbar.ax.set_yticklabels(colorbar_ticklabels, fontsize=colorbar_tick_fontsize)
-            if colorbar_ticks is None:
-                cbar.set_ticks(np.linspace(vmin, vmax, len(colorbar_ticklabels)))
-            else:
-                cbar.set_ticks(colorbar_ticks)
-        else:
-            if colorbar_ticks is None:
-                cbar.set_ticks([vmin, vmax])
-            else:
-                cbar.set_ticks(colorbar_ticks)
-    ax.set_xlabel(f'{embed} 1', fontsize=12)
-    ax.set_ylabel(f'{embed} 2', fontsize=12)
-    ax.set_zlabel(f'{embed} 3', fontsize=12)
-    # cbar.set_height(cbar_height)
+        _set_colorbar(ax,
+                      vmin,
+                      vmax,
+                      cmap,
+                      colorbar_name,
+                      colorbar_ticklabels=colorbar_ticklabels,
+                      colorbar_fontsize=colorbar_fontsize,
+                      colorbar_ticks=colorbar_ticks,
+                      colorbar_pos=colorbar_pos,
+                      colorbar_tick_fontsize=colorbar_tick_fontsize)
+    if not label_off:
+        ax.set_xlabel(f'{embed} 1', fontsize=LABEL_FONTSIZE)
+        ax.set_ylabel(f'{embed} 2', fontsize=LABEL_FONTSIZE)
+        ax.set_zlabel(f'{embed} 3', fontsize=LABEL_FONTSIZE)
+    xrange, yrange, zrange = np.ptp(x_embed[:, 0]), np.ptp(x_embed[:, 1]), np.ptp(x_embed[:, 2])
+    ax.set_xlim(x_embed[:, 0].min(), x_embed[:, 0].max())
+    ax.set_ylim(x_embed[:, 1].min(), x_embed[:, 1].max())
+    ax.set_zlim(x_embed[:, 2].min(), x_embed[:, 2].max())
+    # xmin, xmax = x_embed[:, 0].min(), x_embed[:, 0].max()
+    # ymin, ymax = x_embed[:, 1].min(), x_embed[:, 1].max()
+    # zmin, zmax = x_embed[:, 2].min(), x_embed[:, 2].max()
+    # ax.set_xticks([xmin, xmax], [f'{xmin:.2f}', f'{xmax:.2f}'])
+    # ax.set_yticks([ymin, ymax], [f'{ymin:.2f}', f'{ymax:.2f}'])
+    # ax.set_zticks([zmin, zmax], [f'{zmin:.2f}', f'{zmax:.2f}'])
     if real_aspect_ratio:
-        ax.set_box_aspect((np.ptp(x_embed[:, 0]), np.ptp(x_embed[:, 1]), np.ptp(x_embed[:, 2])), zoom=zoom)
+        ax.set_box_aspect((xrange, yrange, zrange), zoom=zoom)
+
+    ax.tick_params(axis='both', which='major', labelsize=tick_fontsize)
     if axis_off:
         ax.axis("off")
+    elif ticks_off:
+        ax.set_xticklabels([])
+        ax.set_yticklabels([])
+        ax.set_zticklabels([])
+    plt.tight_layout()
     if save is not None:
         save_fig(fig, save)
 
 
 def plot_time(t_latent,
               x_embed,
-              cmap='plasma',
-              legend_label='Latent Time',
-              real_aspect_ratio=False,
-              markersize=20,
+              width=WIDTH,
+              height=HEIGHT,
+              fix='width',
+              real_aspect_ratio=True,
+              colorbar_name='Latent Time',
+              colorbar_ticklabels=['early', 'late'],
+              markersize=MARKERSIZE,
+              show_colorbar=True,
+              colorbar_fontsize=COLORBAR_FONTSIZE,
+              colorbar_limits=None,
+              colorbar_ticks=None,
+              colorbar_tick_fontsize=COLORBAR_TICK_FONTSIZE,
+              colorbar_pos=[1.04, 0.2, 0.05, 0.6],
+              cmap='viridis',
+              axis_off=False,
               save=None):
     """Plots mean cell time as a heatmap.
 
@@ -1610,26 +1809,54 @@ def plot_time(t_latent,
             Mean latent time, (N,)
         x_embed (`numpy.ndarray`):
             2D coordinates for visualization, (N,2)
-        cmap (str, optional):
-            Colormap name. Defaults to 'plasma'.
-        legend_label (str, optional):
-            Text added next to the color bar. Defaults to 'Latent Time'.
+        width (int, optional):
+            Figure width. Defaults to WIDTH.
+        height (int, optional):
+            Figure height. Defaults to HEIGHT.
+        fix (str, optional):
+            Whether to fix the width or height of the figure. Defaults to 'width'.
         real_aspect_ratio (bool, optional):
-            Whether to use real aspect ratio for the plot. Defaults to False.
+            Whether to use real aspect ratio for the plot. Defaults to True.
+        colorbar_name (str, optional):
+            Name shown next to the colorbar. Defaults to 'Latent Time'.
+        colorbar_ticklabels (list, optional):
+            Tick labels for the colorbar. Defaults to ['early', 'late'].
         markersize (int, optional):
-            Marker size. Defaults to 20.
+            Marker size. Defaults to MARKERSIZE.
+        show_colorbar (bool, optional):
+            Whether to show the colorbar. Defaults to True.
+        colorbar_fontsize (int, optional):
+            Font size for the colorbar label. Defaults to COLORBAR_FONTSIZE.
+        colorbar_limits (list, optional):
+            Colorbar limits. Defaults to None.
+        colorbar_ticks (list, optional):
+            Tick positions for the colorbar. Defaults to None.
+        colorbar_tick_fontsize (int, optional):
+            Font size for the colorbar ticks. Defaults to COLORBAR_TICK_FONTSIZE.
+        colorbar_pos (list, optional):
+            Position of the colorbar. Defaults to [1.04, 0.2, 0.05, 0.6].
+        cmap (str, optional):
+            Colormap name. Defaults to 'viridis'.
+        axis_off (bool, optional):
+            Whether to turn off the axis. Defaults to False.
         save (str, optional):
             Figure name for saving (including path). Defaults to None.
     """
-    figsize = _set_figsize(x_embed, real_aspect_ratio)
+    figsize = _set_figsize(x_embed, real_aspect_ratio, width, height, fix)
     fig, ax = plt.subplots(figsize=figsize)
     _plot_heatmap(ax,
                   t_latent,
                   x_embed,
-                  legend_label,
-                  ['early', 'late'],
-                  cmap=cmap,
+                  colorbar_name,
+                  colorbar_ticklabels,
                   markersize=markersize,
+                  show_colorbar=show_colorbar,
+                  colorbar_fontsize=colorbar_fontsize,
+                  colorbar_limits=colorbar_limits,
+                  colorbar_ticks=colorbar_ticks,
+                  colorbar_tick_fontsize=colorbar_tick_fontsize,
+                  colorbar_pos=colorbar_pos,
+                  cmap=cmap,
                   axis_off=True)
     save_fig(fig, save)
 
@@ -1638,9 +1865,21 @@ def plot_time_var(std_t,
                   x_embed,
                   t=None,
                   hist_eq=True,
+                  width=WIDTH,
+                  height=HEIGHT,
+                  fix='width',
+                  real_aspect_ratio=True,
+                  colorbar_name='Time Variance',
+                  colorbar_ticklabels=['low', 'high'],
+                  markersize=MARKERSIZE,
+                  show_colorbar=True,
+                  colorbar_fontsize=COLORBAR_FONTSIZE,
+                  colorbar_limits=None,
+                  colorbar_ticks=None,
+                  colorbar_tick_fontsize=COLORBAR_TICK_FONTSIZE,
+                  colorbar_pos=[1.04, 0.2, 0.05, 0.6],
                   cmap='viridis',
-                  real_aspect_ratio=False,
-                  markersize=20,
+                  axis_off=False,
                   save=None):
     """Plots cell time coefficient of variation as a heatmap.
 
@@ -1653,9 +1892,36 @@ def plot_time_var(std_t,
             Mean latent time. Defaults to None.
         hist_eq (bool, optional):
             Whether to perform histogram equalization. Defaults to True.
+        width (int, optional):
+            Figure width. Defaults to WIDTH.
+        height (int, optional):
+            Figure height. Defaults to HEIGHT.
+        fix (str, optional):
+            Whether to fix the width or height of the figure. Defaults to 'width'.
+        real_aspect_ratio (bool, optional):
+            Whether to use real aspect ratio for the plot. Defaults to True.
+        colorbar_name (str, optional):
+            Name shown next to the colorbar. Defaults to 'Latent Time'.
+        colorbar_ticklabels (list, optional):
+            Tick labels for the colorbar. Defaults to ['early', 'late'].
+        markersize (int, optional):
+            Marker size. Defaults to MARKERSIZE.
+        show_colorbar (bool, optional):
+            Whether to show the colorbar. Defaults to True.
+        colorbar_fontsize (int, optional):
+            Font size for the colorbar label. Defaults to COLORBAR_FONTSIZE.
+        colorbar_limits (list, optional):
+            Colorbar limits. Defaults to None.
+        colorbar_ticks (list, optional):
+            Tick positions for the colorbar. Defaults to None.
+        colorbar_tick_fontsize (int, optional):
+            Font size for the colorbar ticks. Defaults to COLORBAR_TICK_FONTSIZE.
+        colorbar_pos (list, optional):
+            Position of the colorbar. Defaults to [1.04, 0.2, 0.05, 0.6].
         cmap (str, optional):
             Colormap name. Defaults to 'viridis'.
-        
+        axis_off (bool, optional):
+            Whether to turn off the axis. Defaults to False.
         save (str, optional):
             Figure name for saving (including path). Defaults to None.
     """
@@ -1664,15 +1930,21 @@ def plot_time_var(std_t,
     if hist_eq:
         diff_entropy = histeq(diff_entropy, Nbin=len(diff_entropy)//50)
 
-    figsize = _set_figsize(x_embed, real_aspect_ratio)
+    figsize = _set_figsize(x_embed, real_aspect_ratio, width, height, fix)
     fig, ax = plt.subplots(figsize=figsize)
     ax = _plot_heatmap(ax,
                        diff_entropy,
                        x_embed,
-                       "Time Variance",
-                       ['low', 'high'],
+                       colorbar_name,
+                       colorbar_ticklabels,
+                       markersize=markersize,
+                       show_colorbar=show_colorbar,
+                       colorbar_fontsize=colorbar_fontsize,
+                       colorbar_limits=colorbar_limits,
+                       colorbar_ticks=colorbar_ticks,
+                       colorbar_tick_fontsize=colorbar_tick_fontsize,
+                       colorbar_pos=colorbar_pos,
                        cmap=cmap,
-                       markersize=markersize, 
                        axis_off=True)
     save_fig(fig, save)
 
@@ -1681,9 +1953,21 @@ def plot_state_var(std_z,
                    x_embed,
                    z=None,
                    hist_eq=True,
+                   width=WIDTH,
+                   height=HEIGHT,
+                   fix='width',
+                   real_aspect_ratio=True,
+                   colorbar_name='State Uncertainty',
+                   colorbar_ticklabels=['low', 'high'],
+                   markersize=MARKERSIZE,
+                   show_colorbar=True,
+                   colorbar_fontsize=COLORBAR_FONTSIZE,
+                   colorbar_limits=None,
+                   colorbar_ticks=None,
+                   colorbar_tick_fontsize=COLORBAR_TICK_FONTSIZE,
+                   colorbar_pos=[1.04, 0.2, 0.05, 0.6],
                    cmap='viridis',
-                   real_aspect_ratio=False,
-                   markersize=20,
+                   axis_off=False,
                    save=None):
     """Plots cell state variance (in the form of coefficient of variation) as a heatmap.
 
@@ -1691,13 +1975,41 @@ def plot_state_var(std_z,
         std_z (:class:`numpy.ndarray`):
             Standard deviation of cell state, assuming diagonal covariance, (N, dim z)
         x_embed (:class:`numpy.ndarray`):
-            2D coordinates for visualization, (N,2)
+            2D coordinates for visualization, (N, 2)
         z (:class:`numpy.ndarray`, optional):
             Mean cell state, (N, dim z). Defaults to None.
         hist_eq (bool, optional):
             Whether to perform histogram equalization. Defaults to True.
+        width (int, optional):
+            Figure width. Defaults to WIDTH.
+        height (int, optional):
+            Figure height. Defaults to HEIGHT.
+        fix (str, optional):
+            Whether to fix the width or height of the figure. Defaults to 'width'.
+        real_aspect_ratio (bool, optional):
+            Whether to use real aspect ratio for the plot. Defaults to True.
+        colorbar_name (str, optional):
+            Name shown next to the colorbar. Defaults to 'Latent Time'.
+        colorbar_ticklabels (list, optional):
+            Tick labels for the colorbar. Defaults to ['early', 'late'].
+        markersize (int, optional):
+            Marker size. Defaults to MARKERSIZE.
+        show_colorbar (bool, optional):
+            Whether to show the colorbar. Defaults to True.
+        colorbar_fontsize (int, optional):
+            Font size for the colorbar label. Defaults to COLORBAR_FONTSIZE.
+        colorbar_limits (list, optional):
+            Colorbar limits. Defaults to None.
+        colorbar_ticks (list, optional):
+            Tick positions for the colorbar. Defaults to None.
+        colorbar_tick_fontsize (int, optional):
+            Font size for the colorbar ticks. Defaults to COLORBAR_TICK_FONTSIZE.
+        colorbar_pos (list, optional):
+            Position of the colorbar. Defaults to [1.04, 0.2, 0.05, 0.6].
         cmap (str, optional):
             Colormap name. Defaults to 'viridis'.
+        axis_off (bool, optional):
+            Whether to turn off the axis. Defaults to False.
         save (str, optional):
             Figure name for saving (including path). Defaults to None.
     """
@@ -1706,15 +2018,21 @@ def plot_state_var(std_z,
     if hist_eq:
         diff_entropy = histeq(diff_entropy, Nbin=len(diff_entropy)//50)
 
-    figsize = _set_figsize(x_embed, real_aspect_ratio)
+    figsize = _set_figsize(x_embed, real_aspect_ratio, width, height, fix)
     fig, ax = plt.subplots(figsize=figsize)
     ax = _plot_heatmap(ax,
                        diff_entropy,
                        x_embed,
-                       "State Uncertainty",
-                       ['low', 'high'],
-                       cmap=cmap,
+                       colorbar_name,
+                       colorbar_ticklabels,
                        markersize=markersize,
+                       show_colorbar=show_colorbar,
+                       colorbar_fontsize=colorbar_fontsize,
+                       colorbar_limits=colorbar_limits,
+                       colorbar_ticks=colorbar_ticks,
+                       colorbar_tick_fontsize=colorbar_tick_fontsize,
+                       colorbar_pos=colorbar_pos,
+                       cmap=cmap,
                        axis_off=True)
     save_fig(fig, save)
 
@@ -1730,7 +2048,8 @@ def plot_phase_axis(ax,
                     labels=None,
                     legends=None,
                     title=None,
-                    title_fontsize=30,
+                    title_fontsize=7,
+                    tick_fontsize=7,
                     show_legend=False,
                     palette=None):
     """Plot phase in a subplot of a figure."""
@@ -1751,6 +2070,7 @@ def plot_phase_axis(ax,
                        color='k',
                        s=markersize,
                        linewidths=linewidths,
+                       edgecolors='none',
                        alpha=a)
         elif legends is None:
             for type_int in types:
@@ -1762,6 +2082,7 @@ def plot_phase_axis(ax,
                                color=palette[type_int % n_type],
                                s=markersize,
                                linewidths=linewidths,
+                               edgecolors='none',
                                alpha=a)
         else:
             for i, type_int in enumerate(types):  # type_int: label index, labels are cell types
@@ -1774,6 +2095,7 @@ def plot_phase_axis(ax,
                                    color=palette[type_int % n_type],
                                    s=markersize,
                                    linewidths=linewidths,
+                                   edgecolors='none',
                                    alpha=a,
                                    label=legends[type_int])
                     else:
@@ -1782,6 +2104,7 @@ def plot_phase_axis(ax,
                                    marker=marker,
                                    s=markersize,
                                    linewidths=linewidths,
+                                   edgecolors='none',
                                    color=palette[type_int % n_type],
                                    alpha=a)
                 elif show_legend:
@@ -1789,6 +2112,7 @@ def plot_phase_axis(ax,
                                [np.nan],
                                s=markersize,
                                marker=marker,
+                               edgecolors='none',
                                color=palette[type_int % n_type],
                                alpha=a,
                                label=legends[type_int])
@@ -1797,6 +2121,8 @@ def plot_phase_axis(ax,
 
     if title is not None:
         ax.set_title(title, fontsize=title_fontsize)
+
+    ax.tick_params(axis='both', which='major', labelsize=tick_fontsize)
 
     return ax
 
@@ -1811,20 +2137,21 @@ def plot_phase_grid(n_rows,
                     Uhat={},
                     Shat={},
                     Labels_demo={},
-                    W=6,
-                    H=3,
+                    width=WIDTH,
+                    height=HEIGHT,
                     alpha=0.2,
                     downsample=1,
                     obs_marker="o",
                     pred_marker="x",
-                    markersize=10,
+                    markersize=MARKERSIZE,
                     linewidths=0.5,
-                    title_fontsize=30,
+                    title_fontsize=FONTSIZE,
                     show_legend=True,
-                    legend_fontsize=None,
+                    legend_fontsize=LEGEND_FONTSIZE,
                     legend_loc="upper right",
                     bbox_to_anchor=None,
-                    label_fontsize=None,
+                    label_fontsize=FONTSIZE,
+                    tick_fontsize=TICK_FONTSIZE,
                     palette=None,
                     hspace=0.3,
                     wspace=0.12,
@@ -1870,10 +2197,10 @@ def plot_phase_grid(n_rows,
         Labels_demo (dict, optional):
             Keys are method names and values are arrays of size (N_pred).
             This is the annotation for the predictions.. Defaults to {}.
-        W (int, optional):
-            Width of a subplot. Defaults to 6.
-        H (int, optional):
-            Height of a subplot. Defaults to 3.
+        width (int, optional):
+            Width of a subplot. Defaults to WIDTH.
+        height (int, optional):
+            Height of a subplot. Defaults to HEIGHT.
         alpha (float, optional):
             Transparency of the data points. Defaults to 0.2.
         downsample (int, optional):
@@ -1883,7 +2210,7 @@ def plot_phase_grid(n_rows,
         pred_marker (str, optional):
             Marker used for plotting predictions. Defaults to 'x'.
         legend_fontsize (int/float, optional):
-            Defaults to None.
+            Defaults to LEGEND_FONTSIZE.
         palette (str, optional):
             User-defined colormap for cell labels. Defaults to None.
         hspace (float, optional):
@@ -1891,7 +2218,7 @@ def plot_phase_grid(n_rows,
         wspace (float, optional):
             Width distance proportion between subplots. Defaults to 0.12.
         markerscale (float, optional):
-            Marker scale for the legend. Defaults to 5.0.
+            Marker scale for the legend. Defaults to 3.0.
         path (str, optional):
             Path to the saved figure. Defaults to 'figures'.
         figname (_type_, optional):
@@ -1911,9 +2238,9 @@ def plot_phase_grid(n_rows,
         Nfig += 1
 
     if label_fontsize is None:
-        label_fontsize = W*H
+        label_fontsize = width * height
     for i_fig in range(Nfig):
-        fig_phase, ax_phase = plt.subplots(n_rows, M*n_cols, figsize=(W * M * n_cols + 1.0, H * n_rows), facecolor='white')
+        fig_phase, ax_phase = plt.subplots(n_rows, M*n_cols, figsize=(width * M * n_cols + 1.0, height * n_rows), facecolor='white')
         if n_rows == 1 and M * n_cols == 1:  # Single Gene, Single Method
             labels = Labels[methods[0]]
             if labels is not None:
@@ -1932,6 +2259,7 @@ def plot_phase_grid(n_rows,
                                        Legends[methods[0]],
                                        title,
                                        title_fontsize,
+                                       tick_fontsize,
                                        show_legend=show_legend,
                                        palette=palette)
             try:
@@ -1947,6 +2275,7 @@ def plot_phase_grid(n_rows,
                                            Legends[methods[0]],
                                            title,
                                            title_fontsize,
+                                           tick_fontsize,
                                            show_legend=False,
                                            palette=palette)
             except (KeyError, TypeError):
@@ -1973,6 +2302,8 @@ def plot_phase_grid(n_rows,
                                                       labels,
                                                       Legends[method],
                                                       title,
+                                                      title_fontsize,
+                                                      tick_fontsize,
                                                       show_legend=show_legend,
                                                       palette=palette)
                     try:
@@ -1988,6 +2319,7 @@ def plot_phase_grid(n_rows,
                                                           Legends[method],
                                                           title,
                                                           title_fontsize,
+                                                          tick_fontsize,
                                                           show_legend=False,
                                                           palette=palette)
                     except (KeyError, TypeError):
@@ -2015,6 +2347,7 @@ def plot_phase_grid(n_rows,
                                               Legends[methods[0]],
                                               title,
                                               title_fontsize,
+                                              tick_fontsize,
                                               show_legend=show_legend,
                                               palette=palette)
                 try:
@@ -2030,6 +2363,7 @@ def plot_phase_grid(n_rows,
                                                   Legends[methods[0]],
                                                   title,
                                                   title_fontsize,
+                                                  tick_fontsize,
                                                   show_legend=False,
                                                   palette=palette)
                 except (KeyError, TypeError):
@@ -2062,6 +2396,7 @@ def plot_phase_grid(n_rows,
                                                                  Legends[method],
                                                                  title,
                                                                  title_fontsize,
+                                                                 tick_fontsize,
                                                                  show_legend=show_legend,
                                                                  palette=palette)
                         try:
@@ -2077,6 +2412,7 @@ def plot_phase_grid(n_rows,
                                                                      Legends[method],
                                                                      title,
                                                                      title_fontsize,
+                                                                     tick_fontsize,
                                                                      show_legend=False,
                                                                      palette=palette)
                         except (KeyError, TypeError):
@@ -2420,28 +2756,28 @@ def plot_sig_grid(n_rows,
                   Shat={},
                   V={},
                   Labels_demo={},
-                  W=6,
-                  H=3,
+                  width=WIDTH,
+                  height=HEIGHT,
                   alpha=1.0,
                   downsample=1,
                   loess_downsample=None,
                   sparsity_correction=False,
                   plot_loess=False,
                   frac=0.5,
-                  marker="o",
-                  markersize=5,
+                  marker=".",
+                  markersize=MARKERSIZE,
                   linewidths=0.5,
                   palette=None,
                   show_legend=True,
                   legend_fontsize=None,
-                  title_fontsize=30,
+                  title_fontsize=FONTSIZE,
                   headwidth=5.0,
                   headlength=8.0,
-                  label_fontsize=30,
+                  label_fontsize=FONTSIZE,
                   y_label_pos_x=-0.03,
                   y_label_pos_y=0.5,
                   show_xticks=False,
-                  tick_fontsize=15,
+                  tick_fontsize=TICK_FONTSIZE,
                   hspace=0.3,
                   wspace=0.12,
                   markerscale=5.0,
@@ -2498,9 +2834,9 @@ def plot_sig_grid(n_rows,
         Labels_demo (dict, optional):
             Keys are methods and values are cell type annotations of the prediction.
             Defaults to {}.
-        W (int, optional):
+        width (int, optional):
             Subplot width. Defaults to 6.
-        H (int, optional):
+        height (int, optional):
             Subplot height. Defaults to 3.
         alpha (float, optional):
             Transparency of the data points.. Defaults to 1.0.
@@ -2519,7 +2855,7 @@ def plot_sig_grid(n_rows,
         marker (str, optional):
             Marker for the data points. Defaults to 'o'.
         markersize (int, optional):
-            Size of the markers. Defaults to 5.
+            Size of the markers. Defaults to MARKERSIZE.
         linewidths (float, optional):
             Width of the marker edge. Defaults to 0.5.
         palette (:class:`numpy.ndarray`, optional):
@@ -2529,13 +2865,13 @@ def plot_sig_grid(n_rows,
         legend_fontsize (int, optional):
             Defaults to None.
         title_fontsize (int, optional):
-            Defaults to None.
+            Defaults to FONTSIZE.
         headwidth (float, optional):
             Width of the arrow head. Defaults to 5.0.
         headlength (float, optional):
             Length of the arrow head. Defaults to 8.0.
         label_fontsize (int, optional):
-            x/y axis label fontsize. Defaults to 30.
+            x/y axis label fontsize. Defaults to FONTSIZE.
         y_label_pos_x (float, optional):
             x position of the y-axis label relative to the y axis. Defaults to -0.03.
         y_label_pos_y (float, optional):
@@ -2543,7 +2879,7 @@ def plot_sig_grid(n_rows,
         show_xticks (bool, optional):
             Whether to show xticks. Defaults to False.
         tick_fontsize (int, optional):
-            Fontsize of the ticks. Defaults to 15.
+            Fontsize of the ticks. Defaults to TICK_FONTSIZE.
         hspace (float, optional):
             Height distance proportion between subplots. Defaults to 0.3.
         wspace (float, optional):
@@ -2575,7 +2911,7 @@ def plot_sig_grid(n_rows,
 
     # Plotting
     for i_fig in range(Nfig):
-        fig_sig, ax_sig = plt.subplots(3 * n_rows, M * n_cols, figsize=(W * M * n_cols + 1.0, 3 * H * n_rows), facecolor='white')
+        fig_sig, ax_sig = plt.subplots(3 * n_rows, M * n_cols, figsize=(width * M * n_cols + 1.0, 3 * height * n_rows), facecolor='white')
         if M * n_cols == 1:
             for i in range(min(n_rows, len(gene_list) - i_fig * n_rows)):
                 idx = i_fig*n_rows+i
@@ -2900,17 +3236,20 @@ def plot_time_grid(T,
                    std_t=None,
                    downsample=1,
                    max_quantile=0.99,
-                   color_map='plasma_r',
-                   W=6,
-                   H=3,
-                   marker='o',
-                   markersize=10,
+                   color_map='viridis',
+                   width=WIDTH,
+                   height=HEIGHT,
+                   fix='width',
+                   marker='.',
+                   markersize=MARKERSIZE,
                    linewidths=0.5,
                    grid_size=None,
                    real_aspect_ratio=True,
                    title_fontsize=None,
                    show_colorbar=True,
-                   colorbar_fontsize=20,
+                   colorbar_fontsize=COLORBAR_FONTSIZE,
+                   colorbar_ticklabels=['min', 'max'],
+                   colorbar_tick_fontsize=COLORBAR_TICK_FONTSIZE,
                    colorbar_labelpad=20,
                    colorbar_pos=[1.04, 0.2, 0.05, 0.6],
                    path='figures',
@@ -2933,14 +3272,16 @@ def plot_time_grid(T,
             Down-sampling factor to reduce data point overlapping.. Defaults to 1.
         max_quantile (float, optional):
             Top quantile for clipping extreme values. Defaults to 0.99.
-        W (int, optional):
-            Subplot width. Defaults to 6. Ignored when real_aspect_ratio is True.
-        H (int, optional):
-            Subplot height. Defaults to 3. Ignored when real_aspect_ratio is True.
+        width (int, optional):
+            Subplot width. Defaults to WIDTH. Ignored when real_aspect_ratio is True.
+        height (int, optional):
+            Subplot height. Defaults to HEIGHT. Ignored when real_aspect_ratio is True.
+        fix (str, optional):
+            Fix the width or height of the figure. Defaults to 'width'.
         marker (str, optional):
             Marker type. Defaults to 'o'.
         markersize (int, optional):
-            Size of the dots. Defaults to 10.
+            Size of the dots. Defaults to MARKERSIZE.
         linewidths (float, optional):
             Width of the marker edges. Defaults to 0.5.
         grid_size (tuple, optional):
@@ -2952,7 +3293,9 @@ def plot_time_grid(T,
         show_colorbar (bool, optional):
             Whether to show colorbar. Defaults to True.
         colorbar_fontsize (int, optional):
-            Font size of the colorbar. Defaults to 20.
+            Font size of the colorbar. Defaults to COLORBAR_FONTSIZE.
+        colorbar_tick_fontsize (int, optional):
+            Font size of the colorbar ticks. Defaults to COLORBAR_TICK_FONTSIZE.
         colorbar_labelpad (int, optional):
             Label pad of the colorbar. Defaults to 20.
         color_map (str, optional):
@@ -2976,13 +3319,13 @@ def plot_time_grid(T,
 
     # Calculate figure size
     if real_aspect_ratio:
-        panel_figsize = _set_figsize(X_emb, real_aspect_ratio, W, 0)
+        panel_figsize = compute_figsize(X_emb, real_aspect_ratio, width, height, fix)
         figsize = (panel_figsize[0]*n_col, panel_figsize[1]*n_row)
     else:
-        figsize = (W*n_col, H*n_row)
+        figsize = (width*n_col, height*n_row)
     
     if title_fontsize is None:
-        title_fontsize = 4 * W
+        title_fontsize = 4 * width
 
     if std_t is not None:
         fig_time, ax = plt.subplots(2*n_row, n_col, figsize=figsize, facecolor='white')
@@ -3010,6 +3353,7 @@ def plot_time_grid(T,
                                   X_emb[::downsample, 1],
                                   s=markersize,
                                   marker=marker,
+                                  edgecolors='none',
                                   c=t[::downsample],
                                   cmap=color_map,
                                   linewidths=linewidths)
@@ -3027,6 +3371,7 @@ def plot_time_grid(T,
                                              X_emb[::downsample, 1],
                                              s=markersize,
                                              marker=marker,
+                                             edgecolors='none',
                                              c=var_t[::downsample],
                                              cmap='Reds',
                                              linewidths=linewidths)
@@ -3110,15 +3455,11 @@ def plot_time_grid(T,
                     ax.set_title(method, fontsize=title_fontsize)
                 ax.axis('off')
     if show_colorbar:
-        norm0 = matplotlib.colors.Normalize(vmin=0, vmax=1)
-        sm0 = matplotlib.cm.ScalarMappable(norm=norm0, cmap=color_map)
         if isinstance(ax, np.ndarray):
-            cax = ax[-1].inset_axes(colorbar_pos)
+            _set_colorbar(ax[-1], 0, 1, color_map, 'Cell Time', colorbar_ticklabels, colorbar_fontsize, None, colorbar_pos, colorbar_tick_fontsize)
         else:
-            cax = ax.inset_axes(colorbar_pos)
-        cbar0 = fig_time.colorbar(sm0, ax=ax, cax=cax)
-        cbar0.ax.get_yaxis().labelpad = colorbar_labelpad
-        cbar0.ax.set_ylabel('Cell Time', rotation=270, fontsize=colorbar_fontsize)
+            _set_colorbar(ax, 0, 1, color_map, 'Cell Time', colorbar_ticklabels, colorbar_fontsize, None, colorbar_pos, colorbar_tick_fontsize)
+    
     save = None if (path is None or figname is None) else f'{path}/{figname}.{save_format}'
     save_fig(fig_time, save)
 
@@ -3179,9 +3520,15 @@ def plot_rate_grid(adata,
                    gene_list,
                    n_rows,
                    n_cols,
-                   W=6,
-                   H=3,
+                   width=WIDTH,
+                   height=HEIGHT,
                    legend_ncol=8,
+                   legend_fontsize=LEGEND_FONTSIZE,
+                   markerscale=MARKERSCALE,
+                   title_fontsize=TITLE_FONTSIZE,
+                   label_fontsize=LABEL_FONTSIZE,
+                   bbox_to_anchor=None,
+                   legend_loc='upper right',
                    plot_depth=True,
                    color_map=None,
                    path="figures",
@@ -3201,12 +3548,24 @@ def plot_rate_grid(adata,
             Number of rows of the subplot grid.
         n_cols (int):
             Number of columns of the subplot grid.
-        W (int, optional):
-            Subplot width. Defaults to 6.
-        H (int, optional):
-            Subplot width. Defaults to 3.
+        width (int, optional):
+            Subplot width. Defaults to WIDTH.
+        height (int, optional):
+            Subplot width. Defaults to HEIGHT.
         legend_ncol (int, optional):
             Number of columns in the legend. Defaults to 8.
+        legend_fontsize (int, optional):
+            Fontsize of the legend. Defaults to LEGEND_FONTSIZE.
+        markerscale (float, optional):
+            Marker scale for the legend. Defaults to MARKERSCALE.
+        title_fontsize (int, optional):
+            Fontsize of the title. Defaults to TITLE_FONTSIZE.
+        label_fontsize (int, optional):
+            Fontsize of the labels. Defaults to LABEL_FONTSIZE.
+        bbox_to_anchor (tuple, optional):
+            Bbox to anchor the legend. Defaults to None.
+        legend_loc (str, optional):
+            Location of the legend. Defaults to 'upper right'.
         plot_depth (bool, optional):
             Whether to plot the depth in transition graph as a surrogate of time.
             Set to true by default for better visualization. Defaults to True.
@@ -3220,9 +3579,9 @@ def plot_rate_grid(adata,
             Figure format, could be png, pdf, svg, eps and ps. Defaults to 'png'. Defaults to "png".
 
     """
-    Nfig = len(gene_list) // (n_rows*n_cols)
-    if Nfig * n_rows * n_cols < len(gene_list):
-        Nfig += 1
+    num_fig = len(gene_list) // (n_rows*n_cols)
+    if num_fig * n_rows * n_cols < len(gene_list):
+        num_fig += 1
     graph = _adj_mtx_to_map(adata.uns['brode_w'])
     label_dic = adata.uns['brode_label_dic']
     label_dic_rev = {}
@@ -3230,8 +3589,8 @@ def plot_rate_grid(adata,
         label_dic_rev[label_dic[type_]] = type_
 
     # Plotting
-    for i_fig in range(Nfig):
-        fig, ax = plt.subplots(3*n_rows, n_cols, figsize=(W*n_cols, H*3*n_rows), facecolor='white')
+    for i_fig in range(num_fig):
+        fig, ax = plt.subplots(3*n_rows, n_cols, figsize=(width*n_cols, height*3*n_rows), facecolor='white')
         if n_cols == 1:
             for i in range(n_cols):
                 idx = i_fig*n_rows * n_cols + i
@@ -3263,18 +3622,18 @@ def plot_rate_grid(adata,
                                          plot_depth,
                                          color_map=color_map)
 
-                ax[3*i].set_ylabel(r"$\alpha$", fontsize=20, rotation=0)
-                ax[3*i+1].set_ylabel(r"$\beta$", fontsize=20, rotation=0)
-                ax[3*i+2].set_ylabel(r"$\gamma$", fontsize=20, rotation=0)
+                ax[3*i].set_ylabel(r"$\alpha$", fontsize=label_fontsize, rotation=0)
+                ax[3*i+1].set_ylabel(r"$\beta$", fontsize=label_fontsize, rotation=0)
+                ax[3*i+2].set_ylabel(r"$\gamma$", fontsize=label_fontsize, rotation=0)
                 for k in range(3):
                     ax[3*i+k].set_xticks([])
                     ax[3*i+k].set_yticks([])
                     if plot_depth:
-                        ax[3*i+k].set_xlabel("Depth", fontsize=30)
+                        ax[3*i+k].set_xlabel("Depth", fontsize=label_fontsize)
                     else:
-                        ax[3*i+k].set_xlabel("Time", fontsize=30)
+                        ax[3*i+k].set_xlabel("Time", fontsize=label_fontsize)
                     ax[3*i+k].yaxis.set_label_coords(-0.03, 0.5)
-                    ax[3*i+k].set_title(gene_list[idx], fontsize=30)
+                    ax[3*i+k].set_title(gene_list[idx], fontsize=title_fontsize)
             handles, labels = ax[0].get_legend_handles_labels()
         else:
             for i in range(n_rows):
@@ -3308,27 +3667,30 @@ def plot_rate_grid(adata,
                                                 label_dic_rev,
                                                 color_map=color_map)
 
-                    ax[3*i, j].set_ylabel(r"$\alpha$", fontsize=30, rotation=0)
-                    ax[3*i+1, j].set_ylabel(r"$\beta$", fontsize=30, rotation=0)
-                    ax[3*i+2, j].set_ylabel(r"$\gamma$", fontsize=30, rotation=0)
+                    ax[3*i, j].set_ylabel(r"$\alpha$", fontsize=label_fontsize, rotation=0)
+                    ax[3*i+1, j].set_ylabel(r"$\beta$", fontsize=label_fontsize, rotation=0)
+                    ax[3*i+2, j].set_ylabel(r"$\gamma$", fontsize=label_fontsize, rotation=0)
                     for k in range(3):
                         ax[3*i+k, j].set_xticks([])
                         ax[3*i+k, j].set_yticks([])
-                        ax[3*i+k, j].set_xlabel("Time", fontsize=30)
+                        ax[3*i+k, j].set_xlabel("Time", fontsize=label_fontsize)
                         ax[3*i+k, j].yaxis.set_label_coords(-0.03, 0.5)
-                        ax[3*i+k, j].set_title(gene_list[idx], fontsize=30)
+                        ax[3*i+k, j].set_title(gene_list[idx], fontsize=title_fontsize)
             handles, labels = ax[0, 0].get_legend_handles_labels()
         plt.tight_layout()
 
-        l_indent = 1 - 0.02/n_rows
-        legend_fontsize = np.min([int(30*n_rows), int(10*n_cols)])
+        if bbox_to_anchor is None:
+            l_indent = 1 - 0.02/n_rows
+            bbox_to_anchor = (-0.03/n_cols, l_indent)
+        if legend_fontsize is None:
+            legend_fontsize = np.min([int(30*n_rows), int(10*n_cols)])
         # min(n_rows*10, n_rows*120/len(graph.keys()))
         lgd = fig.legend(handles,
                          labels,
                          fontsize=legend_fontsize,
-                         markerscale=1,
-                         bbox_to_anchor=(-0.03/n_cols, l_indent),
-                         loc='upper right')
+                         markerscale=markerscale,
+                         bbox_to_anchor=bbox_to_anchor,
+                         loc=legend_loc)
 
         save = None if figname is None else f'{path}/{figname}_brode_rates_{i_fig+1}.{save_format}'
         save_fig(fig, save, (lgd,))
@@ -3339,13 +3701,18 @@ def plot_trajectory_3d(x_embed,
                        t,
                        cell_labels,
                        plot_arrow=False,
-                       n_grid=50,
+                       n_grid=10,
                        n_time=20,
                        k=30,
                        k_grid=8,
                        scale=1.5,
                        angle=(15, 45),
-                       figsize=(12, 9),
+                       figsize=(8, 6),
+                       markersize=MARKERSIZE,
+                       label_fontsize=LABEL_FONTSIZE,
+                       legend_fontsize=LEGEND_FONTSIZE,
+                       markerscale=MARKERSCALE,
+                       bbox_to_anchor=(0.0, 1.0, 1.0, -0.05),
                        eps_t=None,
                        color_map=None,
                        embed='umap',
@@ -3377,7 +3744,17 @@ def plot_trajectory_3d(x_embed,
         angle (tuple, optional):
             Angle of the 3D plot. Defaults to (15, 45).
         figsize (tuple, optional):
-            Defaults to (12, 9).
+            Defaults to (WIDTH, HEIGHT).
+        markersize (int, optional):
+            Defaults to MARKERSIZE.
+        label_fontsize (int, optional):
+            Defaults to LABEL_FONTSIZE.
+        legend_fontsize (int, optional):
+            Defaults to LEGEND_FONTSIZE.
+        markerscale (int, optional):
+            Defaults to 3.
+        bbox_to_anchor (tuple, optional):
+            Defaults to (0.0, 1.0, 1.0, -0.05).
         eps_t (float, optional):
             Parameter to control the relative time order of cells. Defaults to None.
         color_map (str, optional):
@@ -3405,7 +3782,7 @@ def plot_trajectory_3d(x_embed,
         ax.scatter(x_3d[:, 0][cell_mask][::d],
                    x_3d[:, 1][cell_mask][::d],
                    x_3d[:, 2][cell_mask][::d],
-                   s=5.0,
+                   s=markersize,
                    color=colors[i],
                    label=type_,
                    edgecolor='none')
@@ -3490,13 +3867,12 @@ def plot_trajectory_3d(x_embed,
                   length=(0.8*range_x/n_grid + 0.8*range_x/n_time),
                   normalize=True)
 
-    ax.set_xlabel(f'{embed} 1', fontsize=12)
-    ax.set_ylabel(f'{embed} 2', fontsize=12)
-    ax.set_zlabel('Time', fontsize=12)
+    ax.set_xlabel(f'{embed} 1', fontsize=label_fontsize)
+    ax.set_ylabel(f'{embed} 2', fontsize=label_fontsize)
+    ax.set_zlabel('Time', fontsize=label_fontsize)
 
     ncol = kwargs['ncol'] if 'ncol' in kwargs else 4
-    fontsize = kwargs['legend_fontsize'] if 'legend_fontsize' in kwargs else 12
-    lgd = ax.legend(fontsize=fontsize, ncol=ncol, markerscale=5.0, bbox_to_anchor=(0.0, 1.0, 1.0, -0.05), loc='center')
+    lgd = ax.legend(fontsize=legend_fontsize, ncol=ncol, markerscale=markerscale, bbox_to_anchor=bbox_to_anchor, loc='center')
     fig.tight_layout()
     if 'axis_off' in kwargs:
         ax.axis('off')
@@ -3518,16 +3894,27 @@ def plot_trajectory_4d(x_spatial,
                        cell_labels,
                        radius,
                        principal_curve=None,
-                       end_points=None,
+                       plot_anchors=True,
                        plot_arrow=False,
-                       n_grid=30,
+                       n_grid=10,
                        scale=1.5,
                        smooth_factor=0.05,
                        palette=None,
                        angle=(15, 45),
-                       figsize=(12, 9),
-                       arrow_length=10,
+                       figsize=(8, 6),
+                       arrow_length=5,
                        arrow_length_ratio=0.5,
+                       markersize=MARKERSIZE,
+                       label_fontsize=12,
+                       legend_fontsize=12,
+                       legend_loc='center',
+                       markerscale=2.0,
+                       alpha=1.0,
+                       tick_fontsize=10,
+                       linewidth=0.5,
+                       labelpad=(-10, -10, -10),
+                       tick_labelpad=-3,
+                       bbox_to_anchor=(0.0, 1.0, 1.0, -0.05),
                        zoom=1.0,
                        embed='spatial',
                        real_aspect_ratio=True,
@@ -3541,14 +3928,14 @@ def plot_trajectory_4d(x_spatial,
             3D embedding for visualization
         v (:class:`numpy.ndarray`):
             Velocity of cells.
-        t (:class:`numpy.ndarray`):
-            Cell time.
         cell_labels (:class:`numpy.ndarray`):
             Cell type annotations.
         radius (float):
             Radius for building an epsilon-ball graph.
         principal_curve (:class:`numpy.ndarray`, optional):
             Principal curve. Defaults to None.
+        plot_anchors (bool, optional):
+            Whether to plot the line connecting anchors of the principal curve. Defaults to True.
         plot_arrow (bool, optional):
             Whether to add a quiver plot upon the background 3D scatter plot.
             Defaults to False.
@@ -3556,12 +3943,38 @@ def plot_trajectory_4d(x_spatial,
             Grid size of the x-y plane. Defaults to 50.
         scale (float, optional):
             Parameter to control boundary detection. Defaults to 1.5.
+        smooth_factor (float, optional):
+            Gaussian smoothing factor. Defaults to 0.05.
+        palette (array-like, optional):
+            Color palette for cell types. Defaults to None.
         angle (tuple, optional):
             Angle of the 3D plot. Defaults to (15, 45).
         figsize (tuple, optional):
-            Defaults to (12, 9).
-        color_map (str, optional):
-            Defaults to None.
+            Defaults to (WIDTH, HEIGHT).
+        arrow_length (int, optional):
+            Length of the arrow. Defaults to 10.
+        arrow_length_ratio (float, optional):
+            Ratio of the arrow length. Defaults to 0.5.
+        markersize (int, optional):
+            Defaults to MARKERSIZE.
+        alpha (float, optional):
+            Transparency of the dots. Defaults to 1.0.
+        label_fontsize (int, optional):
+            Defaults to LABEL_FONTSIZE.
+        legend_fontsize (int, optional):
+            Defaults to LEGEND_FONTSIZE.
+        legend_loc (str, optional):
+            Location of the legend. Defaults to 'center'.
+        markerscale (int, optional):
+            Defaults to 3.
+        tick_fontsize (int, optional):
+            Defaults to 10.
+        linewidth (float, optional):
+            Defaults to 0.5.
+        bbox_to_anchor (tuple, optional):
+            Defaults to (0.0, 1.0, 1.0, -0.05).
+        zoom (float, optional):
+            Defaults to 1.0.
         embed (str, optional):
             Name of the embedding.. Defaults to 'umap'.
         real_aspect_ratio (bool, optional):
@@ -3569,9 +3982,9 @@ def plot_trajectory_4d(x_spatial,
         save (str, optional):
             Figure name for saving (including path). Defaults to None.
 
+    Returns:
+        tuple: A tuple of 3D grid coordinates and smoothed velocity.
     """
-    #t_clip = np.clip(t, np.quantile(t, 0.01), np.quantile(t, 0.99))
-
     fig = plt.figure(figsize=figsize)
     ax = fig.add_subplot(projection='3d')
     ax.view_init(angle[0], angle[1])
@@ -3585,15 +3998,17 @@ def plot_trajectory_4d(x_spatial,
         ax.scatter(x_spatial[:, 0][cell_mask][::d],
                    x_spatial[:, 1][cell_mask][::d],
                    x_spatial[:, 2][cell_mask][::d],
-                   s=5.0,
+                   s=markersize,
                    color=palette[i],
+                   alpha=alpha,
                    label=type_,
                    edgecolor='none')
+
     if isinstance(principal_curve, np.ndarray):
-        if end_points is None:
-            ax.scatter(principal_curve[:, 0], principal_curve[:, 1], principal_curve[:, 2], color='k', edgecolor='none')
+        if not plot_anchors:
+            ax.scatter(principal_curve[:, 0], principal_curve[:, 1], principal_curve[:, 2], s=markersize*2, color='k', edgecolor='none')
         else:
-            ax.plot(principal_curve[:, 0], principal_curve[:, 1], principal_curve[:, 2], 'k-', linewidth=3)
+            ax.plot(principal_curve[:, 0], principal_curve[:, 1], principal_curve[:, 2], 'k-', linewidth=5)
     xyz_grid, v_grid_sm = None, None
     if plot_arrow:
         # Compute the velocity on a grid
@@ -3652,19 +4067,23 @@ def plot_trajectory_4d(x_spatial,
                   color='k',
                   normalize=True,
                   length=arrow_length,
-                  arrow_length_ratio=arrow_length_ratio)
+                  arrow_length_ratio=arrow_length_ratio,
+                  linewidth=linewidth)
     if real_aspect_ratio:
         ax.set_box_aspect((np.ptp(x_spatial[:, 0]), np.ptp(x_spatial[:, 1]), np.ptp(x_spatial[:, 2])), zoom=zoom)
-    ax.set_xlabel(f'{embed} 1', fontsize=12)
-    ax.set_ylabel(f'{embed} 2', fontsize=12)
-    ax.set_zlabel(f'{embed} 3', fontsize=12)
+    if not 'labels_off' in kwargs:
+        ax.set_xlabel(f'{embed} 1', fontsize=label_fontsize, labelpad=labelpad[0])
+        ax.set_ylabel(f'{embed} 2', fontsize=label_fontsize, labelpad=labelpad[1])
+        ax.set_zlabel(f'{embed} 3', fontsize=label_fontsize, labelpad=labelpad[2])
+        ax.tick_params(axis='both', which='major', labelsize=tick_fontsize, pad=tick_labelpad)
 
     ncol = kwargs['ncol'] if 'ncol' in kwargs else 4
-    fontsize = kwargs['legend_fontsize'] if 'legend_fontsize' in kwargs else 12
-    lgd = ax.legend(fontsize=fontsize, ncol=ncol, markerscale=5.0, bbox_to_anchor=(0.0, 1.0, 1.0, -0.05), loc='center')
+    lgd = ax.legend(fontsize=legend_fontsize, ncol=ncol, markerscale=markerscale, bbox_to_anchor=bbox_to_anchor, loc=legend_loc)
     plt.tight_layout()
-    if 'axis_off' in kwargs:
-        ax.axis('off')
+    if 'ticks_off' in kwargs:
+        ax.set_xticks([])
+        ax.set_yticks([])
+        ax.set_zticks([])
     if save is not None:
         save_fig(fig, save)
     return xyz_grid, v_grid_sm
@@ -3672,7 +4091,11 @@ def plot_trajectory_4d(x_spatial,
 
 def plot_transition_graph(adata,
                           key="brode",
-                          figsize=(4, 8),
+                          figsize=(WIDTH, HEIGHT),
+                          legend_fontize=LEGEND_FONTSIZE,
+                          markerscale=MARKERSCALE,
+                          ncol=1,
+                          bbox_to_anchor=None,
                           color_map=None,
                           save=None):
     """Plot a directed graph with cell types as nodes
@@ -3687,6 +4110,13 @@ def plot_transition_graph(adata,
             Defaults to (4, 8).
         color_map (str, optional):
             Defaults to None.
+        legend_fontize (int, optional):
+            Defaults to LEGEND_FONTSIZE.
+        markerscale (int, optional):
+            Defaults to MARKERSCALE.
+        ncol (int, optional):  
+            Defaults to 2.
+        bbox_to_anchor (tuple, optional):
         save (str, optional):
             Figure name for saving (including path). Defaults to None.
 
@@ -3728,20 +4158,27 @@ def plot_transition_graph(adata,
     plt.close(_fig)
     labels = node_name
     _fig.legend(handles, labels, loc=3, framealpha=1, frameon=False)
-
+    if bbox_to_anchor is None:
+        bbox_to_anchor = (0.0, min(0.95, 0.5+0.02*n_type))
     lgd = fig.legend(handles,
                      labels,
-                     fontsize=15,
-                     markerscale=2,
-                     ncol=1,
-                     bbox_to_anchor=(0.0, min(0.95, 0.5+0.02*n_type)),
+                     fontsize=legend_fontize,
+                     markerscale=markerscale,
+                     ncol=ncol,
+                     bbox_to_anchor=bbox_to_anchor,
                      loc='upper right')
     save_fig(fig, save, (lgd,))
 
     return
 
 
-def plot_rate_hist(adata, model, key, tprior='tprior', figsize=(18, 4), save="figures/hist.png"):
+def plot_rate_hist(adata,
+                   model,
+                   key,
+                   tprior='tprior',
+                   figsize=(WIDTH * 3, HEIGHT),
+                   label_fontsize=LABEL_FONTSIZE,
+                   save="figures/hist.png"):
     """Convert rate parameters to real interpretable units and plot the histogram
 
     Args:
@@ -3788,7 +4225,7 @@ def plot_rate_hist(adata, model, key, tprior='tprior', figsize=(18, 4), save="fi
             / (1440*t_scale) * sparsity_scale
         gamma = np.exp(adata.var[f"{key}_logmu_gamma"].to_numpy()+0.5*std_gamma**2) * s_median\
             / (1440*t_scale) * sparsity_scale
-    elif "VeloVAE" in model:
+    elif "VeloVAE" or "TopoVelo" in model:
         alpha = (adata.var[f"{key}_alpha"]).to_numpy() / (1440*t_scale) * sparsity_scale
         beta = (adata.var[f"{key}_beta"]).to_numpy() * u_median / (1440*t_scale) * sparsity_scale
         gamma = (adata.var[f"{key}_gamma"]).to_numpy() * s_median / (1440*t_scale) * sparsity_scale
@@ -3800,9 +4237,9 @@ def plot_rate_hist(adata, model, key, tprior='tprior', figsize=(18, 4), save="fi
     ax[0].hist(alpha, bins=np.linspace(0, ub[0], 50), color="orange", label=r"$\alpha$")
     ax[1].hist(beta, bins=np.linspace(0, ub[1], 50), color="green", label=r"$\beta$")
     ax[2].hist(gamma, bins=np.linspace(0, ub[2], 50), color="blue", label=r"$\gamma$")
-    ax[0].set_xlabel(r"$\alpha$ (transcript / min)", fontsize=20)
-    ax[1].set_xlabel(r"$\beta$u (transcript / min)", fontsize=20)
-    ax[2].set_xlabel(r"$\gamma$s (transcript / min)", fontsize=20)
-    ax[0].set_ylabel("Number of Genes", fontsize=20)
+    ax[0].set_xlabel(r"$\alpha$ (transcript / min)", fontsize=label_fontsize)
+    ax[1].set_xlabel(r"$\beta$u (transcript / min)", fontsize=label_fontsize)
+    ax[2].set_xlabel(r"$\gamma$s (transcript / min)", fontsize=label_fontsize)
+    ax[0].set_ylabel("Number of Genes", fontsize=label_fontsize)
     plt.tight_layout()
     save_fig(fig, save)

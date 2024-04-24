@@ -762,10 +762,14 @@ def post_analysis(adata,
     if "time" in plot_type or "all" in plot_type:
         X_embed = adata.obsm[f"X_{embed}"]
         T = {}
+        repeated = {}
         capture_time = adata.obs["tprior"].to_numpy() if "tprior" in adata.obs else None
         for i, method in enumerate(methods):
             # avoid duplicate methods with different keys
             method_ = f"{method} ({keys[i]})" if method in T else method
+            if keys[i] in repeated:
+                continue
+            repeated[keys[i]] = True
             if method == 'scVelo':
                 T[method_] = adata.obs["latent_time"].to_numpy()
             else:
@@ -792,9 +796,13 @@ def post_analysis(adata,
         Labels_phase = {}
         Legends_phase = {}
         Labels_phase_demo = {}
+        repeated = {}
         for i, method in enumerate(methods):
             # avoid duplicate methods with different keys
             method_ = f"{method} ({keys[i]})" if method in Labels_phase else method
+            if keys[i] in repeated:
+                continue
+            repeated[keys[i]] = True
             Labels_phase[method_] = cell_state(adata, method, keys[i], gene_indices)
             Legends_phase[method_] = ['Induction', 'Repression', 'Off', 'Unknown']
             Labels_phase_demo[method] = None
@@ -860,7 +868,7 @@ def post_analysis(adata,
             palette = get_colors(len(cell_types_raw))
             plot_config.set('palette', palette)
         try:
-            from scvelo.tl import velocity_graph
+            from scvelo.tl import velocity_graph, velocity_embedding
             from scvelo.pl import velocity_embedding_stream
             for i, vkey in enumerate(vkeys):
                 if methods[i] in ['scVelo', 'UniTVelo', 'DeepVelo']:

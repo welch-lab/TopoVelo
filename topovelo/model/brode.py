@@ -1,16 +1,21 @@
+"""Branching ODE Module
+This module implements the basic variational mixture of ODEs model with constant rate parameters.
+"""
 import numpy as np
 import torch
 import torch.nn as nn
 import pandas as pd
 import os
 import time
-from ..plotting import plot_sig, plot_train_loss, plot_test_loss
+from topovelo.plotting import plot_sig, plot_train_loss, plot_test_loss
 from .model_util import init_params, reinit_type_params
 from .model_util import convert_time, get_gene_index
 from .model_util import ode_br, encode_type, str2int, int2str
 from .training_data import SCTimedData
 from .transition_graph import TransGraph
 from .velocity import rna_velocity_brode
+P_MAX = 1e4
+GRAD_MAX = 1e7
 
 
 class decoder(nn.Module):
@@ -20,6 +25,7 @@ class decoder(nn.Module):
                  tkey,
                  embed_key,
                  train_idx,
+                 vkey=None,
                  param_key=None,
                  device=torch.device('cpu'),
                  p=98,
@@ -37,30 +43,40 @@ class decoder(nn.Module):
         self.label_dic, self.label_dic_rev = encode_type(self.cell_types)
         cell_labels_int = str2int(cell_labels_raw, self.label_dic)
         cell_labels_int = cell_labels_int[train_idx]
+        self.cell_labels_int = cell_labels_int
         cell_types_int = str2int(self.cell_types, self.label_dic)
         self.Ntype = len(cell_types_int)
 
         # Transition Graph
         partition_k = kwargs['partition_k'] if 'partition_k' in kwargs else 5
         partition_res = kwargs['partition_res'] if 'partition_res' in kwargs else 0.005
-        tgraph = TransGraph(adata, tkey, embed_key, cluster_key, train_idx, k=partition_k, res=partition_res)
+        self.tgraph = TransGraph(adata,
+                                 tkey,
+                                 embed_key,
+                                 cluster_key,
+                                 vkey,
+                                 train_idx,
+                                 k=partition_k,
+                                 res=partition_res)
 
         n_par = kwargs['n_par'] if 'n_par' in kwargs else 2
         dt = kwargs['dt'] if 'dt' in kwargs else (0.01, 0.05)
         k = kwargs['k'] if 'k' in kwargs else 5
-        w = tgraph.compute_transition_deterministic(adata, n_par, dt, k)
+        w = self.tgraph.compute_transition_deterministic(n_par, dt, k)
+        par = np.argmax(w, 1)
+        roots = np.where(par == np.array(range(len(par))))[0]
 
         self.w = torch.tensor(w, device=device)
         self.par = torch.argmax(self.w, 1)
 
         # Dynamical Model Parameters
         if checkpoint is not None:
-            self.alpha = nn.Parameter(torch.empty(G, device=device).double())
-            self.beta = nn.Parameter(torch.empty(G, device=device).double())
-            self.gamma = nn.Parameter(torch.empty(G, device=device).double())
-            self.scaling = nn.Parameter(torch.empty(G, device=device).double())
-            self.sigma_u = nn.Parameter(torch.empty(G, device=device).double())
-            self.sigma_s = nn.Parameter(torch.empty(G, device=device).double())
+            self.alpha = nn.Parameter(torch.empty(G, device=device).float())
+            self.beta = nn.Parameter(torch.empty(G, device=device).float())
+            self.gamma = nn.Parameter(torch.empty(G, device=device).float())
+            self.scaling = nn.Parameter(torch.empty(G, device=device).float())
+            self.sigma_u = nn.Parameter(torch.empty(G, device=device).float())
+            self.sigma_s = nn.Parameter(torch.empty(G, device=device).float())
 
             self.load_state_dict(torch.load(checkpoint, map_location=device))
         else:
@@ -83,11 +99,11 @@ class decoder(nn.Module):
                  sigma_u,
                  sigma_s,
                  T,
-                 Rscore) = init_params(X, p, fit_scaling=True)
+                 Rscore) = init_params(U, S, p, fit_scaling=True)
 
             t_trans, dts = np.zeros((self.Ntype)), np.random.rand(self.Ntype, G)*0.01
             for i, type_ in enumerate(cell_types_int):
-                t_trans[type_] = np.quantile(t[cell_labels_int == type_], 0.01)
+                t_trans[type_] = np.quantile(t[cell_labels_int == type_], 0.05)
             ts = t_trans.reshape(-1, 1) + dts
 
             alpha, beta, gamma, u0, s0 = reinit_type_params(U/scaling,
@@ -98,22 +114,17 @@ class decoder(nn.Module):
                                                             cell_types_int,
                                                             cell_types_int)
 
-            self.alpha = nn.Parameter(torch.tensor(np.log(alpha), device=device).double())
-            self.beta = nn.Parameter(torch.tensor(np.log(beta), device=device).double())
-            self.gamma = nn.Parameter(torch.tensor(np.log(gamma), device=device).double())
-            self.t_trans = nn.Parameter(torch.tensor(np.log(t_trans+1e-10), device=device).double())
-            self.u0 = nn.Parameter(torch.tensor(np.log(u0), device=device).double())
-            self.s0 = nn.Parameter(torch.tensor(np.log(s0), device=device).double())
-            self.scaling = nn.Parameter(torch.tensor(np.log(scaling), device=device).double())
-            self.sigma_u = nn.Parameter(torch.tensor(np.log(sigma_u), device=device).double())
-            self.sigma_s = nn.Parameter(torch.tensor(np.log(sigma_s), device=device).double())
+            self.alpha = nn.Parameter(torch.tensor(np.log(alpha), device=device).float())
+            self.beta = nn.Parameter(torch.tensor(np.log(beta), device=device).float())
+            self.gamma = nn.Parameter(torch.tensor(np.log(gamma), device=device).float())
+            self.t_trans = nn.Parameter(torch.tensor(np.log(t_trans+1e-10), device=device).float())
+            self.u0_root = nn.Parameter(torch.tensor(np.log(u0[roots]*scaling), device=device).float())
+            self.s0_root = nn.Parameter(torch.tensor(np.log(s0[roots]), device=device).float())
+            self.register_buffer('scaling', torch.tensor(np.log(scaling), device=device).float())
+            self.register_buffer('sigma_u', torch.tensor(np.log(sigma_u), device=device).float())
+            self.register_buffer('sigma_s', torch.tensor(np.log(sigma_s), device=device).float())
 
         self.t_trans.requires_grad = False
-        self.scaling.requires_grad = False
-        self.sigma_u.requires_grad = False
-        self.sigma_s.requires_grad = False
-        self.u0.requires_grad = False
-        self.s0.requires_grad = False
 
     def forward(self, t, y, neg_slope=0.0):
         return ode_br(t,
@@ -124,8 +135,8 @@ class decoder(nn.Module):
                       beta=torch.exp(self.beta),
                       gamma=torch.exp(self.gamma),
                       t_trans=torch.exp(self.t_trans),
-                      u0=torch.exp(self.u0),
-                      s0=torch.exp(self.s0),
+                      u0_root=torch.exp(self.u0_root),
+                      s0_root=torch.exp(self.s0_root),
                       sigma_u=torch.exp(self.sigma_u),
                       sigma_s=torch.exp(self.sigma_s),
                       scaling=torch.exp(self.scaling))
@@ -140,8 +151,8 @@ class decoder(nn.Module):
                           beta=torch.exp(self.beta),
                           gamma=torch.exp(self.gamma),
                           t_trans=torch.exp(self.t_trans),
-                          u0=torch.exp(self.u0),
-                          s0=torch.exp(self.s0),
+                          u0_root=torch.exp(self.u0_root),
+                          s0_root=torch.exp(self.s0_root),
                           sigma_u=torch.exp(self.sigma_u),
                           sigma_s=torch.exp(self.sigma_s),
                           scaling=torch.exp(self.scaling))
@@ -153,54 +164,58 @@ class decoder(nn.Module):
                       beta=torch.exp(self.beta[:, gidx]),
                       gamma=torch.exp(self.gamma[:, gidx]),
                       t_trans=torch.exp(self.t_trans),
-                      u0=torch.exp(self.u0[:, gidx]),
-                      s0=torch.exp(self.s0[:, gidx]),
+                      u0_root=torch.exp(self.u0_root[:, gidx]),
+                      s0_root=torch.exp(self.s0_root[:, gidx]),
                       sigma_u=torch.exp(self.sigma_u[gidx]),
                       sigma_s=torch.exp(self.sigma_s[gidx]),
                       scaling=torch.exp(self.scaling[gidx]))
 
 
 class BrODE():
+    """High-level ODE model for RNA velocity with branching structure.
+    """
     def __init__(self,
                  adata,
                  cluster_key,
                  tkey,
                  embed_key,
+                 vkey=None,
                  param_key=None,
                  device='cpu',
                  checkpoint=None,
                  graph_param={}):
-        """High-level ODE model for RNA velocity with branching structure.
+        """Constructor
 
-        Arguments
-        ---------
-
-        adata : :class:`anndata.AnnData`
-        cluster_key : str
-            Key in adata.obs storing the cell type annotation.
-        tkey : str
-            Key in adata.obs storing the latent cell time
-        embed_key : str
-            Key in adata.obsm storing the latent cell state
-        param_key : str, optional
-            Used to extract sigma_u, sigma_s and scaling from adata.var
-        device : `torch.device`
-            Either cpu or gpu
-        checkpoint : string, optional
-            Path to a file containing a pretrained model. \
-            If given, initialization will be skipped and arguments relating to initialization will be ignored.
-        graph_param : dictionary, optional
-            Hyper-parameters for the transition graph computation.
-            Keys should contain:
-            (1) partition_k: num_neighbors in graph partition (a KNN graph is computed by scanpy)
-            (2) partition_res: resolution of Louvain clustering in graph partition
-            (3) n_par: number of parents to keep in graph pruning
-            (4) dt: tuple (r1,r2), proportion of time range to consider as the parent time window
-                Let t_range be the time range. Then for any cell with time t, only cells in the
-                time window (t-r2*t_range, t-r1*t_range)
-            (5) k: KNN in parent counting.
-                This is different from partition_k. When we pick the time window, KNN
-                is computed to choose the most likely parents from the cells in the window.
+        Args:
+            adata (:class:`anndata.AnnData`):
+                AnnData object.
+            cluster_key (str):
+                Key in adata.obs storing the cell type annotation.
+            tkey (str):
+                Key in adata.obs storing the latent cell time
+            embed_key (str):
+                Key in adata.obsm storing the latent cell state
+            param_key (str, optional):
+                Used to extract sigma_u, sigma_s and scaling from adata.var. Defaults to None.
+            device (:class:`torch.device`, optional):
+                {'cpu' or 'gpu'}.  Defaults to 'cpu'.
+            checkpoint (str, optional):
+                Path to a file containing a pretrained model.
+                If given, initialization will be skipped and arguments relating to initialization will be ignored.
+                Defaults to None.
+            graph_param (dict, optional):
+                Hyper-parameters for the transition graph computation.
+                Keys should contain:
+                (1) partition_k: num_neighbors in graph partition (a KNN graph is computed by scanpy)
+                (2) partition_res: resolution of Louvain clustering in graph partition
+                (3) n_par: number of parents to keep in graph pruning
+                (4) dt: tuple (r1,r2), proportion of time range to consider as the parent time window\
+                    Let t_range be the time range. Then for any cell with time t, only cells in the\
+                        time window (t-r2*t_range, t-r1*t_range)
+                (5) k: KNN in parent counting.\
+                    This is different from partition_k. When we pick the time window, KNN\
+                        is computed to choose the most likely parents from the cells in the window.
+                Defaults to {}.
         """
         t_start = time.time()
         self.timer = 0
@@ -214,30 +229,29 @@ class BrODE():
         # Training Configuration
         self.config = {
             # Training Parameters
-            "n_epochs": 500,
-            "learning_rate": 2e-4,
+            "n_epochs": 2000,
+            "n_refine": 10,
+            "learning_rate": None,
             "neg_slope": 0.0,
             "test_iter": None,
             "save_epoch": 100,
-            "n_update_noise": 25,
             "batch_size": 128,
             "early_stop": 5,
             "early_stop_thred": adata.n_vars*1e-3,
             "train_test_split": 0.7,
-            "train_scaling": False,
-            "train_std": False,
             "weight_sample": False,
             "sparsify": 1
         }
 
-        self.set_device(device)
-        self.split_train_test(adata.n_obs)
+        self._set_device(device)
+        self._split_train_test(adata.n_obs)
 
         self.decoder = decoder(adata,
                                cluster_key,
                                tkey,
                                embed_key,
                                self.train_idx,
+                               vkey,
                                param_key,
                                device=self.device,
                                checkpoint=checkpoint,
@@ -250,7 +264,7 @@ class BrODE():
 
         self.timer = time.time() - t_start
 
-    def set_device(self, device):
+    def _set_device(self, device):
         if 'cuda' in device:
             if torch.cuda.is_available():
                 self.device = torch.device(device)
@@ -260,7 +274,7 @@ class BrODE():
         else:
             self.device = torch.device('cpu')
 
-    def split_train_test(self, N):
+    def _split_train_test(self, N):
         rand_perm = np.random.permutation(N)
         n_train = int(N*self.config["train_test_split"])
         self.train_idx = rand_perm[:n_train]
@@ -271,40 +285,40 @@ class BrODE():
     def forward(self, t, y):
         """Evaluate the model in training.
 
-        Arguments
-        ---------
+        Args:
+            t (:class:`torch.tensor`):
+                Cell time, (N,1)
+            y (:class:`torch.tensor`):
+                Cell type encoded in integers, (N,1)
 
-        t : `torch.tensor`
-            Cell time, (N,1)
-        y : `torch.tensor`
-            Cell type encoded in integers, (N,1)
+        Returns:
+            tuple:
 
-        Returns
-        -------
-        uhat, shat : `torch.tensor`
-            Predicted u and s values, (N,G)
+                - :class:`torch.Tensor`: Predicted u values, (N, G)
+
+                - :class:`torch.Tensor`: Predicted s values, (N, G)
         """
         uhat, shat = self.decoder.forward(t, y, neg_slope=self.config['neg_slope'])
 
         return uhat, shat
 
     def eval_model(self, t, y, gidx=None):
-        """Evaluate the model in validation/test.
+        """Evaluate the model on a validation/test.
 
-        Arguments
-        ---------
+        Args:
+            t (:class:`torch.tensor`):
+                Cell time, (N,1)
+            y (:class:`torch.tensor`):
+                Cell type encoded in integers, (N,1)
+            gidx (:class:`numpy array`, optional):
+                A subset of genes to compute
 
-        t : `torch.tensor`
-            Cell time, (N,1)
-        y : `torch.tensor`
-            Cell type encoded in integers, (N,1)
-        gidx : `numpy array`, optional
-            A subset of genes to compute
+        Returns:
+            tuple:
 
-        Returns
-        -------
-        uhat, shat : `torch.tensor`
-            Predicted u and s values, (N,G)
+                - :class:`torch.Tensor`: Predicted u values, (N, G)
+
+                - :class:`torch.Tensor`: Predicted s values, (N, G)
         """
         uhat, shat = self.decoder.pred_su(t, y, gidx)
 
@@ -322,30 +336,44 @@ class BrODE():
     # Training Objective
     ############################################################
 
-    def ode_risk(self,
-                 u,
-                 s,
-                 uhat,
-                 shat,
-                 sigma_u, sigma_s,
-                 weight=None):
+    def _ode_risk(self,
+                  u,
+                  s,
+                  uhat,
+                  shat,
+                  sigma_u, sigma_s,
+                  weight=None):
         # 1. u,s,uhat,shat: raw and predicted counts
         # 2. sigma_u, sigma_s : standard deviation of the Gaussian likelihood (decoder)
         # 3. weight: sample weight
-
+        clip_fn = nn.Hardtanh(-P_MAX, P_MAX)
         neg_log_gaussian = 0.5*((uhat-u)/sigma_u).pow(2) \
             + 0.5*((shat-s)/sigma_s).pow(2) \
             + torch.log(sigma_u)+torch.log(sigma_s*2*np.pi)
-
+        neg_log_gaussian = clip_fn(neg_log_gaussian)
         if weight is not None:
             neg_log_gaussian = neg_log_gaussian*weight.view(-1, 1)
 
         return torch.mean(torch.sum(neg_log_gaussian, 1))
 
-    def train_epoch(self,
-                    train_loader,
-                    test_set,
-                    optimizer):
+    def _train_epoch(self,
+                     train_loader,
+                     test_set,
+                     optimizer):
+        """Training in each epoch with early stopping.
+
+        Args:
+            train_loader (:class:`torch.utils.data.DataLoader`):
+                Data loader of the input data.
+            test_set (:class:`torch.utils.data.Dataset`):
+                Validation dataset
+            optimizer (optimizer from :class:`torch.optim`):
+                Optimizer for ODE parameters.
+
+        Returns:
+            bool:
+                Whether to stop training based on the early stopping criterium.
+        """
         self.set_mode('train')
         stop_training = False
 
@@ -369,10 +397,12 @@ class BrODE():
 
             uhat, shat = self.forward(tbatch, label_batch.squeeze())
 
-            loss = self.ode_risk(u, s,
-                                 uhat, shat,
-                                 torch.exp(self.decoder.sigma_u), torch.exp(self.decoder.sigma_s))
+            loss = self._ode_risk(u, s,
+                                  uhat, shat,
+                                  torch.exp(self.decoder.sigma_u), torch.exp(self.decoder.sigma_s))
             loss.backward()
+            # gradient clipping
+            torch.nn.utils.clip_grad_value_(self.decoder.parameters(), GRAD_MAX)
             optimizer.step()
 
             self.loss_train.append(loss.detach().cpu().item())
@@ -380,20 +410,22 @@ class BrODE():
         return stop_training
 
     def load_config(self, config):
-        # We don't have to specify all the hyperparameters. Just pass the ones we want to modify.
+        """Update hyper-parameters.
+
+        Args:
+            config (dict): Contains all hyper-parameters users want to modify.
+        """
         for key in config:
             if key in self.config:
                 self.config[key] = config[key]
             else:
                 self.config[key] = config[key]
                 print(f"Added new hyperparameter: {key}")
-        if self.config["train_scaling"]:
-            self.decoder.scaling.requires_grad = True
-        if self.config["train_std"]:
-            self.decoder.sigma_u.requires_grad = True
-            self.decoder.sigma_s.requires_grad = True
 
     def print_weight(self):
+        """Print out cell type transition probability matrix as a pandas.DataFrame.
+        Each row represents a descendant cell type and columns are progenitors.
+        """
         w = self.decoder.w.cpu().numpy()
         with pd.option_context('display.max_rows', None,
                                'display.max_columns', None,
@@ -407,19 +439,25 @@ class BrODE():
             w_df = pd.DataFrame(w_dic, index=pd.Index(cell_types))
             print(w_df)
 
-    def update_std_noise(self, train_set):
+    def _update_std_noise(self, train_set):
         G = train_set.G
         Uhat, Shat, ll = self.pred_all(train_set.data,
-                                       torch.tensor(train_set.time).double().to(self.device),
+                                       torch.tensor(train_set.time).float().to(self.device),
                                        train_set.labels,
-                                       train_set.N,
-                                       train_set.G,
                                        np.array(range(G)))
-        self.decoder.sigma_u = nn.Parameter(torch.tensor(np.log((Uhat-train_set.data[:, :G]).std(0)+1e-10),
+        self.decoder.sigma_u = nn.Parameter(torch.tensor(np.log((Uhat-train_set.data[:, :G]).std(0)+1e-16),
                                             device=self.device))
-        self.decoder.sigma_s = nn.Parameter(torch.tensor(np.log((Shat-train_set.data[:, G:]).std(0)+1e-10),
+        self.decoder.sigma_s = nn.Parameter(torch.tensor(np.log((Shat-train_set.data[:, G:]).std(0)+1e-16),
                                             device=self.device))
         return
+
+    def _set_lr(self, p):
+        """Set the learning rates based data sparsity.
+
+        Args:
+            p (float): Data sparsity, should be between 0 and 1.
+        """
+        self.config["learning_rate"] = 10**(-4*p-3)
 
     def train(self,
               adata,
@@ -431,34 +469,34 @@ class BrODE():
               figure_path="figures"):
         """Train the model.
 
-        Arguments
-        ---------
-        adata : :class:`anndata.AnnData`
-        tkey : str
-            Key in adata.obs storing the latent cell time
-        cluster_key : str
-            Key in adata.obs storing the cell type annotation.
-        config : dictionary, optional
-            Contains training hyperparameters.
-            All hyperparameters have default values, so users don't need to set every one of them.
-        plot : bool, optional
-            Whether to generate gene plots during training. Used mainly for debugging.
-        gene_plot : `numpy array` or string list, optional
-            Genes to plot during training. Effective only if 'plot' is set to True
-        figure_path : str, optional
-            Path to the folder to save figures
-        embed : str, optional
-            2D embedding name in .obsm for visualization.
+        Args:
+            adata (:class:`anndata.AnnData`):
+                AnnData object.
+            tkey (str):
+                Key in adata.obs storing the latent cell time
+            cluster_key (str):
+                Contains training hyperparameters.
+            config (dict, optional):
+                All hyperparameters have default values, so users don't need to set every one of them.
+                Key in adata.obs storing the cell type annotation. Defaults to {}.
+            plot (bool, optional):
+                Whether to generate gene plots during training.
+                Used mainly for debugging.. Defaults to False.
+            gene_plot (list, optional):
+                Genes to plot during training.
+                Effective only if 'plot' is set to True. Defaults to [].
+            figure_path (str, optional):
+                Path to the folder to save figures. Defaults to "figures".
         """
         self.tkey = tkey
         self.cluster_key = cluster_key
         self.load_config(config)
 
-        if self.config["train_scaling"]:
-            self.decoder.scaling.requires_grad = True
-        if self.config["train_std"]:
-            self.decoder.sigma_u.requires_grad = True
-            self.decoder.sigma_s.requires_grad = True
+        if self.config["learning_rate"] is None:
+            p = (np.sum(adata.layers["unspliced"].A > 0)
+                 + (np.sum(adata.layers["spliced"].A > 0)))/adata.n_obs/adata.n_vars/2
+            self._set_lr(p)
+            print(f'Learning Rate based on Data Sparsity: {self.config["learning_rate"]:.4f}')
 
         print("------------------------ Train a Branching ODE ------------------------")
         # Get data loader
@@ -487,12 +525,7 @@ class BrODE():
         # define optimizer
         print("*********                 Creating optimizers                 *********")
         param_ode = [self.decoder.alpha, self.decoder.beta, self.decoder.gamma,
-                     self.decoder.t_trans, self.decoder.u0, self.decoder.s0]
-        if self.config["train_scaling"]:
-            param_ode = param_ode+[self.decoder.scaling]
-        if self.config["train_std"]:
-            param_ode = param_ode+[self.decoder.sigma_u, self.decoder.sigma_s]
-
+                     self.decoder.t_trans, self.decoder.u0_root, self.decoder.s0_root]
         optimizer = torch.optim.Adam(param_ode, lr=self.config["learning_rate"])
         print("*********                      Finished.                      *********")
 
@@ -502,29 +535,50 @@ class BrODE():
         n_epochs = self.config["n_epochs"]
         start = time.time()
 
-        for epoch in range(n_epochs):
-            stop_training = self.train_epoch(data_loader, test_set, optimizer)
+        sigma_u_prev = self.decoder.sigma_u.detach().cpu().numpy()
+        sigma_s_prev = self.decoder.sigma_s.detach().cpu().numpy()
+        noise_change = np.inf
+        count_epoch = 0
+        for r in range(self.config['n_refine']):
+            print(f"*********                        Round {r+1}                      *********")
+            self.n_drop = 0
+            for epoch in range(n_epochs):
+                stop_training = self._train_epoch(data_loader, test_set, optimizer)
+                if plot and (epoch == 0 or (epoch+1) % self.config["save_epoch"] == 0):
+                    ll_train = self.test(train_set,
+                                         f"train{count_epoch+epoch+1}",
+                                         gind,
+                                         gene_plot,
+                                         True,
+                                         figure_path)
+                    self.set_mode('train')
+                    ll = -np.inf if len(self.loss_test) == 0 else self.loss_test[-1]
+                    print(f"Epoch {count_epoch+epoch+1}: Train Log Likelihood = {ll_train:.3f}, "
+                          f"Test Log Likelihood = {ll:.3f}, "
+                          f"Total Time = {convert_time(time.time()-start)}")
 
-            if plot and (epoch == 0 or (epoch+1) % self.config["save_epoch"] == 0):
-                ll_train = self.test(train_set,
-                                     f"train{epoch+1}",
-                                     gind,
-                                     gene_plot,
-                                     True,
-                                     figure_path)
-                self.set_mode('train')
-                ll = -np.inf if len(self.loss_test) == 0 else self.loss_test[-1]
-                print(f"Epoch {epoch+1}: Train Log Likelihood = {ll_train:.3f}, \
-                      Test Log Likelihood = {ll:.3f}, \t \
-                      Total Time = {convert_time(time.time()-start)}")
-
-            if (epoch+1) % self.config["n_update_noise"] == 0:
-                self.update_std_noise(train_set)
-
+                if stop_training:
+                    print(f"*********     "
+                          f"Round {r+1}: Early Stop Triggered at epoch {epoch+1}."
+                          f"    *********")
+                    break
+            self.config['early_stop_thred'] *= 0.95
+            count_epoch += (epoch+1)
+            if r > 0:
+                sigma_u = self.decoder.sigma_u.detach().cpu().numpy()
+                sigma_s = self.decoder.sigma_s.detach().cpu().numpy()
+                norm_delta_sigma = np.sum((sigma_u-sigma_u_prev)**2 + (sigma_s-sigma_s_prev)**2)
+                norm_sigma = np.sum(sigma_u_prev**2 + sigma_s_prev**2)
+                sigma_u_prev = self.decoder.sigma_u.detach().cpu().numpy()
+                sigma_s_prev = self.decoder.sigma_s.detach().cpu().numpy()
+                noise_change = norm_delta_sigma/norm_sigma
+                print(f"Change in noise variance: {noise_change:.4f}")
+            stop_training = noise_change < 0.01
             if stop_training:
-                print(f"*********           Early Stop Triggered at epoch {epoch+1}.            *********")
+                print(f"Training converged at round {r}")
                 break
-
+            else:
+                self._update_std_noise(train_set)
         if plot:
             plot_train_loss(self.loss_train,
                             range(1, len(self.loss_train)+1),
@@ -538,10 +592,27 @@ class BrODE():
         print(f"*********              Finished. Total Time = {convert_time(self.timer)}             *********")
         return
 
-    def pred_all(self, data, t, cell_labels, N, G, gene_idx=None):
-        # data [N x 2G] : input mRNA count
-        # mode : train or test or both
-        # gene_idx : gene index, used for reducing unnecessary memory usage
+    def pred_all(self, data, t, cell_labels, gene_idx=None):
+        """Generate different types of predictions from the model for all cells.
+
+        Args:
+            data (:class:`torch.Tensor`):
+                Input cell-by-gene tensor, with U and S concatenated at the gene dimension (dim=1).
+            cell_labels (:class:`torch.Tensor`):
+                Cell type annotations encoded in integers.
+            gene_idx (array like, optional):
+                Indices of genes for subsetting.
+                If set to None, only the log likelihood will be computed. Defaults to None.
+
+        Returns:
+            tuple:
+
+                - :class:`torch.Tensor`: Predicted unspliced and spliced counts.
+
+                - float: ODE training/validation loss.
+        """
+        N, G = data.shape
+        G = G//2
         if gene_idx is None:
             Uhat, Shat = None, None
         else:
@@ -555,20 +626,20 @@ class BrODE():
                 if gene_idx is not None:
                     Uhat[i*B:(i+1)*B] = uhat[:, gene_idx].cpu().numpy()
                     Shat[i*B:(i+1)*B] = shat[:, gene_idx].cpu().numpy()
-                loss = self.ode_risk(torch.tensor(data[i*B:(i+1)*B, :G]).double().to(self.device),
-                                     torch.tensor(data[i*B:(i+1)*B, G:]).double().to(self.device),
-                                     uhat, shat,
-                                     torch.exp(self.decoder.sigma_u), torch.exp(self.decoder.sigma_s))
+                loss = self._ode_risk(torch.tensor(data[i*B:(i+1)*B, :G]).float().to(self.device),
+                                      torch.tensor(data[i*B:(i+1)*B, G:]).float().to(self.device),
+                                      uhat, shat,
+                                      torch.exp(self.decoder.sigma_u), torch.exp(self.decoder.sigma_s))
                 ll = ll - (B/N)*loss
             if N > B*Nb:
                 uhat, shat = self.eval_model(t[B*Nb:], torch.tensor(cell_labels[B*Nb:]).to(self.device))
                 if gene_idx is not None:
                     Uhat[Nb*B:] = uhat[:, gene_idx].cpu().numpy()
                     Shat[Nb*B:] = shat[:, gene_idx].cpu().numpy()
-                loss = self.ode_risk(torch.tensor(data[B*Nb:, :G]).double().to(self.device),
-                                     torch.tensor(data[B*Nb:, G:]).double().to(self.device),
-                                     uhat, shat,
-                                     torch.exp(self.decoder.sigma_u), torch.exp(self.decoder.sigma_s))
+                loss = self._ode_risk(torch.tensor(data[B*Nb:, :G]).float().to(self.device),
+                                      torch.tensor(data[B*Nb:, G:]).float().to(self.device),
+                                      uhat, shat,
+                                      torch.exp(self.decoder.sigma_u), torch.exp(self.decoder.sigma_s))
                 ll = ll - ((N-B*Nb)/N)*loss
         return Uhat, Shat, ll.cpu().item()
 
@@ -583,10 +654,8 @@ class BrODE():
 
         self.set_mode('eval')
         Uhat, Shat, ll = self.pred_all(dataset.data,
-                                       torch.tensor(dataset.time).double().to(self.device),
+                                       torch.tensor(dataset.time).float().to(self.device),
                                        dataset.labels,
-                                       dataset.N,
-                                       dataset.G,
                                        gind)
         cell_labels_raw = int2str(dataset.labels, self.decoder.label_dic_rev)
         if plot:
@@ -606,31 +675,30 @@ class BrODE():
     def save_model(self, file_path, name='brode'):
         """Save the decoder parameters to a .pt file.
 
-        Arguments
-        ---------
-
-        file_path : str
-            Path to the folder for saving the model parameters
-        name : str
-            Name of the saved file.
+        Args:
+            file_path (str): 
+                Path to the folder for saving the model parameters
+            name (str): 
+                Name of the saved file.
         """
         os.makedirs(file_path, exist_ok=True)
         torch.save(self.decoder.state_dict(), f"{file_path}/{name}.pt")
 
     def save_anndata(self, adata, key, file_path, file_name=None):
-        """Save the ODE parameters and cell time to the anndata object and write it to disk.
+        """Updates an input AnnData object with inferred latent variable
+            and estimations from the model and write it to disk.
 
-        Arguments
-        ---------
-
-        adata : :class:`anndata`
-        key : str
-            Key name used to store all results
-        file_path : str
-            Path to the folder for saving the output file
-        file_name : str, optional
-            Name of the output file. If set to None, the original anndata object will be overwritten,
-            but nothing will be saved to disk.
+        Args:
+            adata (:class:`anndata.AnnData`):
+                Input AnnData object
+            key (str):
+                Signature used to store all parameters of the model.
+                Users can save outputs from different models to the same AnnData object using different keys.
+            file_path (str):
+                Path to the folder for saving.
+            file_name (str, optional):
+                If set to a string ending with .h5ad, the updated anndata object will be written to disk.
+                Defaults to None.
         """
         self.set_mode('eval')
         os.makedirs(file_path, exist_ok=True)
@@ -645,8 +713,8 @@ class BrODE():
         adata.varm[f"{key}_beta"] = np.exp(self.decoder.beta.detach().cpu().numpy()).T
         adata.varm[f"{key}_gamma"] = np.exp(self.decoder.gamma.detach().cpu().numpy()).T
         adata.uns[f"{key}_t_trans"] = np.exp(self.decoder.t_trans.detach().cpu().numpy())
-        adata.varm[f"{key}_u0"] = np.exp(self.decoder.u0.detach().cpu().numpy()).T
-        adata.varm[f"{key}_s0"] = np.exp(self.decoder.s0.detach().cpu().numpy()).T
+        adata.varm[f"{key}_u0_root"] = np.exp(self.decoder.u0_root.detach().cpu().numpy()).T
+        adata.varm[f"{key}_s0_root"] = np.exp(self.decoder.s0_root.detach().cpu().numpy()).T
         adata.var[f"{key}_scaling"] = np.exp(self.decoder.scaling.detach().cpu().numpy())
         adata.var[f"{key}_sigma_u"] = np.exp(self.decoder.sigma_u.detach().cpu().numpy())
         adata.var[f"{key}_sigma_s"] = np.exp(self.decoder.sigma_s.detach().cpu().numpy())
@@ -655,8 +723,6 @@ class BrODE():
         Uhat, Shat, ll = self.pred_all(X,
                                        torch.tensor(t.reshape(-1, 1)).to(self.device),
                                        label_int,
-                                       adata.n_obs,
-                                       adata.n_vars,
                                        np.array(range(adata.n_vars)))
         adata.layers[f"{key}_uhat"] = Uhat
         adata.layers[f"{key}_shat"] = Shat

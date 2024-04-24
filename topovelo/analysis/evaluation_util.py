@@ -1754,7 +1754,7 @@ def spatial_velocity_consistency(adata, vkey, spatial_graph_key, gene_mask=None)
     consistency_score = []
     for ith, nbs_i in enumerate(nbs):
         if len(nbs_i) < 1:
-            continue;
+            continue
         consistency_score.append(_pearson_corr(velocities[ith], velocities[nbs_i]).mean())
     # adata.obs[f'{vkey}_consistency'] = consistency_score
     return np.nanmean(consistency_score)

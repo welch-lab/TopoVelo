@@ -5,8 +5,6 @@ from sklearn.neighbors import NearestNeighbors, BallTree
 from scipy.spatial import Delaunay
 from scipy.sparse import csr_matrix, eye
 import pandas as pd
-import NaiveDE as nde
-import SpatialDE as spd
 from .scvelo_preprocessing import *
 from .model.scvelo_util import leastsq_NxN, R_squared
 
@@ -325,6 +323,12 @@ def preprocess(adata,
 
 
 def get_spatialde(adata, min_counts=1, min_counts_u=1):
+    try:
+        import NaiveDE as nde
+        import SpatialDE as spd
+    except ImportError:
+        raise ImportError("Please install NaiveDE and SpatialDE.")
+        return
     filter_genes(adata, min_counts=min_counts, min_counts_u=min_counts_u)
     adata.var_names_make_unique()
     counts = pd.DataFrame(adata.X.todense(), columns=adata.var_names, index=adata.obs_names)
@@ -355,6 +359,20 @@ def preprocess_spatialde(adata,
                          n_pcs=30,
                          n_neighbors=30,
                          save=None):
+    """Preprocess the data using spatialDE.
+
+    Args:
+        adata (AnnData): Annotated data matrix.
+        n_gene (int): Number of genes to keep.
+        min_counts (int): Minimal number of counts.
+        min_counts_u (int): Minimal number of unspliced counts.
+        n_pcs (int): Number of principal components.
+        n_neighbors (int): Number of neighbors for KNN averaging.
+        save (str): File path to save the processed data.
+    
+    Note:
+        This function preprocesses the data using spatialDE, which is a method for spatial transcriptomics.
+    """
     gene_sort = get_spatialde(adata, min_counts, min_counts_u)
     
     normalize_per_cell(adata)

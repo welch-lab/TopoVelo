@@ -1,7 +1,6 @@
 import numpy as np
 import pandas as pd
 import os
-import psutil
 import matplotlib.pyplot as plt
 from scipy.sparse import csr_matrix, csc_matrix, coo_matrix, csr_array
 import torch
@@ -34,30 +33,6 @@ from .vanilla_vae import VanillaVAE, kl_gaussian
 from .velocity import rna_velocity_vae
 P_MAX = 1e4
 GRAD_MAX = 1e5
-##############################################################
-# VAE
-##############################################################
-
-
-def print_cpu_mem():
-        out = psutil.virtual_memory()
-        print('Total RAM (GB): ', out[0]/(1024**3))
-        print('Available RAM (GB): ', out[1]/(1024**3))
-        print('RAM memory % used:', out[2])
-        # Getting usage of virtual_memory in GB ( 4th field)
-        print('RAM Used (GB):', psutil.virtual_memory()[3]/(1024**3))
-
-
-def print_gpu_mem(name):
-        mem_stats = {
-            'Max Reserved': [torch.cuda.max_memory_reserved()/(1024**3)],
-            'Reserved': [torch.cuda.max_memory_reserved()/(1024**3)],
-            'Max Allocated': [torch.cuda.max_memory_allocated()/(1024**3)],
-            'Allocated': [torch.cuda.memory_allocated()/(1024**3)]
-        }
-        print(f"^^^      Checkpoint {name}      ^^^")
-        print(pd.DataFrame(mem_stats))
-        print("^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^")
 
 
 class Encoder(nn.Module):
@@ -3559,6 +3534,7 @@ class VAE(VanillaVAE):
         
         Returns:
             numpy.array : Attention score of shape (num_cell, num_cell, num_att_head).
+                The first dimension corresponds to source. Second dimension is target.
         """
         self.set_mode('eval')
         data_in_scale = self._scale_data_for_enc(data_in)
@@ -3571,6 +3547,7 @@ class VAE(VanillaVAE):
         n_batch = n_nodes // batch_size
 
         with torch.no_grad():
+            # Each batch is the target (receiver) of the attention
             for i in range(n_batch):
                 edge_index = torch.cartesian_prod(torch.range(start=0, end=n_nodes-1, dtype=int),
                                                   torch.range(start=i*batch_size, end=(i+1)*batch_size-1, dtype=int)).T.to(self.device)
@@ -3603,7 +3580,7 @@ class VAE(VanillaVAE):
             numpy.array : Attention score of shape (num_cell, num_cell, num_att_head).
         """
         self.set_mode('eval')
-        gatconv = self.decoder.net_rho2.conv1
+        gatconv = self.decoder.net_rho.conv2
         if not isinstance(gatconv, GATConv):
             print("Skipping decoder attention score computation.")
             return None
@@ -3657,7 +3634,7 @@ class VAE(VanillaVAE):
                     mask = col_idx >= n_batch*batch_size
                     n_head = att[1].shape[1]
                     att_score.append(att[1].cpu().numpy()[mask].reshape(n_nodes, n_nodes-n_batch*batch_size, n_head))
-        return np.stack(att_score, 1)
+        return np.concatenate(att_score, 1)
 
     def _forward_to_rho(self):
         self.set_mode('eval')
