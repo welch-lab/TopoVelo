@@ -511,6 +511,7 @@ def post_analysis(adata,
                   nplot=500,
                   embed="umap",
                   grid_size=(1, 1),
+                  cluster_plot_config={},
                   phase_plot_config={},
                   gene_plot_config={},
                   time_plot_config={},
@@ -561,6 +562,8 @@ def post_analysis(adata,
             Low-dimensional embedding name. Defaults to 'umap'.
         grid_size (tuple[int], optional):
             Grid size for plotting. Defaults to (1, 1).
+        cluster_plot_config (dict, optional):
+            Configuration for cluster plot. Defaults to {}.
         phase_plot_config (dict, optional):
             Configuration for phase plot. Defaults to {}.
         gene_plot_config (dict, optional):
@@ -754,10 +757,15 @@ def post_analysis(adata,
 
     # Generate plots
     if 'cluster' in plot_type or "all" in plot_type:
+        plot_config = PlotConfig('cluster')
+        plot_config.set_multiple(cluster_plot_config)
+        if figure_path is not None:
+            plot_config.set('save', f"{figure_path}/{test_id}_{embed}.png")
+        else:
+            plot_config.set('save', None)
         plot_cluster(adata.obsm[f"X_{embed}"],
                      adata.obs[cluster_key].to_numpy(),
-                     save=(None if figure_path is None else
-                           f"{figure_path}/{test_id}_{embed}.png"))
+                     *plot_config.get_all())
 
     if "time" in plot_type or "all" in plot_type:
         X_embed = adata.obsm[f"X_{embed}"]

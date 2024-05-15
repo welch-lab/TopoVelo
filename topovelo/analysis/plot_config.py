@@ -1,4 +1,16 @@
 DEFAULT = {
+    "cluster": {
+        "embed": None,
+        "figsize": None,
+        "real_aspect_ratio": True,
+        "palette": None,
+        "markersize": 5,
+        "markerscale": 2.0,
+        "show_legend": True,
+        "legend_fontsize": 7,
+        "ncols": None,
+        "bbox_to_anchor": None,
+    },
     "time": {
         "downsample": 1,
         "max_quantile": 0.99,
@@ -11,6 +23,7 @@ DEFAULT = {
         "linewidths": 0.5,
         "grid_size": None,
         "real_aspect_ratio": True,
+        "title_off": False,
         "title_fontsize": None,
         "show_colorbar": True,
         "colorbar_fontsize": 7,
