@@ -418,11 +418,16 @@ def plot_cluster_axis(ax,
 
 def plot_cluster(x_embed,
                  cell_labels,
-                 color_map=None,
                  embed=None,
                  figsize=None,
                  real_aspect_ratio=True,
-                 markersize=20,
+                 palette=None,
+                 markersize=MARKERSIZE,
+                 markerscale=MARKERSCALE,
+                 show_legend=True,
+                 legend_fontsize=LEGEND_FONTSIZE,
+                 ncols=None,
+                 bbox_to_anchor=None,
                  save=None,):
     """Plot the predicted cell types from the encoder
 
@@ -431,8 +436,6 @@ def plot_cluster(x_embed,
             2D embedding for visualization, (N,2)
         cell_labels (:class:`numpy.ndarray`):
              Cell type annotation, (N,)
-        color_map (str, optional):
-            User-defined colormap for cell clusters. Defaults to None.
         embed (str, optional):
             Embedding name. Used for labeling axes. Defaults to 'umap'.
         figsize (tuple, optional):
@@ -440,10 +443,18 @@ def plot_cluster(x_embed,
         real_aspect_ratio (bool, optional):
             Whether to set the aspect ratio of the plot to be the same as the data.
             Defaults to False.
+        palette (list, optional):
+            Color palette for cell clusters. Defaults to None.
         markersize (int, optional):
-            Marker size. Defaults to 20.
-        show_labels (bool, optional):
-            Whether to add cell cluster names to the plot. Defaults to True.
+            Marker size. Defaults to 3.
+        markerscale (float, optional):
+            Marker scale. Defaults to 1.0.
+        legend_fontsize (int, optional):
+            Legend font size. Defaults to 5.
+        ncols (int, optional):
+            Number of columns in the legend. Defaults to None.
+        bbox_to_anchor (tuple, optional):
+            Bounding box for the legend. Defaults to None.
         save (str, optional):
             Figure name for saving (including path). Defaults to None.
     """
@@ -455,7 +466,9 @@ def plot_cluster(x_embed,
     y = x_embed[:, 1]
     x_range = x.max()-x.min()
     y_range = y.max()-y.min()
-    colors = get_colors(len(cell_types), color_map)
+
+    if palette is None:
+        palette = get_colors(len(cell_types))
 
     n_char_max = np.max([len(x) for x in cell_types])
     for i, typei in enumerate(cell_types):
@@ -463,16 +476,35 @@ def plot_cluster(x_embed,
         xbar, ybar = np.mean(x[mask]), np.mean(y[mask])
         ax.scatter(x[mask], y[mask],
                    s=markersize,
-                   color=colors[i % len(colors)],
+                   color=palette[i % len(palette)],
                    edgecolors='none')
         n_char = len(typei)
-        txt = ax.text(xbar - x_range*4e-3*n_char, ybar - y_range*4e-3, typei, fontsize=max(15, 100//n_char_max), color='k')
-        txt.set_bbox(dict(facecolor='white', alpha=0.5, edgecolor='black'))
+        if bbox_to_anchor is None and show_legend:
+            txt = ax.text(xbar - x_range*4e-3*n_char, ybar - y_range*4e-3, typei, fontsize=max(15, 100//n_char_max), color='k')
+            txt.set_bbox(dict(facecolor='white', alpha=0.5, edgecolor='black'))
+    if bbox_to_anchor is not None:
+        if len(bbox_to_anchor) == 2 and show_legend:
+            lgd = ax.legend(cell_types,
+                            fontsize=legend_fontsize,
+                            markerscale=markerscale,
+                            bbox_to_anchor=bbox_to_anchor)
+        elif len(bbox_to_anchor) == 4 and show_legend:
+            if ncols is None:
+                ncols = max(len(cell_types), 5)
+            lgd = ax.legend(cell_types,
+                            ncols=ncols,
+                            fontsize=legend_fontsize,
+                            markerscale=markerscale,
+                            bbox_to_anchor=bbox_to_anchor,
+                            loc='center')
     if embed is not None:
         ax.set_xlabel(f'{embed} 1')
         ax.set_ylabel(f'{embed} 2')
     ax.set_axis_off()
-    save_fig(fig, save)
+    if bbox_to_anchor is not None:
+        save_fig(fig, save, (lgd,))
+    else:
+        save_fig(fig, save)
 
 
 def plot_train_loss(loss, iters, save=None):
@@ -1197,6 +1229,7 @@ def plot_spatial_extrapolation(xy,
 
 def plot_legend(adata,
                 cluster_key='clusters',
+                figsize=(6, 1),
                 ncol=1,
                 markerscale=MARKERSCALE,
                 fontsize=LEGEND_FONTSIZE,
@@ -1228,7 +1261,7 @@ def plot_legend(adata,
     
     lines = []
 
-    fig, ax = plt.subplots(figsize=(6, 1))
+    fig, ax = plt.subplots(figsize=figsize)
     for i, x in enumerate(cell_types):
         line = ax.plot([], 'o', color=palette[i], label=x)
         lines.append(line)
@@ -1251,12 +1284,13 @@ def _set_colorbar(ax,
                   colorbar_fontsize=7,
                   colorbar_ticks=None,
                   colorbar_pos=[1.04, 0.2, 0.05, 0.6],
-                  colorbar_tick_fontsize=5):
+                  colorbar_tick_fontsize=5,
+                  labelpad=5):
     norm = matplotlib.colors.Normalize(vmin=vmin, vmax=vmax)
     sm = matplotlib.cm.ScalarMappable(norm=norm, cmap=cmap)
     cax = ax.inset_axes(colorbar_pos)
     cbar = plt.colorbar(sm, ax=ax, cax=cax)
-    cbar.ax.get_yaxis().labelpad = 5
+    cbar.ax.get_yaxis().labelpad = labelpad
     cbar.ax.set_ylabel(colorbar_name, rotation=270, fontsize=colorbar_fontsize)
 
     if colorbar_ticklabels is not None:
@@ -1475,6 +1509,8 @@ def plot_heat_density(vals,
                       colorbar_limits=None,
                       colorbar_ticklabels=None,
                       colorbar_ticks=None,
+                      colorbar_tick_fontsize=7,
+                      colorbar_labelpad=2,
                       colorbar_pos=[1.04, 0.2, 0.05, 0.6],
                       bbox_to_anchor=(-0.05, 1.0),
                       ncols=1,
@@ -1527,6 +1563,10 @@ def plot_heat_density(vals,
             Tick labels for the colorbar. Defaults to None.
         colorbar_ticks (list, optional):
             Tick positions for the colorbar. Defaults to None.
+        colorbar_tick_fontsize (int, optional):
+            Font size for the colorbar ticks. Defaults to 7.
+        colorbar_labelpad (int, optional):
+            Padding for the colorbar label. Defaults to 2.
         colorbar_pos (list, optional):
             Position of the colorbar. Defaults to [1.04, 0.2, 0.05, 0.6].
         bbox_to_anchor (tuple, optional):
@@ -1593,7 +1633,9 @@ def plot_heat_density(vals,
                            colorbar_ticklabels=colorbar_ticklabels,
                            colorbar_fontsize=colorbar_fontsize,
                            colorbar_ticks=colorbar_ticks,
-                           colorbar_pos=colorbar_pos)
+                           colorbar_pos=colorbar_pos,
+                           colorbar_tick_fontsize=colorbar_tick_fontsize,
+                           labelpad=colorbar_labelpad)
 
     cell_types = np.unique(cell_labels)
     palette = get_colors(len(cell_types)) if palette is None else palette
@@ -3245,6 +3287,7 @@ def plot_time_grid(T,
                    linewidths=0.5,
                    grid_size=None,
                    real_aspect_ratio=True,
+                   title_off=False,
                    title_fontsize=None,
                    show_colorbar=True,
                    colorbar_fontsize=COLORBAR_FONTSIZE,
@@ -3288,6 +3331,8 @@ def plot_time_grid(T,
             Grid size. Defaults to None.
         real_aspect_ratio (bool, optional):
             Whether to use real aspect ratio. Defaults to True.
+        title_off (bool, optional):
+            Whether to show the title. Defaults to False.
         title_fontsize (int, optional):
             Font size of the title. Defaults to None.
         show_colorbar (bool, optional):
@@ -3344,10 +3389,11 @@ def plot_time_grid(T,
                                        c=t[::downsample],
                                        cmap=color_map,
                                        linewidths=linewidths)
-                if method == "Capture Time":
-                    ax[2*row, col].set_title("Expected Temporal Order", fontsize=title_fontsize)
-                else:
-                    ax[2*row, col].set_title(method, fontsize=title_fontsize)
+                if not title_off:
+                    if method == "Capture Time":
+                        ax[2*row, col].set_title("Expected Temporal Order", fontsize=title_fontsize)
+                    else:
+                        ax[2*row, col].set_title(method, fontsize=title_fontsize)
             else:
                 ax[2*row].scatter(X_emb[::downsample, 0],
                                   X_emb[::downsample, 1],
@@ -3357,10 +3403,11 @@ def plot_time_grid(T,
                                   c=t[::downsample],
                                   cmap=color_map,
                                   linewidths=linewidths)
-                if method == "Capture Time":
-                    ax[2*row].set_title("Expected Temporal Order", fontsize=title_fontsize)
-                else:
-                    ax[2*row].set_title(method, fontsize=title_fontsize)
+                if not title_off:
+                    if method == "Capture Time":
+                        ax[2*row].set_title("Expected Temporal Order", fontsize=title_fontsize)
+                    else:
+                        ax[2*row].set_title(method, fontsize=title_fontsize)
 
             # Plot the Time Variance in a Colormap
             var_t = std_t[method]**2
@@ -3410,10 +3457,11 @@ def plot_time_grid(T,
                                      c=t[::downsample],
                                      cmap=color_map,
                                      linewidths=linewidths)
-                if method == "Capture Time":
-                    ax[row, col].set_title("Expected Temporal Order", fontsize=title_fontsize)
-                else:
-                    ax[row, col].set_title(method, fontsize=title_fontsize)
+                if not title_off:
+                    if method == "Capture Time":
+                        ax[row, col].set_title("Expected Temporal Order", fontsize=title_fontsize)
+                    else:
+                        ax[row, col].set_title(method, fontsize=title_fontsize)
                 ax[row, col].axis('off')
             elif n_col > 1:
                 ax[col].scatter(X_emb[::downsample, 0],
@@ -3423,10 +3471,11 @@ def plot_time_grid(T,
                                 c=t[::downsample],
                                 cmap=color_map,
                                 linewidths=linewidths)
-                if method == "Capture Time":
-                    ax[col].set_title("Expected Temporal Order", fontsize=title_fontsize)
-                else:
-                    ax[col].set_title(method, fontsize=title_fontsize)
+                if not title_off:
+                    if method == "Capture Time":
+                        ax[col].set_title("Expected Temporal Order", fontsize=title_fontsize)
+                    else:
+                        ax[col].set_title(method, fontsize=title_fontsize)
                 ax[col].axis('off')
             elif n_row > 1:
                 ax[row].scatter(X_emb[::downsample, 0],
@@ -3436,10 +3485,11 @@ def plot_time_grid(T,
                                 c=t[::downsample],
                                 cmap=color_map,
                                 linewidths=linewidths)
-                if method == "Capture Time":
-                    ax[row].set_title("Expected Temporal Order", fontsize=title_fontsize)
-                else:
-                    ax[row].set_title(method, fontsize=title_fontsize)
+                if not title_off:
+                    if method == "Capture Time":
+                        ax[row].set_title("Expected Temporal Order", fontsize=title_fontsize)
+                    else:
+                        ax[row].set_title(method, fontsize=title_fontsize)
                 ax[row].axis('off')
             else:
                 ax.scatter(X_emb[::downsample, 0],
@@ -3449,10 +3499,11 @@ def plot_time_grid(T,
                            c=t[::downsample],
                            cmap=color_map,
                            linewidths=linewidths)
-                if method == "Capture Time":
-                    ax.set_title("Expected Temporal Order", fontsize=title_fontsize)
-                else:
-                    ax.set_title(method, fontsize=title_fontsize)
+                if not title_off:
+                    if method == "Capture Time":
+                        ax.set_title("Expected Temporal Order", fontsize=title_fontsize)
+                    else:
+                        ax.set_title(method, fontsize=title_fontsize)
                 ax.axis('off')
     if show_colorbar:
         if isinstance(ax, np.ndarray):
