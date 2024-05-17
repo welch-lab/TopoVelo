@@ -3,7 +3,7 @@ from setuptools import setup, find_packages
 setup(
     name='topovelo',
     version='0.0.1',
-    packages=find_packages(),
+    packages=find_packages(include=['topovelo']),
     author='Yichen Gu',
     author_email='gyichen@umich.edu',
     description='topological velocity inference from single-cell spatial transcriptomic data',
@@ -11,17 +11,15 @@ setup(
         'anndata>=0.8.0',
         'hnswlib>=0.6.2',
         'igraph>=0.10.4',
-        'ipykernel',
-        'ipython',
         'loess>=2.1.2',
         'matplotlib>=3.3.0',
-        'memory_profiler',
+        'memory_profiler>=0.61.0',
         'numba>=0.41.0',
         'numpy>=1.23.0',
-        'pandas>=0.23',
+        'pandas>=0.23.0',
         'pynndescent>=0.5.7',
-        'scanpy>=1.5',
-        'scikit-learn>=0.20',
+        'scanpy>=1.5.0',
+        'scikit-learn>=0.20.0',
         'scipy>=1.13.0',
         'scvelo>=0.2.3, <=0.2.5',
         'seaborn>=0.10.0',
@@ -29,6 +27,5 @@ setup(
         'torch_geometric>=2.0.4',
         'tqdm<=4.62.3',
         'umap-learn>=0.3.10',
-    ],
-    python_requires='>=3.9'
+    ]
 )
