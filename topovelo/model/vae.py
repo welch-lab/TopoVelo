@@ -12,7 +12,6 @@ from torch.distributions.poisson import Poisson
 
 from torch_geometric import seed_everything
 from torch_geometric.nn import GCNConv, GATConv
-from torch_geometric.nn.norm import BatchNorm, LayerNorm, GraphNorm
 
 import time
 from ..plotting import plot_sig, plot_time, plot_cluster
@@ -21,13 +20,11 @@ from ..plotting import plot_spatial_extrapolation
 
 from .model_util import hist_equal, init_params, get_ts_global, reinit_params
 from .model_util import convert_time, get_gene_index
-from .model_util import pred_su, ode_numpy, knnx0_index, get_x0, spatial_x1_index, get_x1_spatial, knnx0_index_batch
+from .model_util import pred_su, knnx0_index, get_x0, knnx0_index_batch
 from .model_util import elbo_collapsed_categorical
 from .model_util import assign_gene_mode, find_dirichlet_param, assign_gene_mode_tprior
-from .model_util import get_cell_scale, get_dispersion
 from .model_util import dge2array
-
-from .transition_graph import encode_type
+from .model_util import encode_type
 from .training_data import SCGraphData, Index
 from .vanilla_vae import VanillaVAE, kl_gaussian
 from .velocity import rna_velocity_vae
