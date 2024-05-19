@@ -80,11 +80,9 @@ _rcParams_style = None
 # Functions
 # --------------------------------------------------------------------------------
 
-from matplotlib import rcParams, cm, colors, cbook
+from matplotlib import rcParams, cm, colors
 from cycler import cycler
 import warnings
-
-warnings.filterwarnings("ignore", category=cbook.mplDeprecation)
 
 
 # default matplotlib 2.0 palette slightly modified.

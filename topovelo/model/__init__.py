@@ -5,7 +5,7 @@ from .model_profiler import ModelProfiler
 from .model_util import ode, ode_numpy
 from .model_util import knn_transition_prob
 from .model_util import sample_genes
-from .velocity import rna_velocity_vanillavae, rna_velocity_vae, rna_velocity_brode
+from .velocity import rna_velocity_vanillavae, rna_velocity_vae
 from .training_data import SCGraphData
 
 __all__ = [
@@ -15,7 +15,6 @@ __all__ = [
     "ModelProfiler",
     "rna_velocity_vanillavae",
     "rna_velocity_vae",
-    "rna_velocity_brode",
     "ode",
     "ode_numpy",
     "knn_transition_prob",
