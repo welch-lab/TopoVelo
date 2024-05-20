@@ -1294,18 +1294,17 @@ def _set_colorbar(ax,
     cbar.ax.set_ylabel(colorbar_name, rotation=270, fontsize=colorbar_fontsize)
 
     if colorbar_ticklabels is not None:
-        if len(colorbar_ticklabels) == 2:
-            cbar.ax.get_yaxis().labelpad = 3
         cbar.ax.set_yticklabels(colorbar_ticklabels, fontsize=colorbar_tick_fontsize)
         if colorbar_ticks is None:
-            cbar.set_ticks(np.linspace(vmin, vmax, len(colorbar_ticklabels)), fontsize=colorbar_tick_fontsize)
+            colorbar_ticks = np.linspace(vmin, vmax, len(colorbar_ticklabels))
+            cbar.set_ticks(colorbar_ticks, labels=colorbar_ticklabels, fontsize=colorbar_tick_fontsize)
         else:
-            cbar.set_ticks(colorbar_ticks, fontsize=colorbar_tick_fontsize)
+            cbar.set_ticks(colorbar_ticks, labels=colorbar_ticklabels, fontsize=colorbar_tick_fontsize)
     else:
         if colorbar_ticks is None:
-            cbar.set_ticks([vmin, vmax], fontsize=colorbar_tick_fontsize)
+            cbar.set_ticks([vmin, vmax], labels=[vmin, vmax], fontsize=colorbar_tick_fontsize)
         else:
-            cbar.set_ticks(colorbar_ticks, fontsize=colorbar_tick_fontsize)
+            cbar.set_ticks(colorbar_ticks, labels=colorbar_ticks, fontsize=colorbar_tick_fontsize)
         cbar.ax.tick_params(labelsize=colorbar_tick_fontsize)
     return ax
 
@@ -1624,7 +1623,7 @@ def plot_heat_density(vals,
         if isinstance(colorbar_limits, (list, tuple)):
             vmin, vmax = colorbar_limits[0], colorbar_limits[1]
         else:
-            vmin, vmax = round(vals_grid[mask].min(), 2), round(vals_grid[mask].max(), 2)
+            vmin, vmax = round(vals.min(), 2), round(vals.max(), 2)
         ax = _set_colorbar(ax,
                            vmin,
                            vmax,

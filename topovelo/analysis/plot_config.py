@@ -38,7 +38,7 @@ DEFAULT = {
     "stream": {
         "width": 6 / 2.54,
         "height": 4 / 2.54,
-        "density": 2,
+        "density": 1,
         "markersize": 5,
         "alpha": 0.5,
         "linewidth": 1.5,
@@ -147,6 +147,13 @@ class PlotConfig():
         Returns:
             The value of the key.
         """
+        if key == 'palette' and self.config[key] is not None:
+            # check if the palette is in hex code format
+            if self.config[key][0][0] == '#':
+                from cycler import cycler
+                return cycler(color=self.config[key])
+            else:
+                return self.config[key]
         return self.config[key]
     
     def get_all(self):

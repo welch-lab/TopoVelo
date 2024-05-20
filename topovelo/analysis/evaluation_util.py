@@ -1237,8 +1237,11 @@ def cross_boundary_correctness(
             if len(nodes) == 0:
                 continue
             position_dif = x_emb[nodes] - x_pos
-            dir_scores = cosine_similarity(position_dif, x_vel.reshape(1, -1)).flatten()
-            type_score.append(np.nanmean(dir_scores))
+            try:
+                dir_scores = cosine_similarity(position_dif, x_vel.reshape(1, -1)).flatten()
+                type_score.append(np.nanmean(dir_scores))
+            except ValueError:
+                pass
         if len(type_score) == 0:
             print(f'Warning: cell type transition pair ({u},{v}) does not exist in the KNN graph. Ignored.')
         else:
@@ -1357,12 +1360,18 @@ def gen_cross_boundary_correctness(
                 continue
             position_dif = x_emb[nodes] - x_pos
             dt = t[nodes] - t_i
-            dir_scores = _cos_sim_sample(x_vel, position_dif, dt)
+            try:
+                dir_scores = _cos_sim_sample(x_vel, position_dif, dt)
+            except ValueError:
+                dir_scores = [0]
 
             nodes_null = all_nodes if len(all_nodes) < n_prune else np.random.choice(all_nodes, n_prune)
             position_dif_null = x_emb[nodes_null] - x_pos
             dt_null = t[nodes_null] - t_i
-            dir_scores_null = _cos_sim_sample(x_vel, position_dif_null, dt_null)
+            try:
+                dir_scores_null = _cos_sim_sample(x_vel, position_dif_null, dt_null)
+            except ValueError:
+                dir_scores_null = [0]
 
             # save 1-hop results
             type_score[0].append(np.nanmean(dir_scores))
@@ -1375,13 +1384,17 @@ def gen_cross_boundary_correctness(
 
                 position_dif = x_emb[nodes] - x_pos
                 dt = t[nodes] - t_i
-                dir_scores = _cos_sim_sample(x_vel, position_dif, dt)
+                try:
+                    dir_scores = _cos_sim_sample(x_vel, position_dif, dt)
 
-                if len(nodes) > n_prune:
-                    idx_sort = np.argsort(dir_scores)
-                    nodes = nodes[idx_sort[-n_prune:]]
-                    dir_scores = dir_scores[idx_sort[-n_prune:]]
-                type_score[k+1].append(np.nanmean(dir_scores))
+                    if len(nodes) > n_prune:
+                        idx_sort = np.argsort(dir_scores)
+                        nodes = nodes[idx_sort[-n_prune:]]
+                        dir_scores = dir_scores[idx_sort[-n_prune:]]
+                    type_score[k+1].append(np.nanmean(dir_scores))
+                except ValueError:
+                    type_score[k+1].append(0)
+
             # Compute the same k-hop metric for neigbhors not in the descent v
             if dir_test and len(nodes_null) > 0:
                 for k in range(k_hop-1):
@@ -1391,12 +1404,16 @@ def gen_cross_boundary_correctness(
                     nodes_null = nodes_null if len(all_nodes) < n_prune else np.random.choice(nodes_null, n_prune)
                     position_dif_null = x_emb[nodes_null] - x_pos
                     dt_null = t[nodes_null] - t_i
-                    dir_scores_null = _cos_sim_sample(x_vel, position_dif_null, dt_null)
-                    if len(nodes_null) > n_prune:
-                        idx_sort = np.argsort(dir_scores_null)
-                        nodes_null = nodes_null[idx_sort[-n_prune:]]
-                        dir_scores_null = dir_scores_null[idx_sort[-n_prune:]]
-                    type_score_null[k+1].append(np.nanmean(dir_scores_null))
+                    try:
+                        dir_scores_null = _cos_sim_sample(x_vel, position_dif_null, dt_null)
+
+                        if len(nodes_null) > n_prune:
+                            idx_sort = np.argsort(dir_scores_null)
+                            nodes_null = nodes_null[idx_sort[-n_prune:]]
+                            dir_scores_null = dir_scores_null[idx_sort[-n_prune:]]
+                        type_score_null[k+1].append(np.nanmean(dir_scores_null))
+                    except ValueError:
+                        type_score_null[k+1].append(0)
         mean_type_score = np.array([np.nanmean(type_score[i]) for i in range(k_hop)])
         mean_type_score_null = np.array([np.nanmean(type_score_null[i]) for i in range(k_hop)])
         mean_type_score_null[np.isnan(mean_type_score_null)] = 0.0
@@ -1693,7 +1710,6 @@ def inner_cluster_coh(adata, k_cluster, k_velocity, gene_mask=None, return_raw=F
 
     if return_raw:
         return all_scores
-
     return scores, np.mean([sc for sc in scores.values()])
 
 
@@ -1729,7 +1745,7 @@ def velocity_consistency(adata, vkey, gene_mask=None):
 
 
 def spatial_velocity_consistency(adata, vkey, spatial_graph_key, gene_mask=None):
-    """Velocity Consistency as reported in scVelo paper
+    """Velocity Consistency in the space domain
 
     Args:
         adata (:class:`anndata.AnnData`):

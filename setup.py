@@ -11,12 +11,14 @@ setup(
         'anndata>=0.8.0',
         'hnswlib>=0.6.2',
         'igraph>=0.10.4',
+        'ipywidgets',
+        'jupyter',
         'loess>=2.1.2',
-        'matplotlib>=3.3.0',
+        'matplotlib>=3.3.0, <=3.7.3',  # to make sure scvelo setting works
         'memory_profiler>=0.61.0',
         'numba>=0.41.0',
-        'numpy>=1.23.0',
-        'pandas>=0.23.0',
+        'numpy>=1.17.0, <=1.23.5',  # higher versions have issues with scvelo due to creating a nested array with list of array with different lengths
+        'pandas>=0.23.0, <=1.5.3',  # to make sure scvelo plot works
         'pynndescent>=0.5.7',
         'scanpy>=1.5.0',
         'scikit-learn>=0.20.0',

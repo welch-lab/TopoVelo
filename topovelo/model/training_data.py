@@ -37,7 +37,7 @@ class SCData(Dataset):
         self.u0 = u0
         self.s0 = s0
         self.t0 = t0
-        self.weight = np.ones((self.N, self.G)) if weight is None else weight
+        self.weight = None if weight is None else weight
 
     def __len__(self):
         return len(self.data)

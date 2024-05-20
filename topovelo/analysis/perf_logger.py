@@ -355,9 +355,9 @@ class PerfLogger:
             ncols = 1 if 'ncols' not in kwargs else kwargs['ncols']
             if 'bbox_to_anchor' in kwargs:
                 loc = 'center' if len(kwargs['bbox_to_anchor']) == 4 else 1
-                ax.legend(fontsize=kwargs['legend_fontsize'], loc=loc, ncols=ncols, bbox_to_anchor=kwargs['bbox_to_anchor'])
+                ax.legend(fontsize=kwargs['legend_fontsize'], loc=loc, ncol=ncols, bbox_to_anchor=kwargs['bbox_to_anchor'])
             else:
-                ax.legend(fontsize=kwargs['legend_fontsize'], ncols=ncols)
+                ax.legend(fontsize=kwargs['legend_fontsize'], ncol=ncols)
         return ax
 
     def plot_metrics(self,

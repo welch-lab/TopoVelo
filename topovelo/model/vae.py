@@ -82,8 +82,12 @@ class Encoder(nn.Module):
                 nn.init.xavier_uniform_(m.lin.weight, self.xavier_gain)
                 nn.init.constant_(m.bias, 0)
             else:
-                nn.init.xavier_uniform_(m.lin_src.weight, self.xavier_gain)
-                nn.init.xavier_uniform_(m.lin_dst.weight, self.xavier_gain)
+                try:
+                    nn.init.xavier_uniform_(m.lin.weight, self.xavier_gain)
+                except AttributeError:
+                    # deprecated in recent torch_geometric
+                    nn.init.xavier_uniform_(m.lin_src.weight, self.xavier_gain)
+                    nn.init.xavier_uniform_(m.lin_dst.weight, self.xavier_gain)
                 nn.init.xavier_uniform_(m.att_src, self.xavier_gain)
                 nn.init.xavier_uniform_(m.att_dst, self.xavier_gain)
                 nn.init.constant_(m.bias, 0)
@@ -191,8 +195,12 @@ class GraphDecoder(nn.Module):
                 nn.init.xavier_uniform_(m.lin.weight, self.xavier_gain)
                 nn.init.constant_(m.bias, 0)
             else:
-                nn.init.xavier_uniform_(m.lin_src.weight, self.xavier_gain)
-                nn.init.xavier_uniform_(m.lin_dst.weight, self.xavier_gain)
+                try:
+                    nn.init.xavier_uniform_(m.lin.weight, self.xavier_gain)
+                except AttributeError:
+                    # old torch_geometric version 
+                    nn.init.xavier_uniform_(m.lin_src.weight, self.xavier_gain)
+                    nn.init.xavier_uniform_(m.lin_dst.weight, self.xavier_gain)
                 nn.init.xavier_uniform_(m.att_src, self.xavier_gain)
                 nn.init.xavier_uniform_(m.att_dst, self.xavier_gain)
                 nn.init.constant_(m.bias, 0)
@@ -257,8 +265,11 @@ class MultiLayerGraphDecoder(nn.Module):
                 nn.init.xavier_uniform_(m.lin.weight, self.xavier_gain)
                 nn.init.constant_(m.bias, 0)
             else:
-                nn.init.xavier_uniform_(m.lin_src.weight, self.xavier_gain)
-                nn.init.xavier_uniform_(m.lin_dst.weight, self.xavier_gain)
+                try:
+                    nn.init.xavier_uniform_(m.lin.weight, self.xavier_gain)
+                except AttributeError:
+                    nn.init.xavier_uniform_(m.lin_src.weight, self.xavier_gain)
+                    nn.init.xavier_uniform_(m.lin_dst.weight, self.xavier_gain)
                 nn.init.xavier_uniform_(m.att_src, self.xavier_gain)
                 nn.init.xavier_uniform_(m.att_dst, self.xavier_gain)
                 nn.init.constant_(m.bias, 0)
@@ -3383,15 +3394,9 @@ class VAE(VanillaVAE):
         adata_unseen.layers[f"{key}_shat"] = shat
         
         # Attention score
-        enc_att = self.get_enc_att(self.unseen_data.data.x,
-                                   self.unseen_data.data.adj_t,
-                                   self.unseen_data.edge_weight,
-                                   adata_unseen.n_obs)
+        enc_att = self.get_enc_att(self.unseen_data.data.x, self.unseen_data.data.adj_t)
         z_ts = torch.tensor(z, device=self.device)
-        dec_att = self.get_dec_att(z_ts,
-                                   self.unseen_data.data.adj_t,
-                                   self.unseen_data.edge_weight,
-                                   adata_unseen.n_obs)
+        dec_att = self.get_dec_att(z_ts, self.unseen_data.data.adj_t)
         
         if enc_att is not None:
             for i in range(len(enc_att)):
@@ -3458,14 +3463,12 @@ class VAE(VanillaVAE):
             data_in_scale = torch.log1p(data_in_scale)
         return data_in_scale
 
-    def get_enc_att(self, data_in, edge_index, edge_weight, n_nodes):
+    def get_enc_att(self, data_in, edge_index):
         """Retreive the encoder attention score.
         
         Args:
             data_in (torch.Tensor): Input data (cell by gene, with unspliced and spliced concatenated at dim=1).
             edge_index (torch.Tensor): Edge index.
-            edge_weight (torch.Tensor): Edge weight.
-            n_nodes (int): Number of nodes.
         
         Returns:
             numpy.array : Attention score of shape (num_cell, num_cell, num_att_head).
@@ -3478,21 +3481,27 @@ class VAE(VanillaVAE):
             print("Skipping encoder attention score computation.")
             return None
         with torch.no_grad():
-            _, att = gatconv(data_in_scale, edge_index, edge_weight, return_attention_weights=True)
-        cum_num_col, row, val = att.cpu().csr()
-        cum_num_col = cum_num_col.detach().numpy()
-        row = row.detach().numpy()
-        val = val.detach().numpy()
+            _, att = gatconv(data_in_scale, edge_index, return_attention_weights=True)
+        try:
+            cum_num_col, row, val = att.cpu().csr()
+            cum_num_col = cum_num_col.detach().numpy()
+            row = row.detach().numpy()
+            val = val.detach().numpy()
+        except AttributeError:
+            # Notice that the row and column are flipped in our convention
+            cum_num_col = att[0].cpu().crow_indices().numpy()
+            row = att[0].cpu().col_indices().numpy()
+            val = att[0].cpu().values().numpy()
+
         return dge2array(cum_num_col, row, val)
 
-    def get_dec_att(self, data_in, edge_index, edge_weight, n_nodes):
+    def get_dec_att(self, data_in, edge_index):
         """Retreive the decoder attention score.
         
         Args:
             data_in (torch.Tensor): Input data (cell by gene, with unspliced and spliced concatenated at dim=1).
             edge_index (torch.Tensor): Edge index.
             edge_weight (torch.Tensor): Edge weight.
-            n_nodes (int): Number of nodes.
 
         Returns:
             numpy.array : Attention score of shape (num_cell, num_cell, num_att_head).
@@ -3505,19 +3514,19 @@ class VAE(VanillaVAE):
         with torch.no_grad():
             if self.enable_cvae:
                 condition = F.one_hot(self.graph_data.batch, self.n_batch).float()
-                _, att = gatconv(torch.cat([data_in, condition], 1),
-                                 edge_index,
-                                 edge_weight,
-                                 return_attention_weights=True)
+                _, att = gatconv(torch.cat([data_in, condition], 1), edge_index, return_attention_weights=True)
             else:
-                _, att = gatconv(data_in,
-                                 edge_index,
-                                 edge_weight,
-                                 return_attention_weights=True)
-        cum_num_col, row, val = att.cpu().csr()
-        cum_num_col = cum_num_col.detach().numpy()
-        row = row.detach().numpy()
-        val = val.detach().numpy()
+                _, att = gatconv(data_in, edge_index, return_attention_weights=True)
+        try:
+            cum_num_col, row, val = att.cpu().csr()
+            cum_num_col = cum_num_col.detach().numpy()
+            row = row.detach().numpy()
+            val = val.detach().numpy()
+        except AttributeError:
+            # Notice that the row and column are flipped in our convention
+            cum_num_col = att[0].cpu().crow_indices().numpy()
+            row = att[0].cpu().col_indices().numpy()
+            val = att[0].cpu().values().numpy()
 
         return dge2array(cum_num_col, row, val)
     
@@ -3577,7 +3586,7 @@ class VAE(VanillaVAE):
             numpy.array : Attention score of shape (num_cell, num_cell, num_att_head).
         """
         self.set_mode('eval')
-        gatconv = self.decoder.net_rho.conv2
+        gatconv = self.decoder.net_rho2.conv1
         if not isinstance(gatconv, GATConv):
             print("Skipping decoder attention score computation.")
             return None
@@ -3651,10 +3660,11 @@ class VAE(VanillaVAE):
 
         t = self.sample(mu_t, std_t)
         z = self.sample(mu_z, std_z)
-        gatconv = self.decoder.net_rho2.conv1
-        h = gatconv(z,
-                    self.graph_data.data.adj_t,
-                    self.graph_data.edge_weight)
+        graph_conv = self.decoder.net_rho2.conv1
+        if isinstance(graph_conv, GCNConv):
+            h = graph_conv(data_in_scale, self.graph_data.data.adj_t, self.graph_data.edge_weight)
+        else:
+            h = graph_conv(data_in_scale, self.graph_data.data.adj_t)
         h = self.decoder.net_rho2.act(h)
         if condition is not None:
             h = torch.cat((h, condition), 1)
@@ -3927,15 +3937,9 @@ class VAE(VanillaVAE):
         adata.layers[f"{key}_shat"] = Shat
         
         # Attention score
-        enc_att = self.get_enc_att(self.graph_data.data.x,
-                                   self.graph_data.data.adj_t,
-                                   self.graph_data.edge_weight,
-                                   adata.n_obs)
+        enc_att = self.get_enc_att(self.graph_data.data.x, self.graph_data.data.adj_t)
         z_ts = torch.tensor(z, device=self.device)
-        dec_att = self.get_dec_att(z_ts,
-                                   self.graph_data.data.adj_t,
-                                   self.graph_data.edge_weight,
-                                   adata.n_obs)
+        dec_att = self.get_dec_att(z_ts, self.graph_data.data.adj_t)
         
         if enc_att is not None:
             for i in range(len(enc_att)):

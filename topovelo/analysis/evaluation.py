@@ -60,7 +60,7 @@ def get_velocity_metric(adata,
                         embed='umap',
                         n_jobs=None):
     """
-    Computes Cross-Boundary Direction Correctness and In-Cluster Coherence.
+    Computes Cross-Boundary Direction Correctness and other performance metrics for RNA or cell velocity.
     The function calls scvelo.tl.velocity_graph.
 
     Args:
@@ -90,8 +90,6 @@ def get_velocity_metric(adata,
     Returns:
         tuple
 
-            - **iccoh** (:class:`dict`): In-Cluster Coherence.
-            - **mean_iccoh** (_type_): Mean In-Cluster Coherence.
             - **cbdir_embed** (:class:`dict`): Cross-Boundary Direction Correctness in embedding space.
             - **mean_cbdir_embed** (_type_): Mean Cross-Boundary Direction Correctness in embedding space.
             - **cbdir** (:class:`dict`): Cross-Boundary Direction Correctness in gene space.
@@ -126,8 +124,8 @@ def get_velocity_metric(adata,
             velocity_embedding(adata, vkey=vkey, basis=embed)
         except ImportError:
             print("Please install scVelo to compute velocity embedding.\n"
-                  "Skipping metrics 'Cross-Boundary Direction Correctness' and 'In-Cluster Coherence'.")
-        iccoh, mean_iccoh = inner_cluster_coh(adata, cluster_key, vkey, gene_mask)
+                  "Skipping metrics 'Cross-Boundary Direction Correctness'.")
+
         cbdir_embed, mean_cbdir_embed = cross_boundary_correctness(adata,
                                                                    cluster_key,
                                                                    vkey,
@@ -196,7 +194,6 @@ def get_velocity_metric(adata,
         mean_umtest_embed = np.ones((5))*np.nan
         mean_umtest = np.ones((5))*np.nan
         mean_tscore = np.nan
-        mean_iccoh = np.nan
         mean_consistency_score = np.nan
         mean_sp_vel_consistency = np.nan
         cbdir_embed = dict.fromkeys([])
@@ -208,9 +205,7 @@ def get_velocity_metric(adata,
         umtest_embed = dict.fromkeys([])
         umtest = dict.fromkeys([])
         tscore = dict.fromkeys([])
-        iccoh = dict.fromkeys([])
-    return (iccoh, mean_iccoh,
-            cbdir_embed, mean_cbdir_embed,
+    return (cbdir_embed, mean_cbdir_embed,
             cbdir, mean_cbdir,
             k_cbdir_embed, mean_k_cbdir_embed,
             k_cbdir, mean_k_cbdir,
@@ -236,7 +231,6 @@ def gather_stats(**kwargs):
         'CBDir': np.nan,
         'CBDir (Gene Space)': np.nan,
         'Time Score': np.nan,
-        'In-Cluster Coherence': np.nan,
         'Velocity Consistency': np.nan,
         'Spatial Velocity Consistency': np.nan,
         'Spatial Time Consistency': np.nan
@@ -262,8 +256,6 @@ def gather_stats(**kwargs):
         stats['CBDir (Gene Space)'] = kwargs['mean_cbdir']
     if 'mean_tscore' in kwargs:
         stats['Time Score'] = kwargs['mean_tscore']
-    if 'mean_iccoh' in kwargs:
-        stats['In-Cluster Coherence'] = kwargs['mean_iccoh']
     if 'mean_vel_consistency' in kwargs:
         stats['Velocity Consistency'] = kwargs['mean_vel_consistency']
     if 'mean_sp_vel_consistency' in kwargs:
@@ -323,7 +315,8 @@ def gather_type_multistats(**kwargs):
         'mwtest': 'Mann-Whitney Test Stats (Gene Space)',
         'mwtest_embed': 'Mann-Whitney Test Stats'
     }
-    multi_stats = pd.DataFrame(index=pd.Index(list(kwargs.keys())),
+    names = list(kwargs.keys())
+    multi_stats = pd.DataFrame(index=pd.Index([metrics[key] for key in names]),
                                columns=pd.MultiIndex.from_product([[], []], names=['Transition', 'Step']))
     for key in kwargs:
         for transition in kwargs[key]:
@@ -440,8 +433,7 @@ def get_metric(adata,
         corr = np.nan
 
     # Compute velocity metrics using a subset of genes defined by gene_mask
-    (iccoh, mean_iccoh,
-     cbdir_embed, mean_cbdir_embed,
+    (cbdir_embed, mean_cbdir_embed,
      cbdir, mean_cbdir,
      k_cbdir_embed, mean_k_cbdir_embed,
      k_cbdir, mean_k_cbdir,
@@ -497,15 +489,15 @@ def post_analysis(adata,
                   test_id,
                   methods,
                   keys,
-                  spatial_graph_key=None,
-                  spatial_key=None,
+                  spatial_graph_key='spatial_graph',
+                  spatial_key='X_spatial',
                   n_spatial_neighbors=8,
                   gene_key='velocity_genes',
                   compute_metrics=False,
                   raw_count=False,
                   spatial_velocity_graph=False,
                   genes=[],
-                  plot_type=['time', 'gene', 'stream'],
+                  plot_type=['time', 'cell velocity'],
                   cluster_key="clusters",
                   cluster_edges=[],
                   nplot=500,
@@ -645,7 +637,7 @@ def post_analysis(adata,
 
     # recompute the spatial KNN graph
     if spatial_velocity_graph:
-        if spatial_key is not None:
+        if spatial_key in adata.obsm:
             print(f'Computing a spatial graph using KNN on {spatial_key} with k={n_spatial_neighbors}')
             if 'connectivities' in adata.obsp or 'neighbors' in adata.uns:
                 print(f'Warning: overwriting the original KNN graph! (.uns, .obsp)')
@@ -889,12 +881,13 @@ def post_analysis(adata,
                                        if 'n_jobs' in kwargs
                                        else get_n_cpu(adata.n_obs)))
                 if 'spatial_graph_params' in adata.uns:
-                    radius = adata.uns['spatial_graph_params']['radius']
-                    if radius is not None:
-                        adata.uns[f'{vkey}_graph'] = adata.uns[f'{vkey}_graph']\
-                            .multiply(adata.obsp['distances'] < radius)
-                        adata.uns[f'{vkey}_graph_neg'] = adata.uns[f'{vkey}_graph_neg']\
-                            .multiply(adata.obsp['distances'] < radius)
+                    if 'radius' in adata.uns['spatial_graph_params']:
+                        radius = adata.uns['spatial_graph_params']['radius']
+                        if radius is not None:
+                            adata.uns[f'{vkey}_graph'] = adata.uns[f'{vkey}_graph']\
+                                .multiply(adata.obsp['distances'] < radius)
+                            adata.uns[f'{vkey}_graph_neg'] = adata.uns[f'{vkey}_graph_neg']\
+                                .multiply(adata.obsp['distances'] < radius)
                 velocity_embedding_stream(adata,
                                           basis=embed,
                                           vkey=vkey,
