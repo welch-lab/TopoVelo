@@ -156,7 +156,7 @@ def neighbors(
                 random_state=random_state,
                 metric=metric,
                 metric_kwds=metric_kwds,
-                write_knn_indices=True,
+                # write_knn_indices=True,
             )
         logg.switch_verbosity("on", module="scanpy")
 
