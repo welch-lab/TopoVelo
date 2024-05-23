@@ -1,5 +1,6 @@
 import numpy as np
 import pandas as pd
+import logging
 import os
 import matplotlib.pyplot as plt
 from scipy.sparse import csr_matrix, csc_matrix, coo_matrix, csr_array
@@ -30,6 +31,7 @@ from .vanilla_vae import VanillaVAE, kl_gaussian
 from .velocity import rna_velocity_vae
 P_MAX = 1e4
 GRAD_MAX = 1e5
+global logger
 
 
 class Encoder(nn.Module):
@@ -441,13 +443,13 @@ class Decoder(nn.Module):
     def init_ode(self, adata, p, **kwargs):
         """Initialize the parameters of the ODE model."""
         G = adata.n_vars
-        print("Initialization using the steady-state and dynamical models.")
+        logger.info("Initialization using the steady-state and dynamical models.")
         u = adata.layers['Mu'][self.train_idx]
         s = adata.layers['Ms'][self.train_idx]
 
         # Compute gene scaling for multiple batches
         if self.cvae:
-            print("Computing scaling_u factors for each batch class.")
+            logger.info("Computing scaling_u factors for each batch class.")
             scaling_u = np.ones((self.dim_cond, G))
             scaling_s = np.ones((self.dim_cond, G))
             if self.ref_batch is None:
@@ -455,7 +457,7 @@ class Decoder(nn.Module):
             ui = u[self.batch[self.train_idx] == self.ref_batch]
             si = s[self.batch[self.train_idx] == self.ref_batch]
             filt = (si > 0) * (ui > 0)
-            print(f"{np.mean(np.sum(filt, 0) > 0)*100:.2f}% of the genes in the reference batch have non-zero u and s in the reference batch.")
+            logger.debug(f"{np.mean(np.sum(filt, 0) > 0)*100:.2f}% of the genes in the reference batch have non-zero u and s in the reference batch.")
             ui[~filt] = np.nan
             si[~filt] = np.nan
             std_u_ref, std_s_ref = np.nanstd(ui, axis=0), np.nanstd(si, axis=0)
@@ -481,9 +483,6 @@ class Decoder(nn.Module):
             # Handle inf and nan
             p_nan = np.mean(np.isnan(scaling_u) | np.isnan(scaling_s), 1)*100
             p_inf = np.mean(np.isinf(scaling_u) | np.isinf(scaling_s), 1)*100
-            df = pd.DataFrame({'batch': np.arange(self.dim_cond), 'nan (%)': p_nan, 'inf (%)': p_inf})
-            print("Percentage of invalid scaling factors in each batch.")
-            print(df)
             if np.any(np.isnan(scaling_u) | np.isinf(scaling_u)):
                 scaling_u[np.isnan(scaling_u) | np.isinf(scaling_u)] = 1.0
             if np.any(np.isnan(scaling_s) | np.isinf(scaling_s)):
@@ -512,10 +511,10 @@ class Decoder(nn.Module):
             scaling_s = np.ones_like(scaling_u)
         
             if np.any(np.isinf(scaling_u)):
-                print('scaling_u invalid inf')
+                logger.warning('scaling_u invalid inf')
                 scaling_u[np.isinf(scaling_u)] = 1.0
             if np.any(np.isnan(scaling_u)):
-                print('scaling_u invalid nan')
+                logger.warning('scaling_u invalid nan')
                 scaling_u[np.isnan(scaling_u)] = 1.0
             scaling_u_full = scaling_u
             scaling_s_full = scaling_s
@@ -537,7 +536,7 @@ class Decoder(nn.Module):
             else:
                 w = assign_gene_mode(adata, w, assign_type, thred, std_prior, n_cluster_thred)
         self.w_init = w
-        print(f"Initial induction: {np.sum(w >= 0.5)}, repression: {np.sum(w < 0.5)}/{G}")
+        logger.debug(f"Initial induction: {np.sum(w >= 0.5)}, repression: {np.sum(w < 0.5)}/{G}")
         adata.var["w_init"] = w
         logit_pw = 0.5*(np.log(w+1e-10) - np.log(1-w+1e-10))
         logit_pw = np.stack([logit_pw, -logit_pw], 1)
@@ -545,7 +544,7 @@ class Decoder(nn.Module):
         
         # Reinitialize parameters with a unified time 
         if self.init_method == "tprior":
-            print("Initialization using prior time.")
+            logger.info("Initialization using prior time.")
             t_prior = adata.obs[self.init_key].to_numpy()
             t_prior = t_prior[self.train_idx]
             std_t = (np.std(t_prior)+1e-3)*0.05
@@ -560,7 +559,7 @@ class Decoder(nn.Module):
                                                                                             self.t_init,
                                                                                             self.toff_init)
         else:
-            print("Initialization using the steady-state and dynamical models.")
+            logger.info("Initialization using the steady-state and dynamical models.")
             T = T+np.random.rand(T.shape[0], T.shape[1]) * 1e-3
             T_eq = np.zeros(T.shape)
             n_bin = T.shape[0]//50+1
@@ -921,8 +920,8 @@ class VAE(VanillaVAE):
                  spatial_hidden_size=(128, 64),
                  full_vb=False,
                  discrete=False,
-                 graph_decoder=False,
-                 attention=False,
+                 graph_decoder=True,
+                 attention=True,
                  n_head=5,
                  batch_key=None,
                  ref_batch=None,
@@ -948,6 +947,7 @@ class VAE(VanillaVAE):
                      'gamma': (0.0, 0.5)
                  },
                  random_state=2022,
+                 verbose_level=logging.WARNING,
                  **kwargs):
         """TopoVelo Model
 
@@ -1142,7 +1142,7 @@ class VAE(VanillaVAE):
                                    xavier_gain=xavier_gain,
                                    checkpoint=checkpoints[0]).to(self.device)
         except IndexError:
-            print('Please provide two dimensions!')
+            logger.error('Please provide two dimensions!')
 
         self.tmax = tmax
         self.get_prior(adata, tmax, tprior)
@@ -1184,6 +1184,9 @@ class VAE(VanillaVAE):
         self.n_drop = 0  # Count the number of consecutive iterations with little decrease in loss
         self.train_stage = 1
 
+        logger = logging.getLogger(__name__)
+        logger.setLevel(verbose_level)
+
         self.timer = time.time()-t_start
 
     def split_train_validation_test(self, N, test_samples=None):
@@ -1196,7 +1199,7 @@ class VAE(VanillaVAE):
             self.validation_idx = rand_perm[n_train:n_train+n_validation]
             self.test_idx = rand_perm[n_train+n_validation:]
         else:
-            print("Test samples provided. Distribute training and validation samples based on their proportions.")
+            logger.info("Test samples provided. Distribute training and validation samples based on their proportions.")
             self.test_idx = test_samples
             train_valid_idx = np.array(list(set(range(N)).difference(set(test_samples))))
             rand_perm = np.random.permutation(train_valid_idx)
@@ -1220,7 +1223,7 @@ class VAE(VanillaVAE):
         batch_count = None
         self.ref_batch = self.config['ref_batch']
         if self.config['batch_key'] is not None and self.config['batch_key'] in adata.obs:
-            print('CVAE enabled. Performing batch effect correction.')
+            logger.info('CVAE enabled. Performing batch effect correction.')
             batch_raw = adata.obs[self.config['batch_key']].to_numpy()
             batch_names_raw, batch_count = np.unique(batch_raw, return_counts=True)
             self.batch_dic, self.batch_dic_rev = encode_type(batch_names_raw)
@@ -1233,23 +1236,23 @@ class VAE(VanillaVAE):
                 self.ref_batch = self.n_batch - 1
             elif self.ref_batch < -self.n_batch:
                 self.ref_batch = 0
-            print(f'Reference batch set to {self.ref_batch} ({batch_names_raw[self.ref_batch]}).')
+            logger.info(f'Reference batch set to {self.ref_batch} ({batch_names_raw[self.ref_batch]}).')
             if np.issubdtype(batch_names_raw.dtype, np.number) and 0 not in batch_names_raw:
-                print('Warning: integer batch names do not start from 0. Reference batch index may not match the actual batch name!')
+                logger.warning('Integer batch names do not start from 0. Reference batch index may not match the actual batch name!')
         elif isinstance(self.ref_batch, str):
             if self.config['ref_batch'] in batch_names_raw:
                 self.ref_batch = self.batch_dic[self.config['ref_batch']]
-                print(f'Reference batch set to {self.ref_batch} ({batch_names_raw[self.ref_batch]}).')
+                logger.info(f'Reference batch set to {self.ref_batch} ({batch_names_raw[self.ref_batch]}).')
             else:
                 raise ValueError('Reference batch not found in the provided batch field!')
         elif batch_count is not None:
             self.ref_batch = self.batch_names[np.argmax(batch_count)]
-            print(f'Reference batch set to {self.ref_batch} ({batch_names_raw[self.ref_batch]}).')
+            logger.info(f'Reference batch set to {self.ref_batch} ({batch_names_raw[self.ref_batch]}).')
         self.enable_cvae = self.n_batch > 0
         if self.enable_cvae and 2*self.n_batch > self.config['dim_z']:
-            print('Warning: number of batch classes is larger than half of dim_z. Consider increasing dim_z.')
+            logger.warning('Number of batch classes is larger than half of dim_z. Consider increasing dim_z.')
         if self.enable_cvae and 10*self.n_batch < self.config['dim_z']:
-            print('Warning: number of batch classes is smaller than 1/10 of dim_z. Consider decreasing dim_z.')
+            logger.warning('Number of batch classes is smaller than 1/10 of dim_z. Consider decreasing dim_z.')
 
     def encode_slice(self, adata, slice_key):
         """Encode slice information when data consists of multiple slices.
@@ -1283,8 +1286,8 @@ class VAE(VanillaVAE):
                 else:
                     count_distribution = "Poisson"
                     self.vae_risk = self.vae_risk_poisson
-                print(f"Mean dispersion: u={dispersion_u.mean():.2f}, s={dispersion_s.mean():.2f}")
-                print(f"Over-Dispersion = {p_nb:.2f} => Using {count_distribution} to model count data.")
+                logger.debug(f"Mean dispersion: u={dispersion_u.mean():.2f}, s={dispersion_s.mean():.2f}")
+                logger.debug(f"Over-Dispersion = {p_nb:.2f} => Using {count_distribution} to model count data.")
             elif count_distribution == "NB":
                 self.vae_risk = self.vae_risk_nb
             else:
@@ -2345,7 +2348,7 @@ class VAE(VanillaVAE):
                 p = (np.sum(adata.layers["unspliced"] > 0)
                     + (np.sum(adata.layers["spliced"] > 0)))/adata.n_obs/adata.n_vars/2
             self._set_lr(p)
-            print(f'Learning Rate based on Data Sparsity: {self.config["learning_rate"]:.4f}')
+            logger.debug(f'Learning Rate based on Data Sparsity: {self.config["learning_rate"]:.4f}')
         self._set_sigma_pos(adata.obsm[spatial_key])
         self._set_epsilon_ball(adata.obsm[spatial_key])
         # Automatically set test iteration if not given
@@ -2395,7 +2398,7 @@ class VAE(VanillaVAE):
         try:
             self.x_embed = adata.obsm[f"X_{embed}"]
         except KeyError:
-            print("Embedding not found! Set to None.")
+            logger.warning("Embedding not found! Set to None.")
             self.x_embed = np.nan*np.ones((adata.n_obs, 2))
         
         print("*********               Creating a Graph Dataset              *********")
@@ -2506,9 +2509,9 @@ class VAE(VanillaVAE):
                                        figure_path)
                 self.set_mode('train')
                 elbo_test = self.loss_test[-1] if len(self.loss_test) > 0 else [-np.inf]
-                print(f"Epoch {epoch+1}: Train ELBO = {np.sum(elbo_train):.3f},\t"
-                      f"Test ELBO = {np.sum(elbo_test):.3f},\t"
-                      f"Total Time = {convert_time(time.time()-start)}")
+                logger.debug(f"Epoch {epoch+1}: Train ELBO = {np.sum(elbo_train):.3f},\t"
+                             f"Test ELBO = {np.sum(elbo_test):.3f},\t"
+                             f"Total Time = {convert_time(time.time()-start)}")
 
             if stop_training:
                 print(f"*********       Stage 1: Early Stop Triggered at epoch {epoch+1}.       *********")
@@ -2543,7 +2546,7 @@ class VAE(VanillaVAE):
                      self.decoder.gamma]
         optimizer_ode = torch.optim.Adam(param_ode, lr=self.config["learning_rate_ode"])
         for r in range(self.config['n_refine']):
-            print(f"*********             Velocity Refinement Round {r+1}              *********")
+            logger.info(f"*********             Velocity Refinement Round {r+1}              *********")
             self.config['early_stop_thred'] *= 0.95
             stop_training = (x0_change - x0_change_prev >= -0.01 and r > 1) or (x0_change < 0.01)
             if (not self.is_discrete) and (noise_change > 0.001) and (r < self.config['n_refine']-1):
@@ -2572,18 +2575,18 @@ class VAE(VanillaVAE):
                                            figure_path)
                     self.decoder.train()
                     elbo_test = self.loss_test[-1] if len(self.loss_test) > n_test1 else [-np.inf]
-                    print(f"Epoch {epoch+count_epoch+1}: Train ELBO = {np.sum(elbo_train):.3f},\t"
-                          f"Test ELBO = {np.sum(elbo_test):.3f},\t"
-                          f"Total Time = {convert_time(time.time()-start)}")
+                    logger.debug(f"Epoch {epoch+count_epoch+1}: Train ELBO = {np.sum(elbo_train):.3f},\t"
+                                 f"Test ELBO = {np.sum(elbo_test):.3f},\t"
+                                 f"Total Time = {convert_time(time.time()-start)}")
 
                 if stop_training:
-                    print(f"Summary: \n"
-                          f"Train ELBO = {-np.sum(self.loss_train[-1]):.3f}\n"
-                          f"Test ELBO = {np.sum(self.loss_test[-1]):.3f}\n"
-                          f"Total Time = {convert_time(time.time()-start)}\n")
-                    print(f"*********       "
-                          f"Round {r+1}: Early Stop Triggered at epoch {epoch+count_epoch+1}."
-                          f"       *********")
+                    logger.debug(f"Summary: \n"
+                                 f"Train ELBO = {-np.sum(self.loss_train[-1]):.3f}\n"
+                                 f"Test ELBO = {np.sum(self.loss_test[-1]):.3f}\n"
+                                 f"Total Time = {convert_time(time.time()-start)}\n")
+                    logger.info(f"*********       "
+                                f"Round {r+1}: Early Stop Triggered at epoch {epoch+count_epoch+1}."
+                                f"       *********")
                     break
             count_epoch += (epoch+1)
             if not self.is_discrete:
@@ -2594,14 +2597,14 @@ class VAE(VanillaVAE):
                 sigma_u_prev = self.decoder.sigma_u.detach().cpu().numpy()
                 sigma_s_prev = self.decoder.sigma_s.detach().cpu().numpy()
                 noise_change = norm_delta_sigma/norm_sigma
-                print(f"Change in noise variance: {noise_change:.4f}")
+                logger.debug(f"Change in noise variance: {noise_change:.4f}")
             with torch.no_grad():
                 if r > 0:
                     x0_change_prev = x0_change
                     norm_delta_x0 = np.sqrt(((self.u0 - u0_prev)**2 + (self.s0 - s0_prev)**2).sum(1).mean())
                     std_x = np.sqrt((self.u0.var(0) + self.s0.var(0)).sum())
                     x0_change = norm_delta_x0/std_x
-                    print(f"Change in x0: {x0_change:.4f}")
+                    logger.debug(f"Change in x0: {x0_change:.4f}")
                 u0_prev = self.u0
                 s0_prev = self.s0
         
@@ -2622,16 +2625,16 @@ class VAE(VanillaVAE):
                 mse_train = self.test_spatial(f"train{epoch+1}", False, plot, figure_path)
                 self.set_mode('train')
                 mse_test = self.loss_test_sp[-1] if len(self.loss_test_sp) > 0 else [-np.inf]
-                print(f"Epoch {epoch+1}: Train MSE = {np.sum(mse_train):.3f},\t"
-                      f"Test MSE = {np.sum(mse_test):.3f},\t"
-                      f"Total Time = {convert_time(time.time()-start)}")
+                logging.debug(f"Epoch {epoch+1}: Train MSE = {np.sum(mse_train):.3f},\t"
+                              f"Test MSE = {np.sum(mse_test):.3f},\t"
+                              f"Total Time = {convert_time(time.time()-start)}")
 
             if stop_training:
                 print(f"*********       Stage 3: Early Stop Triggered at epoch {count_epoch+epoch+1}.       *********")
-                print(f"Summary: \n"
-                      f"Train MSE = {np.sum(self.loss_train_sp[-1]):.3f}\n"
-                      f"Test MSE = {np.sum(self.loss_test_sp[-1]):.3f}\n"
-                      f"Total Time = {convert_time(time.time()-start)}\n")
+                logger.debug(f"Summary: \n"
+                             f"Train MSE = {np.sum(self.loss_train_sp[-1]):.3f}\n"
+                             f"Test MSE = {np.sum(self.loss_test_sp[-1]):.3f}\n"
+                             f"Total Time = {convert_time(time.time()-start)}\n")
                 break
 
         elbo_train = self.test(self.x_embed[self.train_idx],
@@ -2880,7 +2883,7 @@ class VAE(VanillaVAE):
         try:
             x_embed = adata.obsm[f"X_{embed}"]
         except KeyError:
-            print("Embedding not found! Set to None.")
+            logger.warning("Embedding not found! Set to None.")
             x_embed = np.nan*np.ones((adata.n_obs, 2))
             plot = False
         for epoch in range(self.config['n_epochs']):
@@ -2890,9 +2893,9 @@ class VAE(VanillaVAE):
                 mse_train = self.test_spatial(f"train{epoch+1}", False, plot, figure_path)
                 self.set_mode('train')
                 mse_test = self.loss_test_sp[-1] if len(self.loss_test_sp) > 0 else [-np.inf]
-                print(f"Epoch {epoch+1}: Train MSE = {np.sum(mse_train):.3f},\t"
-                      f"Test MSE = {np.sum(mse_test):.3f},\t"
-                      f"Total Time = {convert_time(time.time()-start)}")
+                logger.debug(f"Epoch {epoch+1}: Train MSE = {np.sum(mse_train):.3f},\t"
+                             f"Test MSE = {np.sum(mse_test):.3f},\t"
+                             f"Total Time = {convert_time(time.time()-start)}")
 
             if stop_training:
                 print(f"*********       Stage 3: Early Stop Triggered at epoch {epoch+1}.       *********")
@@ -3150,7 +3153,7 @@ class VAE(VanillaVAE):
         return out, [-loss_terms[i].cpu().item() for i in range(len(loss_terms))]
 
     def _update_x0_inductive(self):
-        print("*********           Estimating initial conditions          *********")
+        logger.info("*********           Estimating initial conditions          *********")
         G = self.unseen_data.G
         out, _ = self.pred_all(["uhat", "shat", "t", "z"], mode="all")
         out_query, _ = self.pred_inductive(["uhat", "shat", "t", "z"])
@@ -3478,7 +3481,7 @@ class VAE(VanillaVAE):
         
         gatconv = self.encoder.conv1
         if not isinstance(gatconv, GATConv):
-            print("Skipping encoder attention score computation.")
+            logger.info("Skipping encoder attention score computation.")
             return None
         with torch.no_grad():
             _, att = gatconv(data_in_scale, edge_index, return_attention_weights=True)
@@ -3509,7 +3512,7 @@ class VAE(VanillaVAE):
         self.set_mode('eval')
         gatconv = self.decoder.net_rho2.conv1
         if not isinstance(gatconv, GATConv):
-            print("Skipping decoder attention score computation.")
+            logger.info("Skipping decoder attention score computation.")
             return None
         with torch.no_grad():
             if self.enable_cvae:
@@ -3547,7 +3550,7 @@ class VAE(VanillaVAE):
 
         gatconv = self.encoder.conv1
         if not isinstance(gatconv, GATConv):
-            print("Skipping encoder attention score computation.")
+            logger.info("Skipping encoder attention score computation.")
             return None
         att_score = []
         n_batch = n_nodes // batch_size
@@ -3588,7 +3591,7 @@ class VAE(VanillaVAE):
         self.set_mode('eval')
         gatconv = self.decoder.net_rho2.conv1
         if not isinstance(gatconv, GATConv):
-            print("Skipping decoder attention score computation.")
+            logger.info("Skipping decoder attention score computation.")
             return None
         att_score = []
         n_batch = n_nodes // batch_size

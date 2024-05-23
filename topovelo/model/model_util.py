@@ -1,6 +1,7 @@
 """Model utility functions
 """
 import numpy as np
+import logging
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -182,7 +183,7 @@ def scv_pred(adata, key, glist=None):
         idx = np.where(adata.var_names == glist[i])[0][0]
         item = adata.var.loc[glist[i]]
         if len(item) == 0:
-            print('Gene '+glist[i]+' not found!')
+            logging.info('Gene '+glist[i]+' not found!')
             continue
 
         alpha, beta, gamma = item[f'{key}_alpha'], item[f'{key}_beta'], item[f'{key}_gamma']
@@ -406,7 +407,7 @@ def scale_by_cell(U, S, train_idx=None, separate_us_scale=True, q=50):
         lu = (nu+ns)/norm_count
         ls = lu
     # Remove extreme values
-    print(f"Detecting zero scaling factors: {np.sum(lu==0)}, {np.sum(ls==0)}")
+    logging.warning(f"Detecting zero scaling factors: {np.sum(lu==0)}, {np.sum(ls==0)}")
     lu[lu == 0] = np.min(lu[lu > 0])
     ls[ls == 0] = np.min(ls[ls > 0])
     return U/lu, S/ls, lu, ls
@@ -424,7 +425,7 @@ def get_cell_scale(U, S, train_idx=None, separate_us_scale=True, q=0.5):
         lu = (nu+ns)/norm_count
         ls = lu
     # Remove extreme values
-    print(f"Detecting zero scaling factors: {np.sum(lu==0)}, {np.sum(ls==0)}")
+    logging.warning(f"Detecting zero scaling factors: {np.sum(lu==0)}, {np.sum(ls==0)}")
     lu[lu == 0] = np.min(lu[lu > 0])
     ls[ls == 0] = np.min(ls[ls > 0])
     return lu, ls
@@ -548,10 +549,10 @@ def init_params(u,
 
     r2 = R_squared(residual, total=u-u.mean(0))
     velocity_genes = (r2 > min_r2) & (r2 < 0.95) & (gamma > 0.01) & (np.max(s > 0, 0) > 0) & (np.max(u > 0, 0) > 0)
-    print(f'Detected {np.sum(velocity_genes)} velocity genes.')
+    logging.debug(f'Detected {np.sum(velocity_genes)} velocity genes.')
 
     dist_u, dist_s = np.zeros(u.shape), np.zeros(s.shape)
-    print('Estimating the variance...')
+    logging.debug('Estimating the variance...')
     assert np.all(params[:, 2] > 0)
     for i in trange(ngene):
         upred, spred = scv_pred_single(T[i],
@@ -704,7 +705,7 @@ def assign_gene_mode_binary(adata, w_noisy, thred=0.05):
     w_neutral = dirichlet.rvs([12, 12], size=adata.n_vars, random_state=42)
     res, pval = kstest(w1, w2)
     if pval > 0.05:
-        print('Two modes are indistuiguishable.')
+        logging.warning('Two modes are indistuiguishable.')
         return w_neutral
 
     res_1, pval_1 = kstest(w1, w2, alternative='greater', method='asymp')
@@ -728,7 +729,7 @@ def get_nclusters(C, noise=1.0, n_cluster_thred=3):
         thred = 4 / np.sqrt(3) * np.sqrt(C.shape[0]) * noise
         n_clusters = np.sum((v > thred))
         noise = noise - 0.005
-    print(f'{n_clusters} clusters detected based on gene co-expression.')
+    logging.debug(f'{n_clusters} clusters detected based on gene co-expression.')
     return n_clusters
 
 
@@ -745,7 +746,7 @@ def sample_dir_mix(w, yw, std_prior):
     np.random.seed(42)
     b = bernoulli.rvs(wq, size=len(w))
     q = (b == 0)*q1 + (b == 1)*q2
-    print(f'({1-wq:.2f}, {mu_0}), ({wq:.2f}, {mu_1})')
+    logging.debug(f'({1-wq:.2f}, {mu_0}), ({wq:.2f}, {mu_1})')
     return q
 
 
@@ -805,18 +806,18 @@ def assign_gene_mode_auto(adata,
 
     pval_ind = np.array(pval_ind)
     pval_rep = np.array(pval_rep)
-    print(f'KS-test result: {cluster_type}')
+    logging.debug(f'KS-test result: {cluster_type}')
     # If no repressive cluster is found, pick the one with the highest p value
     if np.all(cluster_type == 1):
         ymax = np.argmax(pval_rep)
-        print(f'Assign cluster {ymax} to repressive')
+        logging.debug(f'Assign cluster {ymax} to repressive')
         np.random.seed(42)
         w[y == ymax] = dirichlet.rvs(alpha_rep, size=np.sum(y == ymax))[:, 0]
 
     # If no inductive cluster is found, pick the one with the highest p value
     if np.all(cluster_type == 2):
         ymax = np.argmax(pval_ind)
-        print(f'Assign cluster {ymax} to inductive')
+        logging.debug(f'Assign cluster {ymax} to inductive')
         np.random.seed(42)
         w[y == ymax] = dirichlet.rvs(alpha_ind, size=np.sum(y == ymax))[:, 0]
 
@@ -1369,9 +1370,9 @@ def knnx0_index(t,
             neighbor_index.append([])
             n1 = n1+1
     
-    print(f"Percentage of Invalid Sets: {n1/Nq:.3f}")
-    print(f"Average Neighborhood Size: {num_nbs/Nq:.1f}")
-    print(f"Average Set Size: {len_avg/Nq:.1f}")
+    logging.debug(f"Percentage of Invalid Sets: {n1/Nq:.3f}")
+    logging.debug(f"Average Neighborhood Size: {num_nbs/Nq:.1f}")
+    logging.debug(f"Average Set Size: {len_avg/Nq:.1f}")
     return neighbor_index
 
 
@@ -1688,11 +1689,11 @@ def get_gene_index(genes_all, gene_list):
         if len(matches) == 1:
             gind.append(matches[0])
         elif len(matches) == 0:
-            print(f'Warning: Gene {gene} not found! Ignored.')
+            logging.warning(f'Warning: Gene {gene} not found! Ignored.')
             gremove.append(gene)
         else:
             gind.append(matches[0])
-            print('Warning: Gene {gene} has multiple matches. Pick the first one.')
+            logging.warning(f'Warning: Gene {gene} has multiple matches. Pick the first one.')
     gene_list = list(gene_list)
     for gene in gremove:
         gene_list.remove(gene)
