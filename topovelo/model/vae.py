@@ -1122,6 +1122,7 @@ class VAE(VanillaVAE):
 
         self.dim_z = dim_z
         self.enable_cvae = dim_cond > 0
+        self.spatial_decoder = spatial_decoder
 
         seed_everything(random_state)
         self.split_train_validation_test(adata.n_obs, test_samples)
@@ -2444,7 +2445,6 @@ class VAE(VanillaVAE):
               spatial_key,
               edge_attr=None,
               config={},
-              train_sp_decoder=False,
               plot=False,
               gene_plot=[],
               cluster_key="clusters",
@@ -2631,7 +2631,7 @@ class VAE(VanillaVAE):
                 u0_prev = self.u0
                 s0_prev = self.s0
         
-        if self.train_sp_decoder:
+        if self.spatial_decoder:
             print("*********                      Stage  3                       *********")
             count_epoch += epoch+1
             del param_nn, param_ode, param_post, optimizer, optimizer_ode
@@ -3396,15 +3396,16 @@ class VAE(VanillaVAE):
         with torch.no_grad():
             condition = (torch.zeros(adata_unseen.n_obs, self.n_batch).float()
                          if self.enable_cvae else None)
-            xy_hat = self.pred_xy(self.unseen_data.t,
-                                  self.unseen_data.z,
-                                  self.unseen_data.t0,
-                                  self.unseen_data.xy0,
-                                  self.unseen_data.data.adj_t,
-                                  self.unseen_data.edge_weight,
-                                  condition,
-                                  None,
-                                  mode='eval')
+            if self.spatial_decoder:
+                xy_hat = self.pred_xy(self.unseen_data.t,
+                                      self.unseen_data.z,
+                                      self.unseen_data.t0,
+                                      self.unseen_data.xy0,
+                                      self.unseen_data.data.adj_t,
+                                      self.unseen_data.edge_weight,
+                                      condition,
+                                      None,
+                                      mode='eval')
             z_in = self.unseen_data.z
             if self.enable_cvae:
                 z_in = torch.cat((z_in, condition), 1)
@@ -3417,7 +3418,8 @@ class VAE(VanillaVAE):
         adata_unseen.obs[f"{key}_std_t"] = std_t
         adata_unseen.obsm[f"{key}_z"] = z
         adata_unseen.obsm[f"{key}_std_z"] = std_z
-        adata_unseen.obsm[f"X_{key}_xy"] = xy_hat.detach().cpu().numpy()
+        if self.spatial_decoder:
+            adata_unseen.obsm[f"X_{key}_xy"] = xy_hat.detach().cpu().numpy()
         adata_unseen.obsm[f"X_{key}_xy0"] = self.unseen_data.xy0.detach().cpu().numpy()
         adata_unseen.layers[f"{key}_uhat"] = uhat
         adata_unseen.layers[f"{key}_shat"] = shat
@@ -3442,8 +3444,8 @@ class VAE(VanillaVAE):
             adata_unseen.obs[f"{key}_t1"] = self.t1.detach().cpu().squeeze().numpy()
             adata_unseen.layers[f"{key}_u1"] = self.unseen_data.u1.detach().cpu().numpy()
             adata_unseen.layers[f"{key}_s1"] = self.unseen_data.s1.detach().cpu().numpy()
-
-        adata_unseen.obsm[f"{key}_velocity_{key}_xy"] = self.xy_velocity(self.unseen_data, condition)
+        if self.spatial_decoder:
+            adata_unseen.obsm[f"{key}_velocity_{key}_xy"] = self.xy_velocity(self.unseen_data, condition)
         del condition, rho, out
 
         rna_velocity_vae(adata_unseen,
@@ -3938,15 +3940,17 @@ class VAE(VanillaVAE):
         with torch.no_grad():
             condition = (F.one_hot(self.graph_data.batch, self.n_batch).float()
                          if self.enable_cvae else None)
-            xy_hat = self.pred_xy(self.graph_data.t,
-                                  self.graph_data.z,
-                                  self.graph_data.t0,
-                                  self.graph_data.xy0,
-                                  self.graph_data.data.adj_t,
-                                  self.graph_data.edge_weight,
-                                  condition,
-                                  None,
-                                  mode='eval')
+            if self.spatial_decoder:
+                xy_hat = self.pred_xy(self.graph_data.t,
+                                      self.graph_data.z,
+                                      self.graph_data.t0,
+                                      self.graph_data.xy0,
+                                      self.graph_data.data.adj_t,
+                                      self.graph_data.edge_weight,
+                                      condition,
+                                      None,
+                                      mode='eval')
+
             z_in = self.graph_data.z
             if self.enable_cvae:
                 z_in = torch.cat((z_in, condition), 1)
@@ -3960,7 +3964,6 @@ class VAE(VanillaVAE):
         adata.obs[f"{key}_std_t"] = std_t
         adata.obsm[f"{key}_z"] = z
         adata.obsm[f"{key}_std_z"] = std_z
-        adata.obsm[f"X_{key}_xy"] = xy_hat.detach().cpu().numpy()
         adata.obsm[f"X_{key}_xy0"] = self.graph_data.xy0.detach().cpu().numpy()
         adata.layers[f"{key}_uhat"] = Uhat
         adata.layers[f"{key}_shat"] = Shat
@@ -3994,7 +3997,9 @@ class VAE(VanillaVAE):
             adata.uns[f"{key}_test_idx"] = self.test_idx
         adata.uns[f"{key}_run_time"] = self.timer
 
-        adata.obsm[f"{key}_velocity_{key}_xy"] = self.xy_velocity(self.graph_data, condition)
+        if self.spatial_decoder:
+            adata.obsm[f"X_{key}_xy"] = xy_hat.detach().cpu().numpy()
+            adata.obsm[f"{key}_velocity_{key}_xy"] = self.xy_velocity(self.graph_data, condition)
         del condition, rho, out
 
         rna_velocity_vae(adata,
