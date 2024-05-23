@@ -1495,6 +1495,7 @@ def plot_heat_density(vals,
                       n_grid=100,
                       scale=1.5,
                       bw_adjust=1.0,
+                      levels=10,
                       sample_per_bin=None,
                       width=WIDTH,
                       height=HEIGHT,
@@ -1536,6 +1537,8 @@ def plot_heat_density(vals,
             Scale factor for distance threshold. Defaults to 1.5.
         bw_adjust (float, optional):
             Bandwidth adjustment for KDE. Defaults to 1.0.
+        levels (int, optional):
+            Number of levels for the KDE plot. Defaults to 10.
         sample_per_bin (int, optional):
             Number of samples per bin. Defaults to None.
         width (int, optional):
@@ -1616,6 +1619,7 @@ def plot_heat_density(vals,
             fill=True,
             cmap=cmap,
             bw_adjust=bw_adjust,
+            levels=levels,
             ax=ax)
     
     # color bar
