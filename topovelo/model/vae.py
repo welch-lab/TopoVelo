@@ -31,7 +31,7 @@ from .vanilla_vae import VanillaVAE, kl_gaussian
 from .velocity import rna_velocity_vae
 P_MAX = 1e4
 GRAD_MAX = 1e5
-global logger
+logger = logging.getLogger(__name__)
 
 
 class Encoder(nn.Module):
@@ -921,6 +921,7 @@ class VAE(VanillaVAE):
                  full_vb=False,
                  discrete=False,
                  graph_decoder=True,
+                 spatial_decoder=False,
                  attention=True,
                  n_head=5,
                  batch_key=None,
@@ -966,6 +967,10 @@ class VAE(VanillaVAE):
                 Dimension of additional information for the conditional VAE.
                 Set to zero by default, equivalent to a VAE.
                 This feature is not stable now.
+            dim_coord (int, optional):
+                Dimension of the spatial coordinates
+            dim_edge (int, optional):
+                Dimension of the edge features
             device ({'gpu','cpu'}, optional):
                 Training device
             hidden_size (tuple of int, optional):
@@ -975,6 +980,22 @@ class VAE(VanillaVAE):
                 Enable the full variational Bayes
             discrete (bool, optional):
                 Enable the discrete count model
+            graph_decoder (bool, optional):
+                Enable GNN as the VAE decoder
+            spatial_decoder (bool, optional):
+                Enable the spatial decoder
+            attention (bool, optional):
+                Enable the graph attention mechanism
+            n_head (int, optional):
+                Number of heads in the graph attention mechanism
+            batch_key (str, optional):
+                Column in the AnnData object containing the batch information
+            ref_batch (int, optional):
+                Reference batch for the batch correction
+            slice_key (str, optional):
+                Column in the AnnData object containing the slice information
+            discrete_dim (int, optional):
+                Number of discrete dimensions, used in stage 2 KNN search
             init_method ({'tprior', 'steady}, optional):
                 Initialization method.
                 Should choose from
@@ -1021,6 +1042,8 @@ class VAE(VanillaVAE):
             random_state (int, optional):
                 Random seed. Notice that pytorch_geometric graph attention is not entirely reproducible
                 even with the same random seed. See https://github.com/pytorch/pytorch/issues/75179.
+            verbose_level (int, optional):
+                Logging level. Default to logging.WARNING.  
         """
         t_start = time.time()
         self.timer = 0
@@ -1184,7 +1207,6 @@ class VAE(VanillaVAE):
         self.n_drop = 0  # Count the number of consecutive iterations with little decrease in loss
         self.train_stage = 1
 
-        logger = logging.getLogger(__name__)
         logger.setLevel(verbose_level)
 
         self.timer = time.time()-t_start
@@ -2422,6 +2444,7 @@ class VAE(VanillaVAE):
               spatial_key,
               edge_attr=None,
               config={},
+              train_sp_decoder=False,
               plot=False,
               gene_plot=[],
               cluster_key="clusters",
@@ -2608,78 +2631,81 @@ class VAE(VanillaVAE):
                 u0_prev = self.u0
                 s0_prev = self.s0
         
-        print("*********                      Stage  3                       *********")
-        count_epoch += epoch+1
-        del param_nn, param_ode, param_post, optimizer, optimizer_ode
-        param_sp = list(self.decoder.net_coord.parameters())
-        optimizer = torch.optim.Adam(param_sp, lr=1e-3, weight_decay=self.config["lambda"])
-        self.train_stage = 3
-        self.n_drop = 0
-        self.loss_train_sp = []
-        self.loss_test_sp = []
-        self.config["early_stop_thred"] = 0
-        for epoch in range(n_epochs):
-            stop_training = self.train_spatial_epoch(optimizer)
+        if self.train_sp_decoder:
+            print("*********                      Stage  3                       *********")
+            count_epoch += epoch+1
+            del param_nn, param_ode, param_post, optimizer, optimizer_ode
+            param_sp = list(self.decoder.net_coord.parameters())
+            optimizer = torch.optim.Adam(param_sp, lr=1e-3, weight_decay=self.config["lambda"])
+            self.train_stage = 3
+            self.n_drop = 0
+            self.loss_train_sp = []
+            self.loss_test_sp = []
+            self.config["early_stop_thred"] = 0
+            for epoch in range(n_epochs):
+                stop_training = self.train_spatial_epoch(optimizer)
 
-            if plot and (epoch == 0 or (epoch+1) % self.config["save_epoch"] == 0):
-                mse_train = self.test_spatial(f"train{epoch+1}", False, plot, figure_path)
-                self.set_mode('train')
-                mse_test = self.loss_test_sp[-1] if len(self.loss_test_sp) > 0 else [-np.inf]
-                logging.debug(f"Epoch {epoch+1}: Train MSE = {np.sum(mse_train):.3f},\t"
-                              f"Test MSE = {np.sum(mse_test):.3f},\t"
-                              f"Total Time = {convert_time(time.time()-start)}")
+                if plot and (epoch == 0 or (epoch+1) % self.config["save_epoch"] == 0):
+                    mse_train = self.test_spatial(f"train{epoch+1}", False, plot, figure_path)
+                    self.set_mode('train')
+                    mse_test = self.loss_test_sp[-1] if len(self.loss_test_sp) > 0 else [-np.inf]
+                    logging.debug(f"Epoch {epoch+1}: Train MSE = {np.sum(mse_train):.3f},\t"
+                                f"Test MSE = {np.sum(mse_test):.3f},\t"
+                                f"Total Time = {convert_time(time.time()-start)}")
 
-            if stop_training:
-                print(f"*********       Stage 3: Early Stop Triggered at epoch {count_epoch+epoch+1}.       *********")
-                logger.debug(f"Summary: \n"
-                             f"Train MSE = {np.sum(self.loss_train_sp[-1]):.3f}\n"
-                             f"Test MSE = {np.sum(self.loss_test_sp[-1]):.3f}\n"
-                             f"Total Time = {convert_time(time.time()-start)}\n")
-                break
+                if stop_training:
+                    print(f"*********       Stage 3: Early Stop Triggered at epoch {count_epoch+epoch+1}.       *********")
+                    logger.debug(f"Summary: \n"
+                                f"Train MSE = {np.sum(self.loss_train_sp[-1]):.3f}\n"
+                                f"Test MSE = {np.sum(self.loss_test_sp[-1]):.3f}\n"
+                                f"Total Time = {convert_time(time.time()-start)}\n")
+                    break
 
-        elbo_train = self.test(self.x_embed[self.train_idx],
-                               "final-train",
-                               False,
-                               gind,
-                               gene_plot,
-                               plot,
-                               figure_path)
-        elbo_test = self.test(self.x_embed[self.validation_idx],
-                              "final-test",
-                              True,
-                              gind,
-                              gene_plot,
-                              plot,
-                              figure_path)
-        mse_train = self.test_spatial("final-train", False, plot, figure_path)
-        mse_test = self.test_spatial("final-test", True, plot, figure_path)
-        self.loss_train.append([-x for x in elbo_train])
-        self.loss_test.append(elbo_test)
-        self.loss_train_sp.append(mse_train)
-        self.loss_test_sp.append(mse_test)
-        # Plot final results
-        if plot:
-            self.loss_train = np.stack(self.loss_train)
-            plot_train_loss(self.loss_train[:, 0],
-                            range(1, len(self.loss_train)+1),
-                            save=f'{figure_path}/likelihood_train.png')
-            plot_train_loss(self.loss_train[:, 1],
-                            range(1, len(self.loss_train)+1),
-                            save=f'{figure_path}/kl_train.png')
-            plot_train_loss(self.loss_train_sp,
-                            range(1, len(self.loss_train_sp)+1),
-                            save=f'{figure_path}/xyloss_train.png')
-            if self.config["test_iter"] > 0:
-                self.loss_test = np.stack(self.loss_test)
-                plot_test_loss(self.loss_test[:, 0],
-                               [i*self.config["test_iter"] for i in range(1, len(self.loss_test)+1)],
-                               save=f'{figure_path}/likelihood_validation.png')
-                plot_test_loss(self.loss_test[:, 1],
-                               [i*self.config["test_iter"] for i in range(1, len(self.loss_test)+1)],
-                               save=f'{figure_path}/kl_validation.png')
-                plot_test_loss(self.loss_test_sp,
-                               [i*self.config["test_iter"] for i in range(1, len(self.loss_test_sp)+1)],
-                               save=f'{figure_path}/xyloss_test.png')
+            elbo_train = self.test(self.x_embed[self.train_idx],
+                                "final-train",
+                                False,
+                                gind,
+                                gene_plot,
+                                plot,
+                                figure_path)
+            elbo_test = self.test(self.x_embed[self.validation_idx],
+                                "final-test",
+                                True,
+                                gind,
+                                gene_plot,
+                                plot,
+                                figure_path)
+            mse_train = self.test_spatial("final-train", False, plot, figure_path)
+            mse_test = self.test_spatial("final-test", True, plot, figure_path)
+            self.loss_train.append([-x for x in elbo_train])
+            self.loss_test.append(elbo_test)
+            self.loss_train_sp.append(mse_train)
+            self.loss_test_sp.append(mse_test)
+            # Plot final results
+            if plot:
+                self.loss_train = np.stack(self.loss_train)
+                plot_train_loss(self.loss_train[:, 0],
+                                range(1, len(self.loss_train)+1),
+                                save=f'{figure_path}/likelihood_train.png')
+                plot_train_loss(self.loss_train[:, 1],
+                                range(1, len(self.loss_train)+1),
+                                save=f'{figure_path}/kl_train.png')
+                plot_train_loss(self.loss_train_sp,
+                                range(1, len(self.loss_train_sp)+1),
+                                save=f'{figure_path}/xyloss_train.png')
+                if self.config["test_iter"] > 0:
+                    self.loss_test = np.stack(self.loss_test)
+                    plot_test_loss(self.loss_test[:, 0],
+                                [i*self.config["test_iter"] for i in range(1, len(self.loss_test)+1)],
+                                save=f'{figure_path}/likelihood_validation.png')
+                    plot_test_loss(self.loss_test[:, 1],
+                                [i*self.config["test_iter"] for i in range(1, len(self.loss_test)+1)],
+                                save=f'{figure_path}/kl_validation.png')
+                    plot_test_loss(self.loss_test_sp,
+                                [i*self.config["test_iter"] for i in range(1, len(self.loss_test_sp)+1)],
+                                save=f'{figure_path}/xyloss_test.png')
+        else:
+            logger.info("Skipping the spatial decoder training.")
 
         self.timer = self.timer + (time.time()-start)
         print(f"*********              Finished. Total Time = {convert_time(self.timer)}             *********")
