@@ -3964,7 +3964,6 @@ class VAE(VanillaVAE):
         adata.obs[f"{key}_std_t"] = std_t
         adata.obsm[f"{key}_z"] = z
         adata.obsm[f"{key}_std_z"] = std_z
-        adata.obsm[f"X_{key}_xy0"] = self.graph_data.xy0.detach().cpu().numpy()
         adata.layers[f"{key}_uhat"] = Uhat
         adata.layers[f"{key}_shat"] = Shat
         
@@ -3998,6 +3997,7 @@ class VAE(VanillaVAE):
         adata.uns[f"{key}_run_time"] = self.timer
 
         if self.spatial_decoder:
+            adata.obsm[f"X_{key}_xy0"] = self.graph_data.xy0.detach().cpu().numpy()
             adata.obsm[f"X_{key}_xy"] = xy_hat.detach().cpu().numpy()
             adata.obsm[f"{key}_velocity_{key}_xy"] = self.xy_velocity(self.graph_data, condition)
         del condition, rho, out
