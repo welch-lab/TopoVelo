@@ -2847,7 +2847,20 @@ class VAE(VanillaVAE):
             graph (:class:`numpy.ndarray`): Spatial graph.
             spatial_key (str): Key for extracting spatial coordinates.
             key (str): Key for storing pretrained model parameters in AnnData
-            
+            edge_attr (:class:`numpy.ndarray`, optional):
+                Edge attributes. Has a shape of (n_edge, dim_feature).
+                The order should follow the edge_index in graph.
+                Defaults to None.
+            config (dictionary, optional):
+                Contains all hyper-parameters.
+            cluster_key (str, optional):
+                Key in adata.obs storing the cell type annotation.
+            us_keys (list, optional):
+                Keys in adata.layers storing the unspliced and spliced count matrices.
+            embed (str, optional):
+                Low dimensional embedding in adata.obsm. The actual key storing the embedding should be f'X_{embed}'
+            random_state (int, optional):
+                Random seed for reproducibility.
         """
         seed_everything(random_state)
         print("--------------------------- Reloading a TopoVelo ---------------------------")
