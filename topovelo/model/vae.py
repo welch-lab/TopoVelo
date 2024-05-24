@@ -2656,29 +2656,13 @@ class VAE(VanillaVAE):
                 if stop_training:
                     print(f"*********       Stage 3: Early Stop Triggered at epoch {count_epoch+epoch+1}.       *********")
                     logger.debug(f"Summary: \n"
-                                f"Train MSE = {np.sum(self.loss_train_sp[-1]):.3f}\n"
-                                f"Test MSE = {np.sum(self.loss_test_sp[-1]):.3f}\n"
-                                f"Total Time = {convert_time(time.time()-start)}\n")
+                                 f"Train MSE = {np.sum(self.loss_train_sp[-1]):.3f}\n"
+                                 f"Test MSE = {np.sum(self.loss_test_sp[-1]):.3f}\n"
+                                 f"Total Time = {convert_time(time.time()-start)}\n")
                     break
 
-            elbo_train = self.test(self.x_embed[self.train_idx],
-                                "final-train",
-                                False,
-                                gind,
-                                gene_plot,
-                                plot,
-                                figure_path)
-            elbo_test = self.test(self.x_embed[self.validation_idx],
-                                "final-test",
-                                True,
-                                gind,
-                                gene_plot,
-                                plot,
-                                figure_path)
             mse_train = self.test_spatial("final-train", False, plot, figure_path)
             mse_test = self.test_spatial("final-test", True, plot, figure_path)
-            self.loss_train.append([-x for x in elbo_train])
-            self.loss_test.append(elbo_test)
             self.loss_train_sp.append(mse_train)
             self.loss_test_sp.append(mse_test)
             # Plot final results
@@ -2704,13 +2688,29 @@ class VAE(VanillaVAE):
                     plot_test_loss(self.loss_test_sp,
                                 [i*self.config["test_iter"] for i in range(1, len(self.loss_test_sp)+1)],
                                 save=f'{figure_path}/xyloss_test.png')
+            
         else:
             logger.info("Skipping the spatial decoder training.")
-
+        
+        # Final test
+        elbo_train = self.test(self.x_embed[self.train_idx],
+                               "final-train",
+                               False,
+                               gind,
+                               gene_plot,
+                               plot,
+                               figure_path)
+        elbo_test = self.test(self.x_embed[self.validation_idx],
+                              "final-test",
+                              True,
+                              gind,
+                              gene_plot,
+                              plot,
+                              figure_path)
+        print(f"Final: Train ELBO = {np.sum(elbo_train):.3f},\tTest ELBO = {np.sum(elbo_test):.3f}")
         self.timer = self.timer + (time.time()-start)
         print(f"*********              Finished. Total Time = {convert_time(self.timer)}             *********")
-        print(f"Final: Train ELBO = {np.sum(elbo_train):.3f},\tTest ELBO = {np.sum(elbo_test):.3f}"
-              f"\tTrain MSE = {mse_train:.3f},\tTestMSE = {mse_test:.3f}")
+        
         return
 
     def pred_all(self, cell_labels, mode='test', output=["uhat", "shat", "t", "z"], gene_idx=None):
