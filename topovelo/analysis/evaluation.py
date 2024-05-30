@@ -1,6 +1,7 @@
 """Evaluation Module
 Performs performance evaluation for various RNA velocity models and generates figures.
 """
+import logging
 import numpy as np
 import pandas as pd
 from os import makedirs
@@ -12,6 +13,7 @@ from .plot_config import PlotConfig
 from ..scvelo_preprocessing.neighbors import neighbors
 from ..plotting import set_dpi, get_colors, plot_cluster, plot_phase_grid, plot_sig_grid, plot_time_grid
 from ..plotting import compute_figsize
+logger = logging.getLogger(__name__)
 
 
 def get_n_cpu(n_cell):
@@ -123,8 +125,8 @@ def get_velocity_metric(adata,
             velocity_graph(adata, vkey=vkey, gene_subset=gene_subset, n_jobs=n_jobs)
             velocity_embedding(adata, vkey=vkey, basis=embed)
         except ImportError:
-            print("Please install scVelo to compute velocity embedding.\n"
-                  "Skipping metrics 'Cross-Boundary Direction Correctness'.")
+            logger.warning("Please install scVelo to compute velocity embedding.\n"
+                           "Skipping metrics 'Cross-Boundary Direction Correctness'.")
 
         cbdir_embed, mean_cbdir_embed = cross_boundary_correctness(adata,
                                                                    cluster_key,
@@ -279,7 +281,7 @@ def gather_type_stats(**kwargs):
             metrics.append(index_map[key])
             type_dfs.append(pd.DataFrame.from_dict(kwargs[key], orient='index'))
         except KeyError:
-            print(f"Warning: {key} not found in index map, ignored.")
+            logger.warning(f"Warning: {key} not found in index map, ignored.")
             continue
     stats_type = pd.concat(type_dfs, axis=1).T
     stats_type.index = pd.Index(metrics)
@@ -485,13 +487,29 @@ def get_metric(adata,
     return stats, stats_type, multi_stats, multi_stats_type
 
 
+def _sanity_check(adata, spatial_graph_key, spatial_key, cluster_key, embed):
+    if spatial_graph_key not in adata.obsp:
+        logger.error(f"Spatial graph with key {spatial_graph_key} not found in .obsp. Please set `spatial_graph_key` properly.")
+        return False
+    if spatial_key not in adata.obsm:
+        logger.error(f"Spatial coordinates with key {spatial_key} not found in .obsm. Please set `spatial_key` properly.")
+        return False
+    if cluster_key not in adata.obs:
+        logger.error(f"Cell type annotations with key {cluster_key} not found in .obs. Please set `cluster_key` properly.")
+        return False
+    if f'X_{embed}' not in adata.obsm:
+        logger.error(f"Embedding with key X_{embed} not found in .obsm. Please set `embed` properly.")
+        return False
+    return True
+
+
 def post_analysis(adata,
                   test_id,
                   methods,
                   keys,
                   spatial_graph_key='spatial_graph',
                   spatial_key='X_spatial',
-                  n_spatial_neighbors=8,
+                  n_spatial_neighbors=30,
                   gene_key='velocity_genes',
                   compute_metrics=False,
                   raw_count=False,
@@ -528,7 +546,7 @@ def post_analysis(adata,
         spatial_key (str, optional):
             Key for spatial embedding. Defaults to None.
         n_spatial_neighbors (int, optional):
-            Number of spatial neighbors. Defaults to 8.
+            Number of spatial neighbors. Defaults to 30.
         gene_key (str, optional):
             Key for filtering the genes. Defaults to 'velocity_genes'.
         compute_metrics (bool, optional):
@@ -576,13 +594,21 @@ def post_analysis(adata,
         dict: Performance metrics for each time step.
         dict: Performance metrics for each cell type transition and each time step.
     """
+    # sanity check
+    if not _sanity_check(adata, spatial_graph_key, spatial_key, cluster_key, embed):
+        return None, None, None, None
+    
     # set the random seed
     random_state = 42 if 'random_state' not in kwargs else kwargs['random_state']
     np.random.seed(random_state)
+
     # dpi
     set_dpi(dpi)
+
+    # Check figure path
     if figure_path is not None:
         makedirs(figure_path, exist_ok=True)
+
     # Retrieve data
     if raw_count:
         U, S = adata.layers["unspliced"].A, adata.layers["spliced"].A
@@ -606,20 +632,19 @@ def post_analysis(adata,
             if len(idx) > 0:
                 gene_indices.append(idx[0])
             else:
-                print(f"Warning: gene name {gene} not found in AnnData. Removed.")
+                logger.warning(f"Warning: gene name {gene} not found in AnnData. Removed.")
                 gene_rm.append(gene)
         for gene in gene_rm:
             genes.remove(gene)
 
         if len(gene_indices) == 0:
-            print("Warning: No gene names found. Randomly select genes...")
+            logger.warning("No gene names found. Randomly select genes...")
             gene_indices = np.random.choice(adata.n_vars, grid_size[0]*grid_size[1], replace=False).astype(int)
             genes = adata.var_names[gene_indices].to_numpy()
-    else:
-        print("Warning: No gene names are provided. Randomly select genes...")
+    elif 'gene' in plot_type or 'all' in plot_type:
+        logger.warning("No gene names are provided. Randomly select genes...")
         gene_indices = np.random.choice(adata.n_vars, grid_size[0]*grid_size[1], replace=False).astype(int)
         genes = adata.var_names[gene_indices].to_numpy()
-        print(genes)
 
     stats = {}
     stats_type_list, multi_stats_list, multi_stats_type_list = [], [], []
@@ -637,41 +662,42 @@ def post_analysis(adata,
 
     # recompute the spatial KNN graph
     if spatial_velocity_graph:
-        if spatial_key in adata.obsm:
-            print(f'Computing a spatial graph using KNN on {spatial_key} with k={n_spatial_neighbors}')
-            if 'connectivities' in adata.obsp or 'neighbors' in adata.uns:
-                print(f'Warning: overwriting the original KNN graph! (.uns, .obsp)')
-            neighbors(adata, n_neighbors=n_spatial_neighbors, use_rep=spatial_key, method='sklearn')
-        else:
-            raise KeyError
+        print(f'Computing a spatial graph using KNN on {spatial_key} with k={n_spatial_neighbors}')
+        if 'connectivities' in adata.obsp or 'neighbors' in adata.uns:
+            logger.warning(f'Overwriting the original KNN graph! (.uns, .obsp)')
+        neighbors(adata, n_neighbors=n_spatial_neighbors, use_rep=spatial_key, method='sklearn')
 
     # Compute metrics and generate plots for each method
     for i, method in enumerate(methods):
+        # Compute metrics
         if compute_metrics:
             print(f'*** Computing performance metrics {i+1}/{len(methods)} ***')
-            (stats_i, stats_type_i,
-             multi_stats_i, multi_stats_type_i) = get_metric(adata,
-                                                             method,
-                                                             keys[i],
-                                                             vkeys[i],
-                                                             tkeys[i],
-                                                             spatial_graph_key,
-                                                             cluster_key,
-                                                             gene_key,
-                                                             cluster_edges,
-                                                             embed,
-                                                             n_jobs=(kwargs['n_jobs']
-                                                                     if 'n_jobs' in kwargs
-                                                                     else None))
-            print('Finished. \n')
-            stats_type_list.append(stats_type_i)
-            multi_stats_list.append(multi_stats_i)
-            multi_stats_type_list.append(multi_stats_type_i)
-            # avoid duplicate methods with different keys
-            method_ = f"{method} ({keys[i]})" if method in stats else method
-            methods_display.append(method_)
-            stats[method_] = stats_i
-
+            try:
+                (stats_i, stats_type_i,
+                multi_stats_i, multi_stats_type_i) = get_metric(adata,
+                                                                method,
+                                                                keys[i],
+                                                                vkeys[i],
+                                                                tkeys[i],
+                                                                spatial_graph_key,
+                                                                cluster_key,
+                                                                gene_key,
+                                                                cluster_edges,
+                                                                embed,
+                                                                n_jobs=(kwargs['n_jobs']
+                                                                        if 'n_jobs' in kwargs
+                                                                        else None))
+                print('Finished. \n')
+                stats_type_list.append(stats_type_i)
+                multi_stats_list.append(multi_stats_i)
+                multi_stats_type_list.append(multi_stats_type_i)
+                # avoid duplicate methods with different keys
+                method_ = f"{method} ({keys[i]})" if method in stats else method
+                methods_display.append(method_)
+                stats[method_] = stats_i
+            except KeyError:
+                logger.warning(f"Error: model ({method})  with key={keys[i]} not found in AnnData. Skipping...")
+                continue
         # Compute prediction for the purpose of plotting (a fixed number of plots)
         if 'phase' in plot_type or 'gene' in plot_type or 'all' in plot_type:
             # avoid duplicate methods with different keys
@@ -745,7 +771,8 @@ def post_analysis(adata,
                                         names=['Model'])
         pd.set_option("display.precision", 3)
 
-    print("---   Plotting  Results   ---")
+    if plot_type:
+        print("---   Plotting  Results   ---")
 
     # Generate plots
     if 'cluster' in plot_type or "all" in plot_type:
@@ -910,7 +937,7 @@ def post_analysis(adata,
                                           save=(None if figure_path is None else
                                                 f'{figure_path}/{test_id}_{keys[i]}.png'))
         except ImportError:
-            print('Please install scVelo in order to generate stream plots')
+            logger.error('Please install scVelo in order to generate stream plots')
             pass
     
     # Cell velocity from the GNN spatial decoder
@@ -957,7 +984,7 @@ def post_analysis(adata,
                                               save=(None if figure_path is None else
                                                     f'{figure_path}/{test_id}_{keys[i]}_cell_velocity.png'))
         except ImportError:
-            print('Please install scVelo in order to generate stream plots')
+            logger.error('Please install scVelo in order to generate stream plots')
             pass
 
     if save_anndata is not None:
