@@ -323,6 +323,19 @@ def preprocess(adata,
 
 
 def get_spatialde(adata, min_counts=1, min_counts_u=1):
+    """Use spatialDE to identify spatially variable genes.
+
+    Args:
+        adata (class:`AnnData`): Annotated data matrix.
+        min_counts (int, optional): Minimum total count for gene filtering. Defaults to 1.
+        min_counts_u (int, optional): Minimum total unspliced read count for gene filtering.. Defaults to 1.
+
+    Raises:
+        ImportError: Please install NaiveDE and SpatialDE.
+
+    Returns:
+        array-like: List of spatially variable genes sorted by q-value.
+    """
     try:
         import NaiveDE as nde
         import SpatialDE as spd

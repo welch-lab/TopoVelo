@@ -1,9 +1,8 @@
 import numpy as np
-import pandas as pd
 import logging
 import os
 import matplotlib.pyplot as plt
-from scipy.sparse import csr_matrix, csc_matrix, coo_matrix, csr_array
+from scipy.sparse import csr_matrix, csc_matrix, coo_matrix
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -298,6 +297,7 @@ class MultiLayerGraphDecoder(nn.Module):
 
 
 class Decoder(nn.Module):
+    """Decoder class for the TopoVelo model"""
     def __init__(self,
                  adata,
                  tmax,
@@ -968,35 +968,43 @@ class VAE(VanillaVAE):
                 Set to zero by default, equivalent to a VAE.
                 This feature is not stable now.
             dim_coord (int, optional):
-                Dimension of the spatial coordinates
+                Dimension of the spatial coordinates.
             dim_edge (int, optional):
                 Dimension of the edge features
             device ({'gpu','cpu'}, optional):
                 Training device
-            hidden_size (tuple of int, optional):
+            hidden_size (tuple[int], optional):
                 Width of the hidden layers. Should be a tuple of the form
-                (encoder layer 1, encoder layer 2, decoder layer 1, decoder layer 2)
+                (encoder layer 1, decoder layer 1, decoder layer 2)
+                Defaults to (500, 250, 500).
+            spatial_hidden_size (tuple[int], optional):
+                Width of the hidden layers in the spatial decoder.
+                Should be a tuple of the form (spatial layer 1, spatial layer 2).
+                Defaults to (128, 64).
             full_vb (bool, optional):
-                Enable the full variational Bayes
+                Enable the full variational Bayes. Defaults to False.
             discrete (bool, optional):
-                Enable the discrete count model
+                Enable the discrete count model. Defaults to False.
             graph_decoder (bool, optional):
-                Enable GNN as the VAE decoder
+                Enable GNN as the VAE decoder. Defaults to True.
             spatial_decoder (bool, optional):
-                Enable the spatial decoder
+                Enable the spatial decoder. Defaults to False.
             attention (bool, optional):
-                Enable the graph attention mechanism
+                Enable the graph attention mechanism. Defaults to True.
             n_head (int, optional):
-                Number of heads in the graph attention mechanism
+                Number of heads in the graph attention mechanism. Defaults to 5.
             batch_key (str, optional):
-                Column in the AnnData object containing the batch information
+                Column in the AnnData object containing the batch information.
+                Defaults to None.
             ref_batch (int, optional):
-                Reference batch for the batch correction
+                Reference batch for the batch correction. Defaults to None.
             slice_key (str, optional):
-                Column in the AnnData object containing the slice information
+                Column in the AnnData object containing the slice information.
+                Defaults to None.
             discrete_dim (int, optional):
-                Number of discrete dimensions, used in stage 2 KNN search
-            init_method ({'tprior', 'steady}, optional):
+                Number of discrete dimensions, used in stage 2 KNN search.
+                Defaults to None.
+            init_method ({'tprior', 'steady'}, optional):
                 Initialization method.
                 Should choose from
                 (1) tprior: use the capture time to estimate rate parameters. Cell time will be
@@ -1006,29 +1014,35 @@ class VAE(VanillaVAE):
                             After this, a global cell time is estimated by taking the quantile over
                             all local times. Finally, rate parameters are reinitialized using the
                             global cell time.
+                Defaults to 'steady'.
             init_key (str, optional):
-                column in the AnnData object containing the capture time
+                Column in the AnnData object containing the capture time.
+                Defaults to None.
             tprior (str, optional):
-                key in adata.obs that stores the capture time.
-                Used for informative time prior
+                Key in adata.obs that stores the capture time.
+                Used for informative time prior.
+            train_test_split (tuple[float], optional):
+                Train-test split ratio. Defaults to (0.7, 0.2, 0.1).
+            test_samples (int, optional):
+                Indices of test samples. Defaults to None.
             init_ton_zero (bool, optional):
                 Whether to add a non-zero switch-on time for each gene.
-                It's set to True if there's no capture time.
+                It's set to True if there's no capture time. Defaults to True.
             filter_gene (bool, optional):
-                Whether to remove non-velocity genes
+                Whether to remove non-velocity genes. Defaults to False.
             count_distriution ({'auto', 'Poisson', 'NB'}, optional):
                 Count distribution, effective only when discrete=True
                 The current version only assumes Poisson or negative binomial distributions.
                 When set to 'auto', the program determines a proper one based on over dispersion
             time_overlap (float, optional):
                 Overlap of two adjacent time intervals when using the capture time as the prior.
-                This is used to control the variance of the prior.
+                This is used to control the variance of the prior. Defaults to 0.05.
             std_z_prior (float, optional):
                 Standard deviation of the prior (isotropical Gaussian) of cell state.
             min_sigma_u (float, optional):
-                Minimum value of Gaussian noise of unspliced counts.
+                Minimum value of Gaussian noise of unspliced counts. Defaults to 0.1.
             min_sigma_s (float, optional):
-                Minimum value of Gaussian noise of spliced counts.
+                Minimum value of Gaussian noise of spliced counts. Defaults to 0.1.
             xavier_gain (float, optional):
                 Gain of the Xavier initialization. Default to 0.05.
             checkpoints (list of 2 strings, optional):
@@ -1213,6 +1227,12 @@ class VAE(VanillaVAE):
         self.timer = time.time()-t_start
 
     def split_train_validation_test(self, N, test_samples=None):
+        """Split training, validation and test samples.
+
+        Args:
+            N (int): Number of samples.
+            test_samples (array like, optional): Indices of test samples. Defaults to None.
+        """
         # Randomly select indices as training samples.
         if test_samples is None:
             rand_perm = np.random.permutation(N)
@@ -1341,49 +1361,42 @@ class VAE(VanillaVAE):
         Args:
             data_in (`torch.tensor`):
                 Input count data, (num_cell, 2*num_gene).
-                edge_index (`torch.tensor`):
-                Row and column indices of non-zero entries of the adjacency matrix, (2, num_cell).
-            xy (`torch.tensor`):
-                Spatial coordinates, (num_cell, 2).
-                batch_sample (`torch.tensor`):
-                Indices of the current batch for ODE evaulation.
+            edge_index (`torch.tensor`):
+                Row and column indices of non-zero entries of the adjacency matrix, (2, num_edge).
+            batch_sample (`torch.tensor`):
+                Indices of the sampled cells, (num_cell).
             lu_scale (`torch.tensor`):
                 library size scaling_u factor of unspliced counts, (num_gene)
                 Effective in the discrete mode and set to 1's in the continuouts model
             ls_scale (`torch.tensor`):
                 Similar to lu_scale, but for spliced counts, (num_gene).
-            u0 : `torch.tensor`, optional
+            edge_weight (`torch.tensor`, optional):
+                Weights of the edges, (num_edge). Effective only in GCN. Defaults to None
+            u0 (`torch.tensor`, optional): 
                 Initial condition of u, (num_cell, num_gene).
                 This is set to None in the first stage when cell time is not fixed.
                 It will have some value in the second stage, so the users
                 shouldn't worry about feeding the parameter themselves.
-            s0 : `torch.tensor`, optional
+            s0 (`torch.tensor`, optional): 
                 Initial condition of s, (num_cell, num_gene).
-            t0 : `torch.tensor`, optional
-                time at the initial condition, (num_cell, 1).
-            t1 : `torch.tensor`, optional
+            t0 (`torch.tensor`, optional): 
+                Time at the initial condition, (num_cell, 1).
+            t1 (`torch.tensor`, optional): 
                 Time at the future state.
                 Used only when `vel_continuity_loss` is set to True
-            condition : `torch.tensor`, optional
+            condition (`torch.tensor`, optional): 
                 Any additional condition to the VAE, (N, dim_cond)
 
         Returns:
-            mu_t (`torch.tensor`):
-                time mean, (N,1)
-            std_t (`torch.tensor`):
-                time standard deviation, (N,1)
-            mu_z (`torch.tensor`):
-                cell state mean, (N, Cz)
-            std_z (`torch.tensor`):
-                cell state standard deviation, (N, Cz)
-            t (`torch.tensor`):
-                sampled cell time, (N,1)
-            z (`torch.tensor`):
-                sampled cell sate, (N,Cz)
-            uhat : `torch.tensor`
-                predicted mean u values, (N,G)
-            shat : `torch.tensor`
-                predicted mean s values, (N,G)
+            - mu_t (`torch.tensor`): time mean, (N,1)
+            - std_t (`torch.tensor`): time standard deviation, (N,1)
+            - mu_z (`torch.tensor`): cell state mean, (N, Cz)
+            - std_z (`torch.tensor`): cell state standard deviation, (N, Cz)
+            - t (`torch.tensor`): sampled cell time, (N,1)
+            - z (`torch.tensor`): sampled cell sate, (N,Cz)
+            - uhat (`torch.tensor`): predicted mean u values, (N,G)
+            - shat (`torch.tensor`): predicted mean s values, (N,G)
+            - optionally outputs predicted u/s at future time, u/s velocity at past and future times
         """
         data_in_scale = data_in
         G = data_in_scale.shape[-1]//2
@@ -1454,49 +1467,43 @@ class VAE(VanillaVAE):
                    t0=None,
                    t1=None,
                    condition=None):
-        """Standard forward pass.
+        """Standard forward pass in evaluation mode.
 
-        Arguments
-        ---------
+        Args:
+            data_in (`torch.tensor`):
+                Input count data, (num_cell, 2*num_gene).
+            edge_index (`torch.tensor`):
+                Row and column indices of non-zero entries of the adjacency matrix, (2, num_edge).
+            lu_scale (`torch.tensor`):
+                library size scaling_u factor of unspliced counts, (num_gene)
+                Effective in the discrete mode and set to 1's in the continuouts model
+            ls_scale (`torch.tensor`):
+                Similar to lu_scale, but for spliced counts, (num_gene).
+            edge_weight (`torch.tensor`, optional):
+                Weights of the edges, (num_edge). Effective only in GCN. Defaults to None
+            u0 (`torch.tensor`, optional): 
+                Initial condition of u, (num_cell, num_gene).
+                This is set to None in the first stage when cell time is not fixed.
+                It will have some value in the second stage, so the users
+                shouldn't worry about feeding the parameter themselves.
+            s0 (`torch.tensor`, optional): 
+                Initial condition of s, (num_cell, num_gene).
+            t0 (`torch.tensor`, optional): 
+                Time at the initial condition, (num_cell, 1).
+            t1 (`torch.tensor`, optional): 
+                Time at the future state.
+                Used only when `vel_continuity_loss` is set to True
+            condition (`torch.tensor`, optional): 
+                Any additional condition to the VAE, (N, dim_cond)
 
-        data_in : `torch.tensor`
-            input count data, (N, 2G)
-        lu_scale : `torch.tensor`
-            library size scaling_u factor of unspliced counts, (G)
-            Effective in the discrete mode and set to 1's in the
-            continuouts model
-        ls_scale : `torch.tensor`
-            Similar to lu_scale, but for spliced counts, (G)
-        u0 : `torch.tensor`, optional
-            Initial condition of u, (N, G)
-            This is set to None in the first stage when cell time is
-            not fixed. It will have some value in the second stage, so the users
-            shouldn't worry about feeding the parameter themselves.
-        s0 : `torch.tensor`, optional
-            Initial condition of s, (N,G)
-        t0 : `torch.tensor`, optional
-            time at the initial condition, (N,1)
-        t1 : `torch.tensor`, optional
-            time at the future state.
-            Used only when `vel_continuity_loss` is set to True
-        condition : `torch.tensor`, optional
-            Any additional condition to the VAE
-
-        Returns
-        -------
-
-        mu_t : `torch.tensor`, optional
-            time mean, (N,1)
-        std_t : `torch.tensor`, optional
-            time standard deviation, (N,1)
-        mu_z : `torch.tensor`, optional
-            cell state mean, (N, Cz)
-        std_z : `torch.tensor`, optional
-            cell state standard deviation, (N, Cz)
-        uhat : `torch.tensor`, optional
-            predicted mean u values, (N,G)
-        shat : `torch.tensor`, optional
-            predicted mean s values, (N,G)
+        Returns:
+            - mu_t (`torch.tensor`): time mean, (N,1)
+            - std_t (`torch.tensor`): time standard deviation, (N,1)
+            - mu_z (`torch.tensor`): cell state mean, (N, Cz)
+            - std_z (`torch.tensor`): cell state standard deviation, (N, Cz)
+            - uhat (`torch.tensor`): predicted mean u values, (N,G)
+            - shat (`torch.tensor`): predicted mean s values, (N,G)
+            - optionally outputs predicted u/s at future time, u/s velocity at past and future times
         """
         data_in_scale = data_in
         G = data_in_scale.shape[-1]//2
@@ -2906,7 +2913,17 @@ class VAE(VanillaVAE):
                              figure_path="figures",
                              embed="umap",
                              random_state=2022):
-        """The high-level API for retraining the spatial decoder.
+        """The high-level API for resuming training the spatial decoder.
+
+        Args:
+            adata (:class:`anndata.AnnData`): Annotated data matrix.
+            lr (float, optional): Learning rate for the spatial decoder. Defaults to 1e-3.
+            plot (bool, optional): Whether to plot some sample genes during training. Used for debugging.
+            gene_plot (string list, optional): List of gene names to plot. Used only if plot==True
+            figure_path (str, optional): Path to the folder for saving plots.
+            embed (str, optional): Low dimensional embedding in adata.obsm.
+                The actual key storing the embedding should be f'X_{embed}'
+            random_state (int, optional): Random seed for reproducibility.
         """
         start = time.time()
         seed_everything(random_state)
@@ -3383,6 +3400,9 @@ class VAE(VanillaVAE):
                        edge_attr=None,
                        batch_key=None):
         """Evaluate the model inductively on unseen graph data.
+
+        Warning:
+            This function is considered unstable and may change in future releases.
         
         Args:
             adata (:class:`anndata.AnnData`): AnnData object.
@@ -3467,7 +3487,6 @@ class VAE(VanillaVAE):
                          use_raw=False,
                          use_scv_genes=False,
                          full_vb=self.is_full_vb)
-        
 
     def update_std_noise(self):
         """Update the standard deviation of Gaussian noise."""
@@ -3628,6 +3647,7 @@ class VAE(VanillaVAE):
         
         Returns:
             numpy.array : Attention score of shape (num_cell, num_cell, num_att_head).
+                The first dimension corresponds to source. Second dimension is target.
         """
         self.set_mode('eval')
         gatconv = self.decoder.net_rho2.conv1
@@ -3734,6 +3754,9 @@ class VAE(VanillaVAE):
         """Computes the gradient of gene transcription factors within some query cells
         with respect to query genes within their neighboring cells.
 
+        Warning:
+            This function is considered unstable and may change in future releases.
+
         Args:
             adata (:class:`anndata.AnnData`): AnnData object.
             source_genes (list[str]): list of gene names.
@@ -3774,6 +3797,9 @@ class VAE(VanillaVAE):
     def get_gradients_lr(self, adata, ligand_genes, receptor_genes, query_cells, spatial_graph_key, target_genes=None):
         """Computes the gradient of gene transcription factors within some query cells
         with respect to ligand-receptor interaction pairs.
+
+        Warning:
+            This function is considered unstable and may change in future releases.
 
         Args:
             adata (:class:`anndata.AnnData`): AnnData object.
@@ -3851,6 +3877,9 @@ class VAE(VanillaVAE):
                               time_interval,
                               figure_path=None):
         """Predict the future spatial coordinates of cells.
+        
+        Warning:
+            This function is considered unstable and may change in future releases.
 
         Args:
             adata (:class:`anndata.AnnData`): AnnData object.

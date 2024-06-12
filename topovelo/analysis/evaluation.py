@@ -589,10 +589,11 @@ def post_analysis(adata,
         save_anndata (str, optional):
             Filename for saving the AnnData object. Defaults to None.
     Returns:
-        dict: Performance metrics.
-        dict: Performance metrics for each cell type transition.
-        dict: Performance metrics for each time step.
-        dict: Performance metrics for each cell type transition and each time step.
+        tuple containing:
+        - :class:`pandas.DataFrame`: Performance metrics.
+        - :class:`pandas.DataFrame`: Performance metrics for each cell type transition.
+        - :class:`pandas.DataFrame`: Performance metrics for each time step.
+        - :class:`pandas.DataFrame`: Performance metrics for each cell type transition and each time step.
     """
     # sanity check
     if not _sanity_check(adata, spatial_graph_key, spatial_key, cluster_key, embed):

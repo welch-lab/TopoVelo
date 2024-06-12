@@ -1,7 +1,8 @@
 from topovelo.model import *
-from topovelo.analysis.evaluation import *
+from topovelo.analysis.evaluation import post_analysis
 from topovelo.analysis.perf_logger import PerfLogger
 from .plotting import (get_colors,
+                       compute_figsize,
                        plot_sig,
                        plot_phase,
                        plot_cluster,
@@ -11,16 +12,10 @@ from .plotting import (get_colors,
                        plot_state_var,
                        plot_train_loss,
                        plot_test_loss,
-                       cellwise_vel,
-                       cellwise_vel_embedding,
                        plot_phase_grid,
                        plot_sig_grid,
                        plot_time_grid,
-                       plot_velocity,
-                       plot_transition_graph,
-                       plot_rate_grid)
+                       plot_velocity)
 from .preprocessing import (preprocess,
-                            get_spatialde,
                             preprocess_spatialde,
-                            build_spatial_graph,
-                            pick_ref_batch)
+                            build_spatial_graph)

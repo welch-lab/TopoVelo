@@ -193,12 +193,16 @@ class PerfLogger:
         Args:
             metrics (list[str], optional):
                 Performance metrics to plot. Defaults to [].
+            methods (list[str], optional):
+                Methods to compare. Defaults to None.
             figure_path (str, optional):
                 Path to the folder for saving figures.
                 If set to None, figures will not be saved.
                 Defaults to None.
             bbox_to_anchor (tuple, optional):
-                . Defaults to (1.25, 1.0).
+                Bounding box position. Defaults to (1.25, 1.0).
+            dpi (int, optional):
+                Resolution of the saved figures. Defaults to 100.
         """
         datasets = self.df_type.columns.unique(0)
         if methods is None:
@@ -293,8 +297,28 @@ class PerfLogger:
                 Path to the folder for saving figures.
                 If set to None, figures will not be saved.
                 Defaults to None.
+            figsize (tuple, optional):
+                Size of the figure. Defaults to (5, 6).
+            markersize (int, optional):
+                Size of the markers. Defaults to 6.
+            linewidth (float, optional):
+                Width of the line. Defaults to 1.0.
+            title_fontsize (int, optional):
+                Font size of the title. Defaults to 20.
+            legend_fontsize (int, optional):
+                Font size of the legend. Defaults to 8.
+            tick_fontsize (int, optional):
+                Font size of the ticks. Defaults to 12.
+            ylabel_fontsize (int, optional):
+                Font size of the y-label. Defaults to 15.
+            labelpad (int, optional):
+                Padding of the y-label. Defaults to 10.
+            legend_ncols (int, optional):
+                Number of columns in the legend. Defaults to None.
             bbox_to_anchor (tuple, optional):
                 Location of the legend. Defaults to (0, 1, 1, 0.1).
+            dpi (int, optional):
+                Resolution of the saved figures. Defaults to 100.
         """
         if len(datasets) == 0:
             datasets = list(self.df.columns.unique(0))
@@ -375,12 +399,28 @@ class PerfLogger:
         Each plot has different datasets as x-axis labels and different bars represent methods.
 
         Args:
+            metrics (list[str], optional):
+                Performance metrics to plot. Defaults to [].
+            datasets (list[str], optional):
+                Datasets to plot. Defaults to [].
+            methods (list[str], optional):
+                Methods to compare. Defaults to [].
             figure_path (str, optional):
                 Path to the folder for saving figures.
                 If set to None, figures will not be saved.
                 Defaults to None.
+            figsize (tuple, optional):
+                Size of the figure. Defaults to (12, 6).
+            title_fontsize (int, optional):
+                Font size of the title. Defaults to 20.
+            legend_fontsize (int, optional):
+                Font size of the legend. Defaults to 16.
+            tick_fontsize (int, optional):
+                Font size of the ticks. Defaults to 15.
             bbox_to_anchor (tuple, optional):
                 Location of the legend. Defaults to (1.25, 1.0).
+            dpi (int, optional):
+                Resolution of the saved figures. Defaults to 100.
         """
         if len(datasets) == 0:
             datasets = self.df.columns.unique(0)
@@ -465,6 +505,54 @@ class PerfLogger:
              bbox_to_anchor=(0, 1, 1, 0.8),
              dpi=300,
              save_format='png'):
+        """Generate a grid of plots showing performance metrics for all datasets.
+
+        Args:
+            metrics (list[str]):
+                Performance metrics to plot.
+            legend_metric (str):
+                Metric to be used for the legend.
+            datasets (list[str], optional):
+                Datasets to plot. Defaults to [].
+            methods (list[str], optional):
+                Methods to compare. Defaults to [].
+            grid_size_params (dict, optional):
+                Parameters for the grid size. Defaults to None.
+            figure_path (str, optional):
+                Path to the folder for saving figures.
+                If set to None, figures will not be saved.
+                Defaults to None.
+            figure_name (str, optional):
+                Name of the figure. Defaults to 'perf'.
+            figsize (tuple, optional):
+                Size of the figure. Defaults to (7.5, 5).
+            markersize (int, optional):
+                Size of the markers. Defaults to 3.
+            linewidth (float, optional):
+                Width of the line. Defaults to 1.0.
+            title_fontsize (int, optional):
+                Font size of the title. Defaults to 8.
+            legend_fontsize (int, optional):
+                Font size of the legend. Defaults to 5.
+            ylabel_fontsize (int, optional):
+                Font size of the y-label. Defaults to 6.
+            labelpad (int, optional):
+                Padding of the y-label. Defaults to 5.
+            tick_fontsize (int, optional):
+                Font size of the ticks. Defaults to 6.
+            ncols_legend (int, optional):
+                Number of columns in the legend. Defaults to None.
+            hspace (float, optional):
+                Space between subplots. Defaults to 0.3.
+            wspace (float, optional):
+                Space between subplots. Defaults to 0.12.
+            bbox_to_anchor (tuple, optional):
+                Location of the legend. Defaults to (0, 1, 1, 0.8).
+            dpi (int, optional):
+                Resolution of the saved figures. Defaults to 300.
+            save_format (str, optional):
+                Format of the saved figures. Defaults to 'png'.
+        """
         if len(datasets) == 0:
             datasets = self.df.columns.unique(0)
 
