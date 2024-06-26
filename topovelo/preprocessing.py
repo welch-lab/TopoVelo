@@ -271,6 +271,9 @@ def preprocess(adata,
         adata._inplace_subset_var(gene_subset)
         normalize_per_cell(adata)
         log1p(adata)
+    else:
+        normalize_per_cell(adata)
+        log1p(adata)
 
     # second round of gene filter in case genes in genes_retain don't fulfill
     # minimal count requirement
