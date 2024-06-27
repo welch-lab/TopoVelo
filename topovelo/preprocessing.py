@@ -159,6 +159,7 @@ def preprocess(adata,
                npc=30,
                n_neighbors=30,
                n_spatial_neighbors=50,
+               use_highly_variable=True,
                genes_retain=None,
                perform_clustering=False,
                resolution=1.0,
@@ -193,6 +194,7 @@ def preprocess(adata,
         npc (int): Number of principal components.
         n_neighbors (int): Number of neighbors for KNN averaging.
         n_spatial_neighbors (int): Number of neighbors for spatial KNN averaging.
+        use_highly_variable (bool): Whether to use highly variable genes for PCA calculation.
         genes_retain (list): List of genes to keep.
         perform_clustering (bool): Whether to perform clustering.
         resolution (float): Resolution for clustering.
@@ -232,6 +234,7 @@ def preprocess(adata,
                          retain_genes=genes_retain)
             balanced_gene_selection(adata, n_gene, cluster_key)
             normalize_per_cell(adata)
+            log1p(adata)
         elif selection_method == "wilcoxon":
             print("Marker gene selection using Wilcoxon test.")
             filter_genes(adata,
@@ -271,31 +274,27 @@ def preprocess(adata,
         adata._inplace_subset_var(gene_subset)
         normalize_per_cell(adata)
         log1p(adata)
+        adata.var['highly_variable'] = np.array([True]*adata.n_vars)
     else:
         normalize_per_cell(adata)
         log1p(adata)
-
-    # second round of gene filter in case genes in genes_retain don't fulfill
-    # minimal count requirement
-    if genes_retain is not None:
-        filter_genes(adata,
-                     min_counts=min_counts_s,
-                     min_cells=min_cells_s,
-                     max_counts=max_counts_s,
-                     max_cells=max_cells_s,
-                     min_counts_u=min_counts_u,
-                     min_cells_u=min_cells_u,
-                     max_counts_u=max_counts_u,
-                     max_cells_u=max_cells_u,
-                     retain_genes=genes_retain)
+        adata.var['highly_variable'] = np.array([True]*adata.n_vars)
 
     # 2. KNN Averaging
     # remove_duplicate_cells(adata)
     if spatial_smoothing:
         print('Spatial KNN smoothing.')
-        moments(adata, n_pcs=npc, n_neighbors=n_spatial_neighbors, method='sklearn', use_rep=spatial_key)
+        moments(adata,
+                n_pcs=npc,
+                use_highly_variable=use_highly_variable,
+                n_neighbors=n_spatial_neighbors,
+                method='sklearn',
+                use_rep=spatial_key)
     else:
-        moments(adata, n_pcs=npc, n_neighbors=n_neighbors)
+        moments(adata,
+                n_pcs=npc,
+                use_highly_variable=use_highly_variable,
+                n_neighbors=n_neighbors)
 
     if keep_raw:
         print("Keep raw unspliced/spliced count data.")

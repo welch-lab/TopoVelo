@@ -14,6 +14,7 @@ def neighbors(
     adata,
     n_neighbors=30,
     n_pcs=None,
+    use_highly_variable=True,
     use_rep=None,
     knn=True,
     random_state=0,
@@ -46,6 +47,8 @@ def neighbors(
         Number of principal components to use.
         If not specified, the full space is used of a pre-computed PCA,
         or 30 components are used when PCA is computed internally.
+    use_highly_variable : `bool` (default: `True`)
+        Whether to use highly variable genes only, meaning the `n_vars` genes
     use_rep : `None`, `'X'` or any key for `.obsm` (default: None)
         Use the indicated representation. If `None`, the representation is chosen
         automatically: for .n_vars < 50, .X is used, otherwise ‘X_pca’ is used.
@@ -93,6 +96,7 @@ def neighbors(
             pca(
                 adata,
                 n_comps=min(30 if n_pcs is None else n_pcs, adata.n_vars - 1),
+                use_highly_variable=use_highly_variable,
                 svd_solver="arpack",
             )
         elif n_pcs is None and adata.obsm["X_pca"].shape[1] < 10:

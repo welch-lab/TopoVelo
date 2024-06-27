@@ -11,6 +11,7 @@ def moments(
     data,
     n_neighbors=30,
     n_pcs=None,
+    use_highly_variable=True,
     mode="connectivities",
     method="umap",
     use_rep=None,
@@ -31,6 +32,8 @@ def moments(
         Number of principal components to use.
         If not specified, the full space is used of a pre-computed PCA,
         or 30 components are used when PCA is computed internally.
+    use_highly_variable: `bool` (default: `True`)
+        Whether to use only high variable genes for PCA computation.
     mode: `'connectivities'` or `'distances'`  (default: `'connectivities'`)
         Distance metric to use for moment computation.
     method : {{'umap', 'hnsw', 'sklearn', `None`}}  (default: `'umap'`)
@@ -62,7 +65,12 @@ def moments(
             use_rep = "X_pca"
         print(f"Computing the KNN graph based on {use_rep}")
         neighbors(
-            adata, n_neighbors=n_neighbors, use_rep=use_rep, n_pcs=n_pcs, method=method
+            adata,
+            n_neighbors=n_neighbors,
+            use_rep=use_rep,
+            n_pcs=n_pcs,
+            use_highly_variable=use_highly_variable,
+            method=method
         )
     verify_neighbors(adata)
 
