@@ -26,6 +26,11 @@ matplotlib>=3.3.0
 igraph>=0.10.4
 loess>=2.1.2
 
+# Sphinx
+sphinx
+sphinx_autodoc_typehints
+sphinx_rtd_theme
+
 # sphinx
 sphinx
 sphinx_rtd_theme
