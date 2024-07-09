@@ -1,0 +1,31 @@
+typing_extensions
+
+# Deep Learning
+torch>=1.8.0
+torch-geometric>=2.0.4
+
+# scRNA Data Analysis
+anndata>=0.8.0
+hnswlib>=0.6.2
+memory_profiler
+numba>=0.41.0
+numpy>=1.17
+pandas>=0.23, <=1.5.3
+pynndescent>=0.5.7
+scanpy>=1.5
+scikit-learn>=0.20.0
+scipy>=1.13.0
+scvelo>=0.2.3
+seaborn>=0.10.0
+umap-learn>=0.3.10
+tqdm<=4.62.3
+
+
+# Plotting
+matplotlib>=3.3.0
+igraph>=0.10.4
+loess>=2.1.2
+
+# sphinx
+sphinx
+sphinx_rtd_theme
