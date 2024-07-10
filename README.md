@@ -51,7 +51,7 @@ Examples of advanced usage, model evaluation and plotting can be found in the [t
 
 ## License
 
-BSD 3-Clause License
+GNU General Public License v3.0
 
 ## Contact
 
