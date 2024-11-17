@@ -13,10 +13,15 @@ The method applies a graph variational autoencoder to recover spatially-coupled 
 ## Installation
 
 To install the TopoVelo package, you can use pip:
+Locally:
 ```
 git clone https://github.com/welch-lab/TopoVelo.git
 cd TopoVelo
 pip install .
+```
+From PyPI:
+```
+pip install topovelo
 ```
 
 ## Usage
