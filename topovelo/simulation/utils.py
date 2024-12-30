@@ -231,3 +231,28 @@ def low_res_partition(coords: np.ndarray, low_res: float) -> Tuple[np.ndarray, L
                 coords_low_res.append([i * low_res, j * low_res])
                 groups.append(idx)
     return np.array(coords_low_res), groups
+
+
+####################################################################################################
+# Evaluation
+####################################################################################################
+def vel_accuracy(adata, vkey):
+    """  Compute the cosine similarity between the true cell velocity and the predicted cell velocity """
+    true_v = adata.obsm['true_spatial_velocity']
+    v = adata.obsm[vkey]
+    norm_1 = np.linalg.norm(true_v, axis=1)
+    norm_2 = np.linalg.norm(v, axis=1)
+    zero_mask = (norm_1 * norm_2 == 0).astype(int)
+    return np.mean((true_v * v).sum(1)/(zero_mask * 1 + (1-zero_mask) * norm_1 * norm_2))
+
+
+def pseudo_celltype(adata, n_type) -> List[Tuple[str, str]]:
+    t = adata.obs['true_time'].to_numpy()
+    tmax, tmin = t.max(), t.min()
+    delta_t = (tmax - tmin) / n_type
+    cell_labels = np.array(['0']*adata.n_obs)
+    for i in range(n_type - 1):
+        cell_labels[(t >= tmin+delta_t*i) & (t < tmin+delta_t*(i+1))] = str(i)
+    cell_labels[t >= tmin+delta_t*(n_type-1)] = f'{n_type-1}'
+    adata.obs['clusters'] = cell_labels
+    return [(f'{i}', f'{i+1}') for i in range(n_type-1)]
