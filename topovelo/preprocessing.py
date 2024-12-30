@@ -218,7 +218,7 @@ def preprocess(adata,
         U_raw = adata.layers["unspliced"]
         S_raw = adata.layers["spliced"]
 
-    if n_gene > 0:
+    if n_gene > 0 and n_gene < adata.n_vars:
         flavor = kwargs["flavor"] if "flavor" in kwargs else "seurat"
         if selection_method == "balanced":
             print("Balanced gene selection.")
