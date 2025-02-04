@@ -1,3 +1,8 @@
+tests/
+scripts/
+experiments/
+notebooks/*
+topovelo.egg-info/
 topovelo/*/__pycache__
-notebooks/*.ipynb
-.vscode/
+__pycache__/
+.*
