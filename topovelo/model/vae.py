@@ -2044,8 +2044,8 @@ class VAE(VanillaVAE):
                 if len(self.loss_test) > 0:  # update the number of epochs with dropping/converging ELBO
                     if np.sum(elbo_test) - np.sum(self.loss_test[-1]) <= self.config["early_stop_thred"]:
                         self.n_drop = self.n_drop+1
-                    else:
-                        self.n_drop = 0
+                    # else:
+                    #     self.n_drop = 0
                 self.loss_test.append(elbo_test)
                 self.set_mode('train')
 
@@ -2159,8 +2159,8 @@ class VAE(VanillaVAE):
                 if len(self.loss_test_sp) > 0:  # update the number of epochs with dropping/converging ELBO
                     if self.loss_test_sp[-1] - mse_test <= self.config["early_stop_thred"]:
                         self.n_drop = self.n_drop+1
-                    else:
-                        self.n_drop = 0
+                    # else:
+                    #     self.n_drop = 0
                 self.loss_test_sp.append(mse_test)
                 self.set_mode('train')
 
@@ -2936,11 +2936,9 @@ class VAE(VanillaVAE):
         self.loss_train_sp = []
         self.loss_test_sp = []
         self.config["early_stop_thred"] = 0
-        try:
-            x_embed = adata.obsm[f"X_{embed}"]
-        except KeyError:
-            logger.warning("Embedding not found! Set to None.")
-            x_embed = np.nan*np.ones((adata.n_obs, 2))
+        
+        if "X_embed" not in adata.obsm:
+            logger.warning("Embedding not found! Skip plotting.")
             plot = False
         for epoch in range(self.config['n_epochs']):
             stop_training = self.train_spatial_epoch(optimizer)

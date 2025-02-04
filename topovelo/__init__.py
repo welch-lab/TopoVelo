@@ -1,4 +1,5 @@
 from topovelo.model import VAE, sample_genes
+from topovelo.model.model_util import get_spatial_tprior
 from topovelo.simulation import simulate, to_low_res
 from topovelo.analysis.evaluation import post_analysis
 from topovelo.analysis.perf_logger import PerfLogger
@@ -26,7 +27,6 @@ from .preprocessing import (
 
 __all__ = [
     'VAE',
-    'sample_genes',
     'post_analysis',
     'PerfLogger',
     'get_colors',
@@ -34,5 +34,7 @@ __all__ = [
     'preprocess',
     'build_spatial_graph',
     'simulate',
-    'to_low_res'
+    'to_low_res',
+    'sample_genes',
+    'get_spatial_tprior'
 ]
