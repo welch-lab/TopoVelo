@@ -3,11 +3,11 @@ from multiprocessing import cpu_count
 from typing  import Any, Dict, Iterable, Optional, Union
 from anndata import AnnData
 import numpy as np
-import pandas as pd
-import scvelo as scv
-from scvelo.tl import velocity_graph, velocity
-from scvelo.pl import velocity_embedding_stream
 import scanpy as sc
+import scvelo as scv
+from scvelo.tl import velocity_graph, velocity, velocity_embedding
+from scvelo.pl import velocity_embedding_stream
+from ..scvelo_preprocessing.neighbors import neighbors
 from .plot_config import PlotConfig
 from ..model import rna_velocity_vae
 from ..plotting import get_colors
@@ -79,6 +79,7 @@ def velocity_stream(
     cell_types_raw: Iterable[str],
     basis: str = 'spatial',
     cluster_key: str = 'clusters',
+    n_spatial_neighbors: int = 30,
     dpi: int = 100,
     save: Optional[str] = None,
     stream_plot_config: Dict[str, Any] = {},
@@ -109,6 +110,7 @@ def velocity_stream(
     Returns:
         None: The function generates a plot and optionally saves it to the specified location.
     """
+    logger = logging.getLogger(__name__)
     plot_config = _config_stream_plot(adata, cell_types_raw, stream_plot_config)
 
     # Calculate RNA velocity
@@ -119,6 +121,30 @@ def velocity_stream(
         gene_subset = adata.var_names[adata.var['velocity_genes'].to_numpy()]
     else:
         gene_subset = adata.var_names[~np.isnan(adata.layers[vkey][0])]
+    
+    
+    # recompute the spatial KNN graph
+    spatial_velocity_graph = basis.lower() not in ['umap', 'tsne', 'pca']
+    if spatial_velocity_graph:
+        print(f'Computing a spatial graph using KNN on {basis} with k={n_spatial_neighbors}')
+        if 'connectivities' in adata.obsp or 'neighbors' in adata.uns:
+            logger.warning(f'Overwriting the original KNN graph! (.uns, .obsp)')
+            connectivities = adata.obsp['connectivities']
+            distances = adata.obsp['distances']
+            nbs_info = None
+            if neighbors in adata.uns:
+                nbs_info = adata.uns['neighbors']
+        neighbors(adata, n_neighbors=n_spatial_neighbors, use_rep=f'X_{basis}', method='sklearn')
+    
+    # Use radius for spatial graph
+    if 'spatial_graph_params' in adata.uns and spatial_velocity_graph:
+        if 'radius' in adata.uns['spatial_graph_params']:
+            radius = adata.uns['spatial_graph_params']['radius']
+            if radius is not None:
+                adata.uns[f'{vkey}_graph'] = adata.uns[f'{vkey}_graph']\
+                    .multiply(adata.obsp['distances'] < radius)
+                adata.uns[f'{vkey}_graph_neg'] = adata.uns[f'{vkey}_graph_neg']\
+                    .multiply(adata.obsp['distances'] < radius)
 
     # Velocity graph
     xkey = 'Ms' if 'xkey' not in kwargs else kwargs['xkey']
@@ -128,19 +154,17 @@ def velocity_stream(
         xkey=xkey,
         gene_subset=gene_subset,
         n_jobs=(kwargs['n_jobs']
-        if 'n_jobs' in kwargs
-        else get_n_cpu(adata.n_obs))
+                if 'n_jobs' in kwargs
+                else get_n_cpu(adata.n_obs))
     )
     
-    # Build Spatial graph
-    if 'spatial_graph_params' in adata.uns:
-        if 'radius' in adata.uns['spatial_graph_params']:
-            radius = adata.uns['spatial_graph_params']['radius']
-            if radius is not None:
-                adata.uns[f'{vkey}_graph'] = adata.uns[f'{vkey}_graph']\
-                    .multiply(adata.obsp['distances'] < radius)
-                adata.uns[f'{vkey}_graph_neg'] = adata.uns[f'{vkey}_graph_neg']\
-                    .multiply(adata.obsp['distances'] < radius)
+    # Velocity embedding
+    velocity_embedding(
+        adata,
+        basis=basis,
+        vkey=vkey
+    )
+    
     velocity_embedding_stream(
         adata,
         basis=basis,
@@ -164,6 +188,13 @@ def velocity_stream(
         save=save
     )
     
+    # Recover the original KNN graph
+    if spatial_velocity_graph:
+        adata.obsp['connectivities'] = connectivities
+        adata.obsp['distances'] = distances
+        if nbs_info is not None:
+            adata.uns['neighbors'] = nbs_info
+
 
 def velocity_stream_on_pred_xy(
     adata: AnnData,

@@ -1,7 +1,7 @@
 DEFAULT = {
     "cluster": {
         "embed": None,
-        "figsize": None,
+        "figsize": (4, 4),
         "real_aspect_ratio": True,
         "palette": None,
         "markersize": 5,
@@ -24,7 +24,7 @@ DEFAULT = {
         "grid_size": None,
         "real_aspect_ratio": True,
         "title_off": False,
-        "title_fontsize": None,
+        "title_fontsize": 9,
         "show_colorbar": True,
         "colorbar_fontsize": 7,
         "colorbar_ticklabels": ["min", "max"],
@@ -41,7 +41,7 @@ DEFAULT = {
         "density": 1,
         "markersize": 5,
         "alpha": 0.5,
-        "linewidth": 1.5,
+        "linewidth": 0.75,
         "arrow_size": 0.5,
         "arrow_color": "black",
         "legend_loc": "right margin",
