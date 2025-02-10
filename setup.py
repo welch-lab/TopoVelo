@@ -1,12 +1,17 @@
 from setuptools import setup, find_packages
 
+with open('README.md', 'r', encoding='utf-8') as f:
+    long_description = f.read()
+
 setup(
     name='topovelo',
-    version='0.0.1',
+    version='0.0.1a1',
     packages=find_packages(),
     author='Yichen Gu',
     author_email='gyichen@umich.edu',
     description='topological velocity inference from single-cell spatial transcriptomic data',
+    long_description=long_description,
+    long_description_content_type='text/markdown',
     install_requires=[
         'anndata>=0.8.0, <=0.9.1',
         'hnswlib>=0.6.2',

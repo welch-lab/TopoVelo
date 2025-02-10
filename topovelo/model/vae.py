@@ -1,7 +1,9 @@
-import numpy as np
+from typing import Dict, List, Literal, Tuple, Optional, Union
 import logging
 import os
+from anndata import AnnData
 import matplotlib.pyplot as plt
+import numpy as np
 from scipy.sparse import csr_matrix, csc_matrix, coo_matrix
 import torch
 import torch.nn as nn
@@ -909,45 +911,45 @@ class VAE(VanillaVAE):
     """TopoVelo Model
     """
     def __init__(self,
-                 adata,
-                 tmax,
-                 dim_z,
-                 dim_cond=0,
-                 dim_coord=2,
-                 dim_edge=None,
-                 device='cpu',
-                 hidden_size=(500, 250, 500),
-                 spatial_hidden_size=(128, 64),
-                 full_vb=False,
-                 discrete=False,
-                 graph_decoder=True,
-                 spatial_decoder=False,
-                 attention=True,
-                 n_head=5,
-                 batch_key=None,
-                 ref_batch=None,
-                 slice_key=None,
-                 discrete_dim=None,
-                 init_method="steady",
-                 init_key=None,
-                 tprior=None,
-                 train_test_split=(0.7, 0.2, 0.1),
-                 test_samples=None,
-                 init_ton_zero=True,
-                 filter_gene=False,
-                 count_distribution="Poisson",
-                 time_overlap=0.05,
-                 std_z_prior=0.01,
-                 min_sigma_u=0.1,
-                 min_sigma_s=0.1,
-                 xavier_gain=0.05,
-                 checkpoints=[None, None],
-                 rate_prior={
+                 adata: AnnData,
+                 tmax: float,
+                 dim_z: int,
+                 dim_cond: int = 0,
+                 dim_coord: int = 2,
+                 dim_edge: Optional[int] = None,
+                 device: str = 'cpu',
+                 hidden_size: Tuple = (500, 250, 500),
+                 spatial_hidden_size: Tuple = (128, 64),
+                 full_vb: bool = False,
+                 discrete: bool = False,
+                 graph_decoder: bool = True,
+                 spatial_decoder: bool = False,
+                 attention: bool = True,
+                 n_head: int = 5,
+                 batch_key: Optional[str] = None,
+                 ref_batch: Optional[int] = None,
+                 slice_key: Optional[str] = None,
+                 discrete_dim: Optional[int] = None,
+                 init_method: str = "steady",
+                 init_key: Optional[str] = None,
+                 tprior: Optional[float] = None,
+                 train_test_split: Tuple[float, float, float] = (0.7, 0.2, 0.1),
+                 test_samples: Optional[np.ndarray] = None,
+                 init_ton_zero: bool = True,
+                 filter_gene: bool = False,
+                 count_distribution: Literal["Poisson", "NB", "auto"] = "Poisson",
+                 time_overlap: float = 0.05,
+                 std_z_prior: float = 0.01,
+                 min_sigma_u: float = 0.1,
+                 min_sigma_s: float = 0.1,
+                 xavier_gain: float = 0.05,
+                 checkpoints: Tuple[Optional[str], Optional[str]] = [None, None],
+                 rate_prior: Dict[str, Tuple] = {
                      'alpha': (0.0, 1.0),
                      'beta': (0.0, 0.5),
                      'gamma': (0.0, 0.5)
                  },
-                 random_state=2022,
+                 random_state: int = 2022,
                  verbose_level=logging.WARNING,
                  **kwargs):
         """TopoVelo Model
@@ -1023,7 +1025,7 @@ class VAE(VanillaVAE):
                 Used for informative time prior.
             train_test_split (tuple[float], optional):
                 Train-test split ratio. Defaults to (0.7, 0.2, 0.1).
-            test_samples (int, optional):
+            test_samples (np.ndarray, optional):
                 Indices of test samples. Defaults to None.
             init_ton_zero (bool, optional):
                 Whether to add a non-zero switch-on time for each gene.
@@ -1904,8 +1906,10 @@ class VAE(VanillaVAE):
             s (Tensor): The tensor representing the observed variable s.
             uhat (Tensor): The tensor representing the reconstructed variable uhat.
             shat (Tensor): The tensor representing the reconstructed variable shat.
-            uhat_fw (Tensor, optional): The tensor representing the forward reconstructed variable uhat_fw. Defaults to None.
-            shat_fw (Tensor, optional): The tensor representing the forward reconstructed variable shat_fw. Defaults to None.
+            uhat_fw (Tensor, optional): The tensor representing the forward reconstructed variable uhat_fw.
+                Defaults to None.
+            shat_fw (Tensor, optional): The tensor representing the forward reconstructed variable shat_fw.
+                Defaults to None.
             u1 (Tensor, optional): The tensor representing the future state of u. Defaults to None.
             s1 (Tensor, optional): The tensor representing the future state of s. Defaults to None.
             weight (Tensor, optional): The tensor representing the weight for each sample. Defaults to None.
@@ -2677,8 +2681,8 @@ class VAE(VanillaVAE):
                     self.set_mode('train')
                     mse_test = self.loss_test_sp[-1] if len(self.loss_test_sp) > 0 else [-np.inf]
                     logging.debug(f"Epoch {epoch+1}: Train MSE = {np.sum(mse_train):.3f},\t"
-                                f"Test MSE = {np.sum(mse_test):.3f},\t"
-                                f"Total Time = {convert_time(time.time()-start)}")
+                                  f"Test MSE = {np.sum(mse_test):.3f},\t"
+                                  f"Total Time = {convert_time(time.time()-start)}")
 
                 if stop_training:
                     print(f"*********       Stage 3: Early Stop Triggered at epoch {count_epoch+epoch+1}.       *********")
@@ -2707,14 +2711,14 @@ class VAE(VanillaVAE):
                 if self.config["test_iter"] > 0:
                     self.loss_test = np.stack(self.loss_test)
                     plot_test_loss(self.loss_test[:, 0],
-                                [i*self.config["test_iter"] for i in range(1, len(self.loss_test)+1)],
-                                save=f'{figure_path}/likelihood_validation.png')
+                                   [i*self.config["test_iter"] for i in range(1, len(self.loss_test)+1)],
+                                   save=f'{figure_path}/likelihood_validation.png')
                     plot_test_loss(self.loss_test[:, 1],
-                                [i*self.config["test_iter"] for i in range(1, len(self.loss_test)+1)],
-                                save=f'{figure_path}/kl_validation.png')
+                                   [i*self.config["test_iter"] for i in range(1, len(self.loss_test)+1)],
+                                   save=f'{figure_path}/kl_validation.png')
                     plot_test_loss(self.loss_test_sp,
-                                [i*self.config["test_iter"] for i in range(1, len(self.loss_test_sp)+1)],
-                                save=f'{figure_path}/xyloss_test.png')
+                                   [i*self.config["test_iter"] for i in range(1, len(self.loss_test_sp)+1)],
+                                   save=f'{figure_path}/xyloss_test.png')
             
         else:
             logger.info("Skipping the spatial decoder training.")
@@ -3154,7 +3158,7 @@ class VAE(VanillaVAE):
 
             p_t = self.p_t_unseen.cpu()
             p_z = torch.stack([torch.zeros(N, self.dim_z),
-                                torch.ones(N, self.dim_z)*self.config["std_z_prior"]]).float()
+                               torch.ones(N, self.dim_z)*self.config["std_z_prior"]]).float()
             (mu_tx, std_tx,
              mu_zx, std_zx,
              uhat, shat,
