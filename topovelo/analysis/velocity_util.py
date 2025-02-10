@@ -10,7 +10,7 @@ from scvelo.pl import velocity_embedding_stream
 from ..scvelo_preprocessing.neighbors import neighbors
 from .plot_config import PlotConfig
 from ..model import rna_velocity_vae
-from ..plotting import get_colors
+from ..plotting import get_colors, compute_figsize
 
 
 def get_n_cpu(n_cell):
@@ -112,6 +112,7 @@ def velocity_stream(
     """
     logger = logging.getLogger(__name__)
     plot_config = _config_stream_plot(adata, cell_types_raw, stream_plot_config)
+    figsize = (plot_config.get('width'), plot_config.get('height'))
 
     # Calculate RNA velocity
     rna_velocity(adata, method, key, vkey)
@@ -127,14 +128,23 @@ def velocity_stream(
     spatial_velocity_graph = basis.lower() not in ['umap', 'tsne', 'pca']
     if spatial_velocity_graph:
         print(f'Computing a spatial graph using KNN on {basis} with k={n_spatial_neighbors}')
+        figsize = compute_figsize(
+            adata.obsm[f'X_{basis}'],
+            plot_config.get('width'),
+            plot_config.get('height'),
+            plot_config.get('real_aspect_ratio'),
+            plot_config.get('fix')
+        )
         if 'connectivities' in adata.obsp or 'neighbors' in adata.uns:
             logger.warning(f'Overwriting the original KNN graph! (.uns, .obsp)')
             connectivities = adata.obsp['connectivities']
             distances = adata.obsp['distances']
+            del adata.obsp['connectivities'], adata.obsp['distances']
             nbs_info = None
             if neighbors in adata.uns:
                 nbs_info = adata.uns['neighbors']
-        neighbors(adata, n_neighbors=n_spatial_neighbors, use_rep=f'X_{basis}', method='sklearn')
+                del adata.uns['neighbors']
+        neighbors(adata, n_neighbors=n_spatial_neighbors, use_rep=f'X_{basis}')
     
     # Use radius for spatial graph
     if 'spatial_graph_params' in adata.uns and spatial_velocity_graph:
@@ -171,7 +181,7 @@ def velocity_stream(
         vkey=vkey,
         color=cluster_key,
         title="",
-        figsize=(plot_config.get('width'), plot_config.get('height')),
+        figsize=figsize,
         density=plot_config.get('density'),
         palette=plot_config.get('palette'),
         size=plot_config.get('markersize'),
