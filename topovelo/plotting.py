@@ -66,7 +66,7 @@ def set_fontsize(fontsize, legend_fontsize=None, tick_fontsize=None, colorbar_fo
         TITLE_FONTSIZE = title_fontsize
 
 
-def _set_figsize(x_embed, real_aspect_ratio=False, width=WIDTH, height=HEIGHT, fix='width', margin=0.0):
+def _set_figsize(x_embed, width=WIDTH, height=HEIGHT, real_aspect_ratio=False, fix='width', margin=0.0):
     figsize = (width, height)
     if real_aspect_ratio:
         aspect_ratio = (x_embed[:, 1].max() - x_embed[:, 1].min()) / (x_embed[:, 0].max() - x_embed[:, 0].min())
@@ -77,7 +77,7 @@ def _set_figsize(x_embed, real_aspect_ratio=False, width=WIDTH, height=HEIGHT, f
     return figsize
 
 
-def compute_figsize(x_embed, real_aspect_ratio=False, width=WIDTH, height=HEIGHT, fix='width', margin=0.0):
+def compute_figsize(x_embed, width=WIDTH, height=HEIGHT, real_aspect_ratio=True, fix='width', margin=0.0):
     """Compute the figure size based on the aspect ratio of the data embedding.
 
     Args:
@@ -95,7 +95,7 @@ def compute_figsize(x_embed, real_aspect_ratio=False, width=WIDTH, height=HEIGHT
         margin (float, optional):
             Margin of the figure. Defaults to 0.0.
     """
-    return _set_figsize(x_embed, True, width, height, fix, margin)
+    return _set_figsize(x_embed, width, height, real_aspect_ratio, fix, margin)
 
 
 def get_colors(n, color_map=None):
@@ -966,7 +966,7 @@ def plot_spatial_graph(adata,
     
     xmin, xmax = x_emb[:, 0].min(), x_emb[:, 0].max()
     ymin, ymax = x_emb[:, 1].min(), x_emb[:, 1].max()
-    figsize = compute_figsize(x_emb, real_aspect_ratio, width, height)
+    figsize = compute_figsize(x_emb, width, height, real_aspect_ratio)
     fig, ax = plt.subplots(figsize=figsize)
     
     edge_collection = _draw_networkx_edges(
@@ -3367,7 +3367,7 @@ def plot_time_grid(T,
 
     # Calculate figure size
     if real_aspect_ratio:
-        panel_figsize = compute_figsize(X_emb, real_aspect_ratio, width, height, fix)
+        panel_figsize = compute_figsize(X_emb, width, height, real_aspect_ratio, fix)
         figsize = (panel_figsize[0]*n_col, panel_figsize[1]*n_row)
     else:
         figsize = (width*n_col, height*n_row)

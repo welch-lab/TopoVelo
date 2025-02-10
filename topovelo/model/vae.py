@@ -18,9 +18,9 @@ from ..plotting import plot_sig, plot_time, plot_cluster
 from ..plotting import plot_train_loss, plot_test_loss
 from ..plotting import plot_spatial_extrapolation
 
-from .model_util import hist_equal, init_params, get_ts_global, reinit_params
+from .model_util import hist_equal, init_params, init_params_parallel, get_ts_global, reinit_params
 from .model_util import convert_time, get_gene_index
-from .model_util import pred_su, knnx0_index, get_x0, knnx0_index_batch
+from .model_util import pred_su, knnx0_index, knnx0_index_parallel, get_x0, knnx0_index_batch
 from .model_util import elbo_collapsed_categorical
 from .model_util import assign_gene_mode, find_dirichlet_param, assign_gene_mode_tprior
 from .model_util import dge2array
@@ -1093,7 +1093,7 @@ class VAE(VanillaVAE):
             "n_refine": 20,
             "learning_rate": None,
             "learning_rate_ode": None,
-            "learning_rate_post": None,
+            "learning_rate_refine": None,
             "lambda": 1e-3,
             "lambda_rho": 1e-3,
             "kl_t": 1.0,
@@ -1105,7 +1105,8 @@ class VAE(VanillaVAE):
             "test_iter": None,
             "save_epoch": 100,
             "n_warmup": 5,
-            "early_stop": 5,
+            "early_stop": 50,
+            "early_stop_refine": 10,
             "early_stop_thred": early_stop_thred,
             "train_test_split": train_test_split,
             "neg_slope": 0.0,
@@ -1140,33 +1141,35 @@ class VAE(VanillaVAE):
 
         seed_everything(random_state)
         self.split_train_validation_test(adata.n_obs, test_samples)
-        self.decoder = Decoder(adata,
-                               tmax,
-                               self.train_idx,
-                               dim_z,
-                               N1=hidden_size[1],
-                               N2=hidden_size[2],
-                               spatial_hidden_size=spatial_hidden_size,
-                               full_vb=full_vb,
-                               discrete=discrete,
-                               graph_decoder=graph_decoder,
-                               attention=attention,
-                               n_head=n_head,
-                               dim_cond=self.n_batch,
-                               dim_coord=dim_coord,
-                               dim_edge=dim_edge,
-                               batch_idx=self.batch_,
-                               ref_batch=self.ref_batch,
-                               init_ton_zero=init_ton_zero,
-                               filter_gene=filter_gene,
-                               min_sigma_u=min_sigma_u,
-                               min_sigma_s=min_sigma_s,
-                               xavier_gain=xavier_gain,
-                               device=self.device,
-                               init_method=init_method,
-                               init_key=init_key,
-                               checkpoint=checkpoints[1],
-                               **kwargs).float().to(self.device)
+        self.decoder = Decoder(
+            adata,
+            tmax,
+            self.train_idx,
+            dim_z,
+            N1=hidden_size[1],
+            N2=hidden_size[2],
+            spatial_hidden_size=spatial_hidden_size,
+            full_vb=full_vb,
+            discrete=discrete,
+            graph_decoder=graph_decoder,
+            attention=attention,
+            n_head=n_head,
+            dim_cond=self.n_batch,
+            dim_coord=dim_coord,
+            dim_edge=dim_edge,
+            batch_idx=self.batch_,
+            ref_batch=self.ref_batch,
+            init_ton_zero=init_ton_zero,
+            filter_gene=filter_gene,
+            min_sigma_u=min_sigma_u,
+            min_sigma_s=min_sigma_s,
+            xavier_gain=xavier_gain,
+            device=self.device,
+            init_method=init_method,
+            init_key=init_key,
+            checkpoint=checkpoints[1],
+            **kwargs
+        ).float().to(self.device)
 
         try:
             G = adata.n_vars
@@ -2044,12 +2047,13 @@ class VAE(VanillaVAE):
                 if len(self.loss_test) > 0:  # update the number of epochs with dropping/converging ELBO
                     if np.sum(elbo_test) - np.sum(self.loss_test[-1]) <= self.config["early_stop_thred"]:
                         self.n_drop = self.n_drop+1
-                    else:
-                        self.n_drop = 0
+                    # else:
+                    #     self.n_drop = 0
                 self.loss_test.append(elbo_test)
                 self.set_mode('train')
 
-                if self.n_drop >= self.config["early_stop"] and self.config["early_stop"] > 0:
+                patience = self.config["early_stop"] if self.train_stage == 1 else self.config["early_stop_refine"]
+                if self.n_drop >= patience and patience > 0:
                     return True
             
             optimizer.zero_grad()
@@ -2159,12 +2163,13 @@ class VAE(VanillaVAE):
                 if len(self.loss_test_sp) > 0:  # update the number of epochs with dropping/converging ELBO
                     if self.loss_test_sp[-1] - mse_test <= self.config["early_stop_thred"]:
                         self.n_drop = self.n_drop+1
-                    else:
-                        self.n_drop = 0
+                    # else:
+                    #     self.n_drop = 0
                 self.loss_test_sp.append(mse_test)
                 self.set_mode('train')
 
-                if self.n_drop >= self.config["early_stop"] and self.config["early_stop"] > 0:
+                patience = self.config["early_stop"] if self.train_stage == 1 else self.config["early_stop_refine"]
+                if self.n_drop >= patience and patience > 0:
                     return True
 
             optimizer.zero_grad()
@@ -2208,12 +2213,14 @@ class VAE(VanillaVAE):
         """
         self.set_mode('eval')
         G = self.graph_data.G
-        out, elbo = self.pred_all(self.cell_labels,
-                                    "both",
-                                    ["uhat", "shat", "t", "z"],
-                                    np.array(range(G)))
+        out, elbo = self.pred_all(
+            self.cell_labels,
+            "both",
+            ["uhat", "shat", "t", "z"],
+            np.array(range(G))
+        )
         t, z = out["t"], out["z"]
-        
+
         # Clip the time to avoid outliers
         t = np.clip(t, 0, np.quantile(t, 0.99))
         dt = (self.config["dt"][0]*(t.max()-t.min()), self.config["dt"][1]*(t.max()-t.min()))
@@ -2237,75 +2244,86 @@ class VAE(VanillaVAE):
                     knn_dim = np.concatenate((knn_dim, np.array(range(self.discrete_dim+1, d))))
         if self.x0_index is None:
             if self.slice_label is None:
-                self.x0_index = knnx0_index(t[self.train_idx],
-                                            z[self.train_idx],
-                                            xy[self.train_idx][:, knn_dim],
-                                            t,
-                                            z,
-                                            xy[:, knn_dim],
-                                            dt,
-                                            self.config["n_neighbors"],
-                                            self.epsilon_ball,
-                                            hist_eq=True)
+                self.x0_index = knnx0_index_parallel(
+                    t[self.train_idx],
+                    z[self.train_idx],
+                    xy[self.train_idx][:, knn_dim],
+                    t,
+                    z,
+                    xy[:, knn_dim],
+                    dt,
+                    self.config["n_neighbors"],
+                    self.epsilon_ball,
+                    hist_eq=True
+                )
             else:
-                self.x0_index = knnx0_index_batch(t[self.train_idx],
-                                                  z[self.train_idx],
-                                                  xy[self.train_idx][:, knn_dim],
-                                                  self.slice_label[self.train_idx],
-                                                  t,
-                                                  z,
-                                                  xy[:, knn_dim],
-                                                  self.slice_label,
-                                                  dt,
-                                                  self.config["n_neighbors"],
-                                                  self.epsilon_ball,
-                                                  hist_eq=True)
-        u0, s0, xy0, t0 = get_x0(out["uhat"][self.train_idx],
-                                 out["shat"][self.train_idx],
-                                 xy[self.train_idx],
-                                 t[self.train_idx],
-                                 dt,
-                                 self.x0_index,
-                                 u0_init,
-                                 s0_init)
+                self.x0_index = knnx0_index_batch(
+                    t[self.train_idx],
+                    z[self.train_idx],
+                    xy[self.train_idx][:, knn_dim],
+                    self.slice_label[self.train_idx],
+                    t,
+                    z,
+                    xy[:, knn_dim],
+                    self.slice_label,
+                    dt,
+                    self.config["n_neighbors"],
+                    self.epsilon_ball,
+                    hist_eq=True
+                )
+        u0, s0, xy0, t0 = get_x0(
+            out["uhat"][self.train_idx],
+            out["shat"][self.train_idx],
+            xy[self.train_idx],
+            t[self.train_idx],
+            dt,
+            self.x0_index,
+            u0_init,
+            s0_init
+        )
         if self.config["vel_continuity_loss"] and self.x1_index is None:
             if self.slice_label is None:
-                self.x1_index = knnx0_index(t[self.train_idx],
-                                            z[self.train_idx],
-                                            xy[self.train_idx][:, knn_dim],
-                                            t,
-                                            z,
-                                            xy[:, knn_dim],
-                                            dt,
-                                            self.config["n_neighbors"],
-                                            self.epsilon_ball,
-                                            forward=True,
-                                            hist_eq=True,
-                                            connect_adjacent=isinstance(self.discrete_dim, int))
+                self.x1_index = knnx0_index_parallel(
+                    t[self.train_idx],
+                    z[self.train_idx],
+                    xy[self.train_idx][:, knn_dim],
+                    t,
+                    z,
+                    xy[:, knn_dim],
+                    dt,
+                    self.config["n_neighbors"],
+                    self.epsilon_ball,
+                    forward=True,
+                    hist_eq=True,
+                )
             else:
-                self.x1_index = knnx0_index_batch(t[self.train_idx],
-                                                  z[self.train_idx],
-                                                  xy[self.train_idx][:, knn_dim],
-                                                  self.slice_label[self.train_idx],
-                                                  t,
-                                                  z,
-                                                  xy[:, knn_dim],
-                                                  self.slice_label,
-                                                  dt,
-                                                  self.config["n_neighbors"],
-                                                  self.epsilon_ball,
-                                                  forward=True,
-                                                  hist_eq=True,
-                                                  connect_adjacent=isinstance(self.discrete_dim, int))
-            u1, s1, xy1, t1 = get_x0(out["uhat"][self.train_idx],
-                                     out["shat"][self.train_idx],
-                                     xy[self.train_idx],
-                                     t[self.train_idx],
-                                     dt,
-                                     self.x1_index,
-                                     None,
-                                     None,
-                                     forward=True)
+                self.x1_index = knnx0_index_batch(
+                    t[self.train_idx],
+                    z[self.train_idx],
+                    xy[self.train_idx][:, knn_dim],
+                    self.slice_label[self.train_idx],
+                    t,
+                    z,
+                    xy[:, knn_dim],
+                    self.slice_label,
+                    dt,
+                    self.config["n_neighbors"],
+                    self.epsilon_ball,
+                    forward=True,
+                    hist_eq=True,
+                    connect_adjacent=isinstance(self.discrete_dim, int)
+                )
+            u1, s1, xy1, t1 = get_x0(
+                out["uhat"][self.train_idx],
+                out["shat"][self.train_idx],
+                xy[self.train_idx],
+                t[self.train_idx],
+                dt,
+                self.x1_index,
+                None,
+                None,
+                forward=True
+            )
 
         self.graph_data.t = torch.tensor(t.reshape(-1, 1), dtype=torch.float32, device=self.device, requires_grad=False)
         self.graph_data.z = torch.tensor(z, dtype=torch.float32, device=self.device, requires_grad=False)
@@ -2329,11 +2347,11 @@ class VAE(VanillaVAE):
     def _set_lr(self, p):
         if self.is_discrete:
             self.config["learning_rate"] = 10**(-8.3*p-2.25)
-            self.config["learning_rate_post"] = self.config["learning_rate"]
+            self.config["learning_rate_refine"] = self.config["learning_rate"]
             self.config["learning_rate_ode"] = 5*self.config["learning_rate"]
         else:
             self.config["learning_rate"] = 10**(-4*p-3)
-            self.config["learning_rate_post"] = self.config["learning_rate"]
+            self.config["learning_rate_refine"] = self.config["learning_rate"]
             self.config["learning_rate_ode"] = 10*self.config["learning_rate"]
 
     def _set_sigma_pos(self, X_spatial):
@@ -2432,18 +2450,20 @@ class VAE(VanillaVAE):
             self.x_embed = np.nan*np.ones((adata.n_obs, 2))
         
         print("*********               Creating a Graph Dataset              *********")
-        self.graph_data = SCGraphData(X,
-                                      self.cell_labels,
-                                      graph,
-                                      adata.obsm[spatial_key],
-                                      self.train_idx,
-                                      self.validation_idx,
-                                      self.test_idx,
-                                      self.device,
-                                      edge_attr,
-                                      self.batch_,
-                                      self.config['enable_edge_weight'],
-                                      self.config['normalize_pos'])
+        self.graph_data = SCGraphData(
+            X,
+            self.cell_labels,
+            graph,
+            adata.obsm[spatial_key],
+            self.train_idx,
+            self.validation_idx,
+            self.test_idx,
+            self.device,
+            edge_attr,
+            self.batch_,
+            self.config['enable_edge_weight'],
+            self.config['normalize_pos']
+        )
         print("*********                      Finished.                      *********")
 
     def train(self,
@@ -2569,7 +2589,7 @@ class VAE(VanillaVAE):
         x0_change_prev = np.inf
         param_post = list(self.decoder.net_rho2.parameters())
         optimizer_post = torch.optim.Adam(param_post,
-                                          lr=self.config["learning_rate_post"],
+                                          lr=self.config["learning_rate_refine"],
                                           weight_decay=self.config["lambda_rho"])
         param_ode = [self.decoder.alpha,
                      self.decoder.beta,
@@ -2936,11 +2956,9 @@ class VAE(VanillaVAE):
         self.loss_train_sp = []
         self.loss_test_sp = []
         self.config["early_stop_thred"] = 0
-        try:
-            x_embed = adata.obsm[f"X_{embed}"]
-        except KeyError:
-            logger.warning("Embedding not found! Set to None.")
-            x_embed = np.nan*np.ones((adata.n_obs, 2))
+        
+        if "X_embed" not in adata.obsm:
+            logger.warning("Embedding not found! Skip plotting.")
             plot = False
         for epoch in range(self.config['n_epochs']):
             stop_training = self.train_spatial_epoch(optimizer)
@@ -3234,45 +3252,53 @@ class VAE(VanillaVAE):
         xy_query = self.unseen_data.xy.detach().cpu().numpy()
         xy = np.concatenate([xy, xy_query], 0)
 
-        x0_index = knnx0_index(t,
-                               z,
-                               xy,
-                               t_query,
-                               z_query,
-                               xy_query,
-                               dt,
-                               self.config["n_neighbors"],
-                               self.epsilon_ball,
-                               hist_eq=True)
-        u0, s0, xy0, t0 = get_x0(uhat,
-                                 shat,
-                                 xy,
-                                 t,
-                                 dt,
-                                 x0_index,
-                                 u0_init,
-                                 s0_init)
+        x0_index = knnx0_index_parallel(
+            t,
+            z,
+            xy,
+            t_query,
+            z_query,
+            xy_query,
+            dt,
+            self.config["n_neighbors"],
+            self.epsilon_ball,
+            hist_eq=True
+        )
+        u0, s0, xy0, t0 = get_x0(
+            uhat,
+            shat,
+            xy,
+            t,
+            dt,
+            x0_index,
+            u0_init,
+            s0_init
+        )
         if self.config["vel_continuity_loss"]:
-            x1_index = knnx0_index(t,
-                                   z,
-                                   xy,
-                                   t_query,
-                                   z_query,
-                                   xy_query,
-                                   dt,
-                                   self.config["n_neighbors"],
-                                   self.epsilon_ball,
-                                   forward=True,
-                                   hist_eq=True)
-            u1, s1, xy1, t1 = get_x0(uhat,
-                                     shat,
-                                     xy,
-                                     t,
-                                     dt,
-                                     x1_index,
-                                     None,
-                                     None,
-                                     forward=True)
+            x1_index = knnx0_index_parallel(
+                t,
+                z,
+                xy,
+                t_query,
+                z_query,
+                xy_query,
+                dt,
+                self.config["n_neighbors"],
+                self.epsilon_ball,
+                forward=True,
+                hist_eq=True
+            )
+            u1, s1, xy1, t1 = get_x0(
+                uhat,
+                shat,
+                xy,
+                t,
+                dt,
+                x1_index,
+                None,
+                None,
+                forward=True
+            )
 
         self.unseen_data.t = torch.tensor(t_query.reshape(-1, 1), dtype=torch.float32, device=self.device, requires_grad=False)
         self.unseen_data.z = torch.tensor(z_query, dtype=torch.float32, device=self.device, requires_grad=False)

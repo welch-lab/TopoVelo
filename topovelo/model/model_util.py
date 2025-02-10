@@ -1,5 +1,7 @@
 """Model utility functions
 """
+import multiprocessing
+from joblib import Parallel, delayed
 import numpy as np
 import logging
 import torch
@@ -15,6 +17,7 @@ from scipy.linalg import svdvals
 from scipy.spatial.distance import cosine
 from scipy.sparse import csr_array, csr_matrix
 from .scvelo_util import mRNA, vectorize, tau_inv, R_squared, test_bimodality, leastsq_NxN
+NUM_CORES = multiprocessing.cpu_count()
 
 ###################################################################################
 # Build spatial graph
@@ -555,12 +558,14 @@ def init_params(u,
     logging.debug('Estimating the variance...')
     assert np.all(params[:, 2] > 0)
     for i in trange(ngene):
-        upred, spred = scv_pred_single(T[i],
-                                       params[i, 0],
-                                       params[i, 1],
-                                       params[i, 2],
-                                       Ts[i],
-                                       params[i, 3])  # upred has the original scale
+        upred, spred = scv_pred_single(
+            T[i],
+            params[i, 0],
+            params[i, 1],
+            params[i, 2],
+            Ts[i],
+            params[i, 3]
+        )  # upred has the original scale
         dist_u[:, i] = u[:, i] - upred
         dist_s[:, i] = s[:, i] - spred
 
@@ -580,6 +585,85 @@ def init_params(u,
     sigma_s[np.isnan(sigma_s)] = min_sigma_s
 
     # Make sure all genes get the same total relevance score
+    gene_score = velocity_genes * 1.0 + (1 - velocity_genes) * 0.25
+
+    return params[:, 0], params[:, 1], params[:, 2], params[:, 3], Ts, U0, S0, sigma_u, sigma_s, T.T, gene_score
+
+
+# Parallelized version
+def init_params_parallel(
+    u, s, percent, fit_offset=False, fit_scaling=True, min_sigma_u=None, min_sigma_s=None, eps=1e-3
+):
+    ngene = u.shape[1]
+    params = np.ones((ngene, 4))
+    params[:, 0] = np.random.rand((ngene)) * np.max(u, 0)
+    params[:, 2] = np.clip(np.random.rand((ngene)) * np.max(u, 0) / (np.max(s, 0) + 1e-10), eps, None)
+
+    T = np.zeros((ngene, len(s)))
+    Ts = np.zeros((ngene))
+    U0, S0 = np.zeros((ngene)), np.zeros((ngene))
+
+    def process_gene(i):
+        si, ui = s[:, i], u[:, i]
+        sfilt, ufilt = si[(si > 0) & (ui > 0)], ui[(si > 0) & (ui > 0)]
+
+        if len(sfilt) > 3 and len(ufilt) > 3:
+            alpha, beta, gamma, t, u0_, s0_, ts, scaling = init_gene(sfilt, ufilt, percent, fit_scaling)
+            T_val = np.zeros(len(s))
+            T_val[(si > 0) & (ui > 0)] = t
+            return np.array([alpha, beta, np.clip(gamma, eps, None), scaling]), T_val, u0_, s0_, ts
+        else:
+            return np.ones(4), np.zeros(len(s)), np.max(u), np.max(s), 0.0
+
+    print('Estimating ODE parameters...')
+    # n_jobs = min(max(2, ngene // 500), NUM_CORES)
+    results = Parallel(n_jobs=-1)(delayed(process_gene)(i) for i in trange(ngene))
+    for i, res in enumerate(results):
+        params[i, :], T[i, :], U0[i], S0[i], Ts[i] = res
+
+    # Filter out genes
+    min_r2 = 0.01
+    offset, gamma = leastsq_NxN(s, u, fit_offset, perc=[100 - percent, percent])
+    gamma = np.clip(gamma, eps, None)
+    residual = u - gamma * s
+    if fit_offset:
+        residual -= offset
+
+    r2 = R_squared(residual, total=u - u.mean(0))
+    velocity_genes = (r2 > min_r2) & (r2 < 0.95) & (gamma > 0.01) & (np.max(s > 0, 0) > 0) & (np.max(u > 0, 0) > 0)
+    logging.debug(f'Detected {np.sum(velocity_genes)} velocity genes.')
+
+    # We don't parallelize this part because the overhead is more than the gain
+    dist_u, dist_s = np.zeros(u.shape), np.zeros(s.shape)
+    logging.debug('Estimating the variance...')
+    assert np.all(params[:, 2] > 0)
+    for i in trange(ngene, leave=False):
+        upred, spred = scv_pred_single(
+            T[i],
+            params[i, 0],
+            params[i, 1],
+            params[i, 2],
+            Ts[i],
+            params[i, 3]
+        )  # upred has the original scale
+        dist_u[:, i] = u[:, i] - upred
+        dist_s[:, i] = s[:, i] - spred
+
+    sigma_u = np.std(dist_u, 0)
+    sigma_s = np.std(dist_s, 0)
+    if min_sigma_u is None:
+        q1 = np.quantile(sigma_u[sigma_u > 0], 0.25)
+        q3 = np.quantile(sigma_u[sigma_u > 0], 0.75)
+        min_sigma_u = q1 - 1.5*(q3-q1)
+    sigma_u = np.clip(sigma_u, a_min=min_sigma_u, a_max=None)
+    if min_sigma_s is None:
+        q1 = np.quantile(sigma_s[sigma_s > 0], 0.25)
+        q3 = np.quantile(sigma_s[sigma_s > 0], 0.75)
+        min_sigma_s = q1 - 1.5*(q3-q1)
+    sigma_s = np.clip(sigma_s, a_min=min_sigma_s, a_max=None)
+    sigma_u[np.isnan(sigma_u)] = min_sigma_u
+    sigma_s[np.isnan(sigma_s)] = min_sigma_s
+
     gene_score = velocity_genes * 1.0 + (1 - velocity_genes) * 0.25
 
     return params[:, 0], params[:, 1], params[:, 2], params[:, 3], Ts, U0, S0, sigma_u, sigma_s, T.T, gene_score
@@ -677,6 +761,35 @@ def reinit_params(U, S, t, ts):
         beta[i] = beta_g
         gamma[i] = gamma_g
         ton[i] = ton_g
+    assert not np.any(np.isnan(alpha))
+    assert not np.any(np.isnan(gamma))
+    return alpha, beta, gamma, ton
+
+
+# Parallelized version
+def reinit_params_parallel(U, S, t, ts):
+    print('Reinitialize the regular ODE parameters based on estimated global latent time.')
+    G = U.shape[1]
+  
+    def process_single_gene(i):
+        alpha_g, beta_g, gamma_g, ton_g = reinit_gene(U[:, i], S[:, i], t, ts[i])
+        return alpha_g, beta_g, gamma_g, ton_g
+
+    # Use joblib to parallelize the computation across genes
+    # n_jobs = min(max(2, G//500), NUM_CORES)
+    results = Parallel(n_jobs=-1)(delayed(process_single_gene)(i) for i in trange(G))
+    
+    alpha = np.zeros(G)
+    beta = np.zeros(G)
+    gamma = np.zeros(G)
+    ton = np.zeros(G)
+    
+    for i, (alpha_g, beta_g, gamma_g, ton_g) in enumerate(results):
+        alpha[i] = alpha_g
+        beta[i] = beta_g
+        gamma[i] = gamma_g
+        ton[i] = ton_g
+
     assert not np.any(np.isnan(alpha))
     assert not np.any(np.isnan(gamma))
     return alpha, beta, gamma, ton
@@ -1314,18 +1427,27 @@ def knnx0_index(t,
                 adaptive=0.0,
                 std_t=None,
                 forward=False,
-                hist_eq=False):
+                hist_eq=False,
+                verbose=False):
     ############################################################
     # Same functionality as knnx0, but returns the neighbor index
     ############################################################
+    logger = logging.getLogger(__name__)
+    if verbose:
+        logger.setLevel(logging.DEBUG)
+    tmax, tmin = t.max(), t.min()
+
     Nq = len(t_query)
-    n1 = 0
+    n_invalid = 0
+    num_sp_nbs, num_zero_sp_nbs = 0, 0
     num_nbs = 0
-    len_avg = 0
+
     if hist_eq:
+        logging.debug('Histogram equalization.')
         t, t_query = _hist_equal(t, t_query)
     bt = BallTree(xy)
     neighbor_index = []
+    logger.debug('** Start predecessor calculation. **')
     for i in trange(Nq):
         if adaptive > 0 and std_t is not None:
             dt_r, dt_l = adaptive*std_t[i], adaptive*std_t[i] + (dt[1]-dt[0])
@@ -1335,16 +1457,21 @@ def knnx0_index(t,
             t_ub, t_lb = t_query[i] + dt_l, t_query[i] + dt_r
         else:
             t_ub, t_lb = t_query[i] - dt_r, t_query[i] - dt_l
-        #try:
+
         out = bt.query_radius(xy_query[i:i+1], radius, return_distance=True)
         spatial_nbs, dist = out[0][0], out[1][0]
-        
-        #except ValueError:
-        #    spatial_nbs = bt.query(xy_query[i:i+1], k=min(k+50, len(xy)))[0]
+        if len(spatial_nbs) == 0:  # edge case handling
+            num_zero_sp_nbs += 1
+            spatial_nbs = np.array(range(len(t)))
+            if num_zero_sp_nbs == int(Nq * 0.1):
+                logger.warning('Too many cells without spatial neighbors. Consider increasing the radius.')
+
+        # Cells both spatially and temporally close to the query cell
         indices = np.where((t[spatial_nbs] >= t_lb) & (t[spatial_nbs] < t_ub))[0]
         k_ = len(indices)
-        delta_t = dt[1] - dt[0]  # increment / decrement of the time window boundary
-        while k_ < k and t_lb > t.min() - (dt[1] - dt[0]) and t_ub < t.max() + (dt[1] - dt[0]):
+        delta_t = (tmax - tmin) * 0.05  # increment / decrement of the time window boundary
+
+        while k_ < k and t_lb > tmin and t_ub < tmax:
             if forward:
                 t_lb = t_query[i]
                 t_ub = t_ub + delta_t
@@ -1353,8 +1480,9 @@ def knnx0_index(t,
                 t_ub = t_query[i]
             indices = np.where((t[spatial_nbs] >= t_lb) & (t[spatial_nbs] < t_ub))[0]  # filter out cells in the bin
             k_ = len(indices)
-        len_avg = len_avg + k_
-        num_nbs = num_nbs + len(spatial_nbs)
+        num_nbs = num_nbs + k_
+        num_sp_nbs = num_sp_nbs + len(spatial_nbs)
+        logger.debug('Calculating KNN.')
         if k_ > 1:
             spatial_nbs = spatial_nbs[indices]
             k_neighbor = k if k_ > k else max(1, k_//2)
@@ -1368,11 +1496,98 @@ def knnx0_index(t,
             neighbor_index.append(spatial_nbs)
         else:
             neighbor_index.append([])
-            n1 = n1+1
+            n_invalid = n_invalid+1
     
-    logging.debug(f"Percentage of Invalid Sets: {n1/Nq:.3f}")
-    logging.debug(f"Average Neighborhood Size: {num_nbs/Nq:.1f}")
-    logging.debug(f"Average Set Size: {len_avg/Nq:.1f}")
+    logger.debug(f"Percentage of Invalid Sets: {n_invalid/Nq:.3f}")
+    logger.debug(f"Average Neighborhood Size: {num_sp_nbs/Nq:.1f}")
+    logger.debug(f"Average Set Size: {num_nbs/Nq:.1f}")
+    return neighbor_index
+
+
+# Parallelized version
+def _process_single_query(
+    i, bt, t, t_query, xy_query, radius, z, z_query,
+    adaptive, std_t, dt, k, forward, t_min, t_max,
+):
+    if adaptive > 0 and std_t is not None:
+        dt_r, dt_l = adaptive * std_t[i], adaptive * std_t[i] + (dt[1] - dt[0])
+    else:
+        dt_r, dt_l = dt[0], dt[1]
+    
+    if forward:
+        t_ub, t_lb = t_query[i] + dt_l, t_query[i] + dt_r
+    else:
+        t_ub, t_lb = t_query[i] - dt_r, t_query[i] - dt_l
+
+    out = bt.query_radius(xy_query[i:i+1], radius, return_distance=True)
+    spatial_nbs, dist = out[0][0], out[1][0]
+    if len(spatial_nbs) == 0:  # edge case handling
+        spatial_nbs = np.array(range(len(t)))
+    indices = np.where((t[spatial_nbs] >= t_lb) & (t[spatial_nbs] < t_ub))[0]
+    
+    k_ = len(indices)
+    delta_t = (t_max - t_min) * 0.05  # increment / decrement of the time window boundary
+    while k_ < k and t_lb > t_min and t_ub < t_max:
+        if forward:
+            t_lb = t_query[i]
+            t_ub += delta_t
+        else:
+            t_lb -= delta_t
+            t_ub = t_query[i]
+        
+        indices = np.where((t[spatial_nbs] >= t_lb) & (t[spatial_nbs] < t_ub))[0]
+        k_ = len(indices)
+    
+    if k_ > 1:
+        spatial_nbs = spatial_nbs[indices]
+        k_neighbor = k if k_ > k else max(1, k_//2)
+        knn_model = NearestNeighbors(n_neighbors=k_neighbor)
+        knn_model.fit(z[spatial_nbs])
+        dist, ind = knn_model.kneighbors(z_query[i:i+1])
+        if isinstance(ind, int):
+            ind = np.array([int])
+        return spatial_nbs[ind.flatten()].astype(int), len(spatial_nbs)
+    elif k_ == 1:
+        return spatial_nbs, len(spatial_nbs)
+    else:
+        return [], len(spatial_nbs)
+
+
+def knnx0_index_parallel(
+    t, z, xy,
+    t_query, z_query, xy_query,
+    dt,
+    k,
+    radius,
+    adaptive=0.0,
+    std_t=None,
+    forward=False,
+    hist_eq=False
+):
+    logger = logging.getLogger(__name__)
+    tmax, tmin = t.max(), t.min()
+    Nq = len(t_query)
+    if hist_eq:
+        t, t_query = _hist_equal(t, t_query)
+
+    bt = BallTree(xy)
+    # n_jobs = min(max(2, Nq//50000), NUM_CORES)
+    results = Parallel(n_jobs=-1)(
+        delayed(_process_single_query)(
+            i, bt, t, t_query, xy_query, radius, z, z_query,
+            adaptive, std_t, dt, k, forward, tmin, tmax
+        ) for i in trange(Nq, desc='Calculating KNN')
+    )
+
+    neighbor_index = [result[0] for result in results]
+    n_invalid = np.sum([len(ind) == 0 for ind in neighbor_index])
+    num_nbs = np.sum([result[1] for result in results])
+    num_zero_nbs = np.sum([result[1] == 0 for result in results])
+    if num_zero_nbs > int(Nq * 0.1):
+        logger.warning('Too many cells without spatial neighbors. Consider increasing the radius.')
+
+    logging.debug(f"Percentage of Invalid Sets: {n_invalid/Nq:.3f}")
+    logging.debug(f"Average Set Size: {num_nbs/Nq:.1f}")
     return neighbor_index
 
 

@@ -6,13 +6,12 @@ import numpy as np
 import pandas as pd
 from os import makedirs
 from scipy.stats import spearmanr
-from sklearn.neighbors import NearestNeighbors
 from multiprocessing import cpu_count
 from .evaluation_util import *
+from .velocity_util import *
 from .plot_config import PlotConfig
 from ..scvelo_preprocessing.neighbors import neighbors
-from ..plotting import set_dpi, get_colors, plot_cluster, plot_phase_grid, plot_sig_grid, plot_time_grid
-from ..plotting import compute_figsize
+from ..plotting import set_dpi, plot_cluster, plot_phase_grid, plot_sig_grid, plot_time_grid
 logger = logging.getLogger(__name__)
 
 
@@ -117,6 +116,7 @@ def get_velocity_metric(adata,
     mean_sp_vel_consistency = np.nan
     if spatial_graph_key is not None:
         mean_sp_vel_consistency = spatial_velocity_consistency(adata, vkey, spatial_graph_key, gene_mask)
+
     if len(cluster_edges) > 0:
         try:
             from scvelo.tl import velocity_graph, velocity_embedding
@@ -134,6 +134,7 @@ def get_velocity_metric(adata,
                                                                    cluster_edges,
                                                                    spatial_graph_key,
                                                                    x_emb=f"X_{embed}")
+
         cbdir, mean_cbdir = cross_boundary_correctness(adata,
                                                        cluster_key,
                                                        vkey,
@@ -141,6 +142,7 @@ def get_velocity_metric(adata,
                                                        spatial_graph_key,
                                                        x_emb="Ms",
                                                        gene_mask=gene_mask)
+
         k_cbdir_embed, mean_k_cbdir_embed = gen_cross_boundary_correctness(adata,
                                                                            cluster_key,
                                                                            vkey,
@@ -150,7 +152,7 @@ def get_velocity_metric(adata,
                                                                            dir_test=False,
                                                                            x_emb=f"X_{embed}",
                                                                            gene_mask=gene_mask)
-        
+
         k_cbdir, mean_k_cbdir = gen_cross_boundary_correctness(adata,
                                                                cluster_key,
                                                                vkey,
@@ -160,6 +162,7 @@ def get_velocity_metric(adata,
                                                                dir_test=False,
                                                                x_emb="Ms",
                                                                gene_mask=gene_mask)
+
         (acc_embed, mean_acc_embed,
          umtest_embed, mean_umtest_embed) = gen_cross_boundary_correctness_test(adata,
                                                                                 cluster_key,
@@ -179,6 +182,7 @@ def get_velocity_metric(adata,
                                                                     spatial_graph_key,
                                                                     x_emb="Ms",
                                                                     gene_mask=gene_mask)
+
         if not f'{key}_time' in adata.obs:
             tscore, mean_tscore = time_score(adata, 'latent_time', cluster_key, cluster_edges)
         else:
@@ -207,6 +211,7 @@ def get_velocity_metric(adata,
         umtest_embed = dict.fromkeys([])
         umtest = dict.fromkeys([])
         tscore = dict.fromkeys([])
+
     return (cbdir_embed, mean_cbdir_embed,
             cbdir, mean_cbdir,
             k_cbdir_embed, mean_k_cbdir_embed,
@@ -457,33 +462,39 @@ def get_metric(adata,
                                                     n_jobs)
 
     mean_sp_time_consistency = spatial_time_consistency(adata, tkey, spatial_graph_key)
-    stats = gather_stats(mse_train=mse_train,
-                         mse_test=mse_test,
-                         mae_train=mae_train,
-                         mae_test=mae_test,
-                         logp_train=logp_train,
-                         logp_test=logp_test,
-                         corr=corr,
-                         mean_cbdir=mean_cbdir,
-                         mean_cbdir_embed=mean_cbdir_embed,
-                         mean_tscore=mean_tscore,
-                         mean_vel_consistency=mean_consistency_score,
-                         mean_sp_vel_consistency=mean_sp_vel_consistency,
-                         mean_sp_time_consistency=mean_sp_time_consistency)
+    stats = gather_stats(
+        mse_train=mse_train,
+        mse_test=mse_test,
+        mae_train=mae_train,
+        mae_test=mae_test,
+        logp_train=logp_train,
+        logp_test=logp_test,
+        corr=corr,
+        mean_cbdir=mean_cbdir,
+        mean_cbdir_embed=mean_cbdir_embed,
+        mean_tscore=mean_tscore,
+        mean_vel_consistency=mean_consistency_score,
+        mean_sp_vel_consistency=mean_sp_vel_consistency,
+        mean_sp_time_consistency=mean_sp_time_consistency
+    )
     
     stats_type = gather_type_stats(cbdir=cbdir, cbdir_embed=cbdir_embed, tscore=tscore)
-    multi_stats = gather_multistats(kcbdir=mean_k_cbdir,
-                                    kcbdir_embed=mean_k_cbdir_embed,
-                                    acc=mean_acc,
-                                    acc_embed=mean_acc_embed,
-                                    mwtest=mean_mwtest,
-                                    mwtest_embed=mean_mwtest_embed)
-    multi_stats_type = gather_type_multistats(kcbdir=k_cbdir,
-                                              kcbdir_embed=k_cbdir_embed,
-                                              acc=acc,
-                                              acc_embed=acc_embed,
-                                              mwtest=mwtest,
-                                              mwtest_embed=mwtest_embed)
+    multi_stats = gather_multistats(
+        kcbdir=mean_k_cbdir,
+        kcbdir_embed=mean_k_cbdir_embed,
+        acc=mean_acc,
+        acc_embed=mean_acc_embed,
+        mwtest=mean_mwtest,
+        mwtest_embed=mean_mwtest_embed
+    )
+    multi_stats_type = gather_type_multistats(
+        kcbdir=k_cbdir,
+        kcbdir_embed=k_cbdir_embed,
+        acc=acc,
+        acc_embed=acc_embed,
+        mwtest=mwtest,
+        mwtest_embed=mwtest_embed
+    )
     return stats, stats_type, multi_stats, multi_stats_type
 
 
@@ -512,8 +523,8 @@ def post_analysis(adata,
                   n_spatial_neighbors=30,
                   gene_key='velocity_genes',
                   compute_metrics=False,
+                  plot_spatial=True,
                   raw_count=False,
-                  spatial_velocity_graph=False,
                   genes=[],
                   plot_type=['time', 'cell velocity'],
                   cluster_key="clusters",
@@ -546,15 +557,13 @@ def post_analysis(adata,
         spatial_key (str, optional):
             Key for spatial embedding. Defaults to None.
         n_spatial_neighbors (int, optional):
-            Number of spatial neighbors. Defaults to 30.
+            Number of spatial neighbors used for computing velocity graph in velocity stream plots. Defaults to 30.
         gene_key (str, optional):
             Key for filtering the genes. Defaults to 'velocity_genes'.
         compute_metrics (bool, optional):
             Whether to compute performance metrics. Defaults to True.
         raw_count (bool, optional):
             Whether to use raw count for computing metrics. Defaults to False.
-        spatial_velocity_graph (bool, optional):
-            Whether to recompute the spatial graph. Defaults to False.
         genes (list[str], optional):
             List of gene names. Defaults to [].
         plot_type (list[str], optional):
@@ -598,6 +607,9 @@ def post_analysis(adata,
     # sanity check
     if not _sanity_check(adata, spatial_graph_key, spatial_key, cluster_key, embed):
         return None, None, None, None
+    # Specify plotting basis
+    sp_basis = spatial_key[2:]
+    plot_basis = sp_basis if plot_spatial else embed
     
     # set the random seed
     random_state = 42 if 'random_state' not in kwargs else kwargs['random_state']
@@ -661,33 +673,30 @@ def post_analysis(adata,
         tkey = 'latent_time' if method == 'scVelo' else f'{keys[i]}_time'
         tkeys.append(tkey)
 
-    # recompute the spatial KNN graph
-    if spatial_velocity_graph:
-        print(f'Computing a spatial graph using KNN on {spatial_key} with k={n_spatial_neighbors}')
-        if 'connectivities' in adata.obsp or 'neighbors' in adata.uns:
-            logger.warning(f'Overwriting the original KNN graph! (.uns, .obsp)')
-        neighbors(adata, n_neighbors=n_spatial_neighbors, use_rep=spatial_key, method='sklearn')
-
     # Compute metrics and generate plots for each method
     for i, method in enumerate(methods):
         # Compute metrics
         if compute_metrics:
             print(f'*** Computing performance metrics {i+1}/{len(methods)} ***')
             try:
-                (stats_i, stats_type_i,
-                multi_stats_i, multi_stats_type_i) = get_metric(adata,
-                                                                method,
-                                                                keys[i],
-                                                                vkeys[i],
-                                                                tkeys[i],
-                                                                spatial_graph_key,
-                                                                cluster_key,
-                                                                gene_key,
-                                                                cluster_edges,
-                                                                embed,
-                                                                n_jobs=(kwargs['n_jobs']
-                                                                        if 'n_jobs' in kwargs
-                                                                        else None))
+                (stats_i,
+                 stats_type_i,
+                 multi_stats_i,
+                 multi_stats_type_i) = get_metric(
+                    adata,
+                    method,
+                    keys[i],
+                    vkeys[i],
+                    tkeys[i],
+                    spatial_graph_key,
+                    cluster_key,
+                    gene_key,
+                    cluster_edges,
+                    embed,
+                    n_jobs=(kwargs['n_jobs']
+                            if 'n_jobs' in kwargs
+                            else None)
+                )
                 print('Finished. \n')
                 stats_type_list.append(stats_type_i)
                 multi_stats_list.append(multi_stats_i)
@@ -758,18 +767,15 @@ def post_analysis(adata,
         print("---     Integrating Peformance Metrics     ---")
         print(f"Dataset Size: {adata.n_obs} cells, {adata.n_vars} genes")
         stats_df = pd.DataFrame(stats)
-        stats_type_df = pd.concat(stats_type_list,
-                                  axis=1,
-                                  keys=methods_display,
-                                  names=['Model'])
-        multi_stats_df = pd.concat(multi_stats_list,
-                                   axis=1,
-                                   keys=methods_display,
-                                   names=['Model'])
-        multi_stats_type_df = pd.concat(multi_stats_type_list,
-                                        axis=1,
-                                        keys=methods_display,
-                                        names=['Model'])
+        stats_type_df = pd.concat(
+            stats_type_list, axis=1, keys=methods_display, names=['Model']
+        )
+        multi_stats_df = pd.concat(
+            multi_stats_list, axis=1, keys=methods_display, names=['Model']
+        )
+        multi_stats_type_df = pd.concat(
+            multi_stats_type_list, axis=1, keys=methods_display, names=['Model']
+        )
         pd.set_option("display.precision", 3)
 
     if plot_type:
@@ -780,15 +786,14 @@ def post_analysis(adata,
         plot_config = PlotConfig('cluster')
         plot_config.set_multiple(cluster_plot_config)
         if figure_path is not None:
-            plot_config.set('save', f"{figure_path}/{test_id}_{embed}.png")
+            plot_config.set('save', f"{figure_path}/{test_id}-{embed}.png")
         else:
             plot_config.set('save', None)
-        plot_cluster(adata.obsm[f"X_{embed}"],
-                     adata.obs[cluster_key].to_numpy(),
-                     *plot_config.get_all())
+        plot_cluster(
+            adata.obsm[f"X_{plot_basis}"], adata.obs[cluster_key].to_numpy(), *plot_config.get_all()
+        )
 
     if "time" in plot_type or "all" in plot_type:
-        X_embed = adata.obsm[f"X_{embed}"]
         T = {}
         repeated = {}
         capture_time = adata.obs["tprior"].to_numpy() if "tprior" in adata.obs else None
@@ -814,11 +819,13 @@ def post_analysis(adata,
         plot_config.set_multiple(time_plot_config)
         plot_config.set('path', figure_path)
         plot_config.set('figname', f'{test_id}_time')
-        plot_time_grid(T,
-                       X_embed,
-                       capture_time,
-                       None,
-                       *plot_config.get_all())
+        plot_time_grid(
+            T,
+            adata.obsm[f"X_{plot_basis}"],
+            capture_time,
+            None,
+            *plot_config.get_all()
+        )
 
     if "phase" in plot_type or "all" in plot_type:
         Labels_phase = {}
@@ -838,17 +845,19 @@ def post_analysis(adata,
         plot_config.set_multiple(phase_plot_config)
         plot_config.set('path', figure_path)
         plot_config.set('figname', f'{test_id}_phase')
-        plot_phase_grid(grid_size[0],
-                        grid_size[1],
-                        genes,
-                        U[:, gene_indices],
-                        S[:, gene_indices],
-                        Labels_phase,
-                        Legends_phase,
-                        Uhat,
-                        Shat,
-                        Labels_phase_demo,
-                        *plot_config.get_all())
+        plot_phase_grid(
+            grid_size[0],
+            grid_size[1],
+            genes,
+            U[:, gene_indices],
+            S[:, gene_indices],
+            Labels_phase,
+            Legends_phase,
+            Uhat,
+            Shat,
+            Labels_phase_demo,
+            *plot_config.get_all()
+        )
 
     if 'gene' in plot_type or 'all' in plot_type:
         T = {}
@@ -874,119 +883,73 @@ def post_analysis(adata,
         plot_config.set_multiple(gene_plot_config)
         plot_config.set('path', figure_path)
         plot_config.set('figname', f'{test_id}_gene')
-        plot_sig_grid(grid_size[0],
-                      grid_size[1],
-                      genes,
-                      T,
-                      U[:, gene_indices],
-                      S[:, gene_indices],
-                      Labels_sig,
-                      Legends_sig,
-                      That,
-                      Uhat,
-                      Shat,
-                      V,
-                      Yhat,
-                      *plot_config.get_all())
+        plot_sig_grid(
+            grid_size[0],
+            grid_size[1],
+            genes,
+            T,
+            U[:, gene_indices],
+            S[:, gene_indices],
+            Labels_sig,
+            Legends_sig,
+            That,
+            Uhat,
+            Shat,
+            V,
+            Yhat,
+            *plot_config.get_all()
+        )
+
+    if 'embed velocity' in plot_type or 'all' in plot_type:
+        sp_basis = spatial_key[2:]
+        for i, (method, key, vkey) in enumerate(zip(methods, keys, vkeys)):
+            velocity_stream(
+                adata,
+                method,
+                key,
+                vkey,
+                cell_types_raw,
+                embed,
+                cluster_key,
+                n_spatial_neighbors,
+                dpi,
+                save=(None if figure_path is None else
+                        f'{figure_path}/vel-{embed}-{test_id}-{keys[i]}.png'),
+                stream_plot_config=stream_plot_config
+            )
 
     if 'cell velocity' in plot_type or 'all' in plot_type:
-        plot_config = PlotConfig('stream')
-        plot_config.set_multiple(stream_plot_config)
-        if plot_config.get('palette') is None:
-            palette = get_colors(len(cell_types_raw))
-            plot_config.set('palette', palette)
-        try:
-            from scvelo.tl import velocity_graph, velocity_embedding
-            from scvelo.pl import velocity_embedding_stream
-            for i, vkey in enumerate(vkeys):
-                if methods[i] in ['scVelo', 'UniTVelo', 'DeepVelo']:
-                    gene_subset = adata.var_names[adata.var['velocity_genes'].to_numpy()]
-                else:
-                    gene_subset = adata.var_names[~np.isnan(adata.layers[vkey][0])]
-                xkey = 'Ms' if 'xkey' not in kwargs else kwargs['xkey']
-                velocity_graph(adata, vkey=vkey, xkey=xkey, gene_subset=gene_subset,
-                               n_jobs=(kwargs['n_jobs']
-                                       if 'n_jobs' in kwargs
-                                       else get_n_cpu(adata.n_obs)))
-                if 'spatial_graph_params' in adata.uns:
-                    if 'radius' in adata.uns['spatial_graph_params']:
-                        radius = adata.uns['spatial_graph_params']['radius']
-                        if radius is not None:
-                            adata.uns[f'{vkey}_graph'] = adata.uns[f'{vkey}_graph']\
-                                .multiply(adata.obsp['distances'] < radius)
-                            adata.uns[f'{vkey}_graph_neg'] = adata.uns[f'{vkey}_graph_neg']\
-                                .multiply(adata.obsp['distances'] < radius)
-                velocity_embedding_stream(adata,
-                                          basis=embed,
-                                          vkey=vkey,
-                                          color=cluster_key,
-                                          title="",
-                                          figsize=(plot_config.get('width'), plot_config.get('height')),
-                                          density=plot_config.get('density'),
-                                          palette=plot_config.get('palette'),
-                                          size=plot_config.get('markersize'),
-                                          alpha=plot_config.get('alpha'),
-                                          legend_loc=plot_config.get('legend_loc'),
-                                          legend_fontsize=plot_config.get('legend_fontsize'),
-                                          linewidth=plot_config.get('linewidth'),
-                                          arrow_size=plot_config.get('arrow_size'),
-                                          arrow_color=plot_config.get('arrow_color'),
-                                          perc=plot_config.get('perc'),
-                                          cutoff_perc=plot_config.get('cutoff_perc'),
-                                          dpi=dpi,
-                                          show=True,
-                                          save=(None if figure_path is None else
-                                                f'{figure_path}/{test_id}_{keys[i]}.png'))
-        except ImportError:
-            logger.error('Please install scVelo in order to generate stream plots')
-            pass
-    
+        for i, (method, key, vkey) in enumerate(zip(methods, keys, vkeys)):
+            velocity_stream(
+                adata,
+                method,
+                key,
+                vkey,
+                cell_types_raw,
+                sp_basis,
+                cluster_key,
+                n_spatial_neighbors,
+                dpi,
+                save=(None if figure_path is None else
+                      f'{figure_path}/vel-xy-{test_id}-{keys[i]}.png'),
+                stream_plot_config=stream_plot_config
+            )
+
     # Cell velocity from the GNN spatial decoder
     if 'GNN cell velocity' in plot_type or 'all' in plot_type:
-        plot_config = PlotConfig('stream')
-        plot_config.set_multiple(stream_plot_config)
-        if plot_config.get('palette') is None:
-            palette = get_colors(len(cell_types_raw))
-            plot_config.set('palette', palette)
-        try:
-            from scvelo.tl import velocity_graph
-            from scvelo.pl import velocity_embedding_stream
-            for i, vkey in enumerate(vkeys):
-                if 'TopoVelo' in methods[i]:
-                    # Clip the velocity to remove outliers
-                    v = adata.obsm[f"{vkey}_{keys[i]}_xy"]
-                    q1, q3 = np.quantile(v, 0.75, 0), np.quantile(v, 0.25, 0)
-                    v = np.stack([np.clip(v[:, 0], q3[0]-1.5*(q1[0]-q3[0]), q1[0]+1.5*(q1[0]-q3[0])),
-                                  np.clip(v[:, 1], q3[1]-1.5*(q1[0]-q3[0]), q1[1]+1.5*(q1[1]-q3[1]))], 1)
-                    v = knn_smooth(v, adata.obsp["connectivities"])
-                    adata.obsm[f"{vkey}_dec_{keys[i]}_xy"] = v
-                    # Use predicted coordinates
-                    adata.uns[f"{keys[i]}_velocity_params"]["embeddings"] = f"{keys[i]}_xy"
-                    velocity_embedding_stream(adata,
-                                              basis=f"{keys[i]}_xy",
-                                              vkey=f"{vkey}_dec",
-                                              recompute=False,
-                                              color=cluster_key,
-                                              title="",
-                                              figsize=(plot_config.get('width'), plot_config.get('height')),
-                                              density=plot_config.get('density'),
-                                              palette=plot_config.get('palette'),
-                                              size=plot_config.get('markersize'),
-                                              alpha=plot_config.get('alpha'),
-                                              legend_loc=plot_config.get('legend_loc'),
-                                              legend_fontsize=plot_config.get('legend_fontsize'),
-                                              linewidth=plot_config.get('linewidth'),
-                                              arrow_size=plot_config.get('arrow_size'),
-                                              arrow_color=plot_config.get('arrow_color'),
-                                              perc=plot_config.get('perc'),
-                                              cutoff_perc=plot_config.get('cutoff_perc'),
-                                              dpi=dpi,
-                                              show=True,
-                                              save=(None if figure_path is None else
-                                                    f'{figure_path}/{test_id}_{keys[i]}_cell_velocity.png'))
-        except ImportError:
-            logger.error('Please install scVelo in order to generate stream plots')
-            pass
+        for i, (method, key, vkey) in enumerate(zip(methods, keys, vkeys)):
+            velocity_stream_on_pred_xy(
+                adata,
+                method,
+                key,
+                vkey,
+                cell_types_raw,
+                cluster_key,
+                dpi,
+                save=(None if figure_path is None else
+                      f'{figure_path}/vel-{key}-predxy-{test_id}-{keys[i]}.png'),
+                stream_plot_config=stream_plot_config
+            )
 
     if save_anndata is not None:
         adata.write_h5ad(save_anndata)

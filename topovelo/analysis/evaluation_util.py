@@ -1163,6 +1163,15 @@ def remove_type(adata, nodes, target, k_cluster):
     return nodes[adata.obs[k_cluster][nodes].values != target]
 
 
+def _knn_ind(adata):
+    k = adata.uns['neighbors']['params']['n_neighbors'] if 'params' in adata.uns['neighbors'] else 30
+    if 'indices' not in adata.uns['neighbors']:
+        print('Calculating KNN index for evaluation.')
+        knn = NearestNeighbors(n_neighbors=k, n_jobs=-1).fit(adata.obsm['X_pca'])
+        adata.uns['neighbors']['indices'] = knn.kneighbors(adata.obsm['X_pca'], return_distance=False)
+    return adata.uns['neighbors']['indices']
+
+
 def _get_spatial_nbs(adata, spatial_graph_key, query_idx):
     # Get an adjacency list for cells in query_idx from a sparse adjacency matrix
     sub_graph = adata.obsp[spatial_graph_key][query_idx]
@@ -1221,10 +1230,13 @@ def cross_boundary_correctness(
         x_emb = x_emb[:, gene_mask]
         v_emb = v_emb[:, gene_mask]
     cell_labels = adata.obs[k_cluster].to_numpy()
+    # Obtain KNN
+    if spatial_graph_key is None:
+        knn_ind = _knn_ind(adata)
     for u, v in cluster_edges:
         sel = cell_labels == u
         if spatial_graph_key is None:
-            nbs = adata.uns['neighbors']['indices'][sel]  # [n * 30]
+            nbs = knn_ind[sel]  # [n * 30]
         else:
             nbs = _get_spatial_nbs(adata, spatial_graph_key, np.where(sel)[0])
 
@@ -1340,11 +1352,14 @@ def gen_cross_boundary_correctness(
     t = adata.obs[tkey].to_numpy()
     cell_labels = adata.obs[k_cluster].to_numpy()
     
+    # Obtain KNN
+    if spatial_graph_key is None:
+        knn_ind = _knn_ind(adata)
     np.random.seed(random_state)
     for u, v in cluster_edges:
         sel = cell_labels == u
         if spatial_graph_key is None:
-            nbs = adata.uns['neighbors']['indices'][sel]  # [n * 30]
+            nbs = knn_ind[sel]  # [n * k]
         else:
             nbs = _get_spatial_nbs(adata, spatial_graph_key, np.where(sel)[0])
 
@@ -1378,7 +1393,11 @@ def gen_cross_boundary_correctness(
             type_score_null[0].append(np.nanmean(dir_scores_null))
             # deal with k-hop neighbors when k > 1
             for k in range(k_hop-1):
-                nodes = adata.uns['neighbors']['indices'][nodes].flatten()  # [num (k-1)-hop neighbors * 30]
+                if spatial_graph_key is None:
+                    nodes = knn_ind[nodes].flatten()  # [num (k-1)-hop neighbors * k]
+                else:
+                    nodes = _get_spatial_nbs(adata, spatial_graph_key, nodes)
+                    nodes = np.concatenate(nodes)
                 nodes = keep_type(adata, nodes, v, k_cluster)
                 nodes = np.unique(nodes)
 
@@ -1398,8 +1417,12 @@ def gen_cross_boundary_correctness(
             # Compute the same k-hop metric for neigbhors not in the descent v
             if dir_test and len(nodes_null) > 0:
                 for k in range(k_hop-1):
-                    # [num (k-1)-hop neighbors * 30]
-                    nodes_null = adata.uns['neighbors']['indices'][nodes_null].flatten()
+                    # [num (k-1)-hop neighbors * k]
+                    if spatial_graph_key is None:
+                        nodes_null = knn_ind[nodes_null].flatten()
+                    else:
+                        nodes_null = _get_spatial_nbs(adata, spatial_graph_key, nodes_null)
+                        nodes_null = np.concatenate(nodes_null)
                     nodes_null = np.unique(nodes_null)
                     nodes_null = nodes_null if len(all_nodes) < n_prune else np.random.choice(nodes_null, n_prune)
                     position_dif_null = x_emb[nodes_null] - x_pos
@@ -1435,50 +1458,30 @@ def gen_cross_boundary_correctness_test(
     n_prune=30,
     random_state=2022
 ):
-    """Mann-Whitney U Test of RNA velocity
+    """Performs a Mann-Whitney U Test for RNA velocity across cluster boundaries.
+
+    This function evaluates whether RNA velocity directions are consistent with expected transitions between 
+    specified clusters, using neighborhood-based approaches and statistical testing.
 
     Args:
-        adata (:class:`anndata.AnnData`):
-            Anndata object.
-        k_cluster (str):
-            Key to the cluster column in adata.obs.
-        k_velocity (str):
-            Key to the velocity matrix in adata.obsm.
-        cluster_edges (list[tuple[str]]):
-            Pairs of clusters has transition direction A->B
-        tkey (str):
-            Key to the cell time in adata.obs
-        k_hop (int, optional):
-            Number of steps to consider.
-            CBDir will be computed for 1 to k-step neighbors.
-            Defaults to 5.
-        dir_test (bool, optional):
-            Whether to subtract CBDir of random walk from CBDir of desired direction.
-            Defaults to False.
-        x_emb (str, optional):
-            Low dimensional embedding in adata.obsm
-            or original count matrix in adata.layers.
-            Defaults to "X_umap".
-        gene_mask (:class:`numpy.ndarray`, optional):
-            Boolean array to filter out non-velocity genes. Defaults to None.
-        n_prune (int, optional):
-            Maximum number of neighbors to keep.
-            This is necessary because number of neighbors grows exponentially.
-            Defaults to 30.
-        random_state (int, optional):
-            Seed for random walk sampling. Defaults to 2022.
+        adata (anndata.AnnData): The annotated data matrix with observations/cells on rows.
+        k_cluster (str): The key to the cluster column in `adata.obs` indicating cell clusters.
+        k_velocity (str): The key to the RNA velocity matrix in `adata.obsm`.
+        cluster_edges (list[tuple[str]]): Pairs of clusters defining expected transition directions (e.g., A -> B).
+        tkey (str): The key for cell time information in `adata.obs`.
+        spatial_graph_key (str, optional): The key for the spatial graph data in `adata.obsm`, used to determine neighbors. Defaults to None.
+        k_hop (int, optional): The number of hop steps for neighborhood expansion. Defaults to 5.
+        x_emb (str, optional): The key for low-dimensional embeddings in `adata.obsm` or a layer for the original count matrix. Defaults to "X_umap".
+        gene_mask (numpy.ndarray, optional): A boolean array to filter out non-velocity genes. Defaults to None.
+        n_prune (int, optional): The maximum number of neighbors retained to prevent exponential growth. Defaults to 30.
+        random_state (int, optional): Seed for random sampling, ensuring reproducibility. Defaults to 2022.
 
     Returns:
-        tuple:
-
-            - dict: Proportional of cells with correct velocity flow (velocity accuracy)\
-                indexed by cluster_edges
-
-            - :class:`numpy.ndarray`: Average velocity accuracy over all cells for all step numbers
-
-            - dict: Mann-Whitney U test statistics indexed by cluster_edges
-
-            - :class:`numpy.ndarray`: Average Mann-Whitney U test statistics over all cells for all step numbers
+        tuple: A tuple containing the following elements:
+            - dict: Proportion of cells with correct velocity flow (velocity accuracy), keyed by `cluster_edges`.
+            - numpy.ndarray: Average velocity accuracy over all cells for each step number.
+            - dict: Mann-Whitney U test statistics, keyed by `cluster_edges`.
+            - numpy.ndarray: Average Mann-Whitney U test statistics over all cells for each step number.
     """
     # Use k-hop neighbors
     test_stats, accuracy = {}, {}
@@ -1498,17 +1501,24 @@ def gen_cross_boundary_correctness_test(
         v_emb = v_emb[:, gene_mask]
     t = adata.obs[tkey].to_numpy()
 
+    # Obtain KNN
+    if spatial_graph_key is None:
+        knn_ind = _knn_ind(adata)
+
     np.random.seed(random_state)
     for u, v in cluster_edges:
         sel = adata.obs[k_cluster] == u
         if spatial_graph_key is None:
-            nbs = adata.uns['neighbors']['indices'][sel]  # [n * 30]
+            nbs = knn_ind[sel]  # [n * k]
         else:
             nbs = _get_spatial_nbs(adata, spatial_graph_key, np.where(sel)[0])
 
         boundary_nodes = map(lambda nodes: keep_type(adata, nodes, v, k_cluster), nbs)
         x_points = x_emb[sel]
         x_velocities = v_emb[sel]
+        # replace nans with 0
+        x_velocities[np.isnan(x_velocities)] = 0
+        x_velocities[np.isinf(x_velocities)] = 0
         t_points = t[sel]
 
         type_stats = [[] for i in range(k_hop)]
@@ -1530,7 +1540,11 @@ def gen_cross_boundary_correctness_test(
             type_pval[0].append(res[1])
             # deal with k-hop neighbors when k > 1
             for k in range(k_hop-1):
-                nodes = adata.uns['neighbors']['indices'][nodes].flatten()  # [num (k-1)-hop neighbors * 30]
+                if spatial_graph_key is None:
+                    nodes = knn_ind[nodes].flatten()  # [num (k-1)-hop neighbors * k]
+                else:
+                    nodes = _get_spatial_nbs(adata, spatial_graph_key, nodes)
+                    nodes = np.concatenate(nodes)
                 nodes = keep_type(adata, nodes, v, k_cluster)
                 nodes = np.unique(nodes)
                 if len(nodes) < 2:
@@ -1542,7 +1556,11 @@ def gen_cross_boundary_correctness_test(
 
                 # Compute the same k-hop metric for neigbhors not in the descent v
                 # nodes_null = np.random.choice(random_pool, min(len(random_pool), n_prune), replace=False)
-                nodes_null = adata.uns['neighbors']['indices'][nodes_null].flatten()  # [num (k-1)-hop neighbors * 30]
+                if spatial_graph_key is None:
+                    nodes_null = knn_ind[nodes_null].flatten()  # [num (k-1)-hop neighbors * 30]
+                else:
+                    nodes_null = _get_spatial_nbs(adata, spatial_graph_key, nodes_null)
+                    nodes_null = np.concatenate(nodes_null)
                 nodes_null = np.unique(nodes_null)
                 nodes_null = nodes_null if len(all_nodes) < n_prune else np.random.choice(nodes_null, n_prune)
                 if len(nodes_null) < 2:
@@ -1692,9 +1710,10 @@ def inner_cluster_coh(adata, k_cluster, k_velocity, gene_mask=None, return_raw=F
     scores = {}
     all_scores = {}
 
+    knn_ind = _knn_ind(adata)
     for cat in clusters:
         sel = adata.obs[k_cluster] == cat
-        nbs = adata.uns['neighbors']['indices'][sel]
+        nbs = knn_ind[sel]
         same_cat_nodes = map(lambda nodes: keep_type(adata, nodes, cat, k_cluster), nbs)
 
         velocities = adata.layers[k_velocity]
@@ -1731,7 +1750,7 @@ def velocity_consistency(adata, vkey, gene_mask=None):
     Returns:
         float: Average score over all cells.
     """
-    nbs = adata.uns['neighbors']['indices']
+    nbs = _knn_ind(adata)
 
     velocities = adata.layers[vkey]
     nan_mask = ~np.isnan(velocities[0]) if gene_mask is None else gene_mask
@@ -2035,23 +2054,3 @@ def assign_phase(adata, model='human', embed='umap', save=None):
     adata_cc_genes = adata[:, cell_cycle_genes]
     sc.tl.pca(adata_cc_genes)
     sc.pl.scatter(adata_cc_genes, basis=embed, color='phase', save=save)
-
-
-def knn_smooth_1d(vals, graph, perc=[2, 98]):
-    v_max_to = np.percentile(vals, perc[1])
-    v_min_to = np.percentile(vals, perc[0])
-    vals_sm = graph.dot(vals)
-    v_max_from = vals_sm.max()
-    v_min_from = vals_sm.min()
-    
-    return (vals_sm - v_min_from)/(v_max_from - v_min_from)*(v_max_to - v_min_to) + v_min_to
-
-
-def knn_smooth_2d(vals, graph, perc=[2, 98]):
-    return np.stack([knn_smooth_1d(vals[:, i], graph, perc) for i in range(vals.shape[1])], axis=1)
-
-
-def knn_smooth(vals, graph, perc=[2, 98]):
-    if vals.ndim == 1:
-        return knn_smooth_1d(vals, graph, perc)
-    return knn_smooth_2d(vals, graph, perc)

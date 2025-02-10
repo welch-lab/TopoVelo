@@ -3,12 +3,12 @@ from setuptools import setup, find_packages
 setup(
     name='topovelo',
     version='0.0.1',
-    packages=find_packages(include=['topovelo']),
+    packages=find_packages(),
     author='Yichen Gu',
     author_email='gyichen@umich.edu',
     description='topological velocity inference from single-cell spatial transcriptomic data',
     install_requires=[
-        'anndata>=0.8.0',
+        'anndata>=0.8.0, <=0.9.1',
         'hnswlib>=0.6.2',
         'igraph>=0.10.4',
         'ipywidgets',
