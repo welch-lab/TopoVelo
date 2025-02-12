@@ -514,33 +514,35 @@ def _sanity_check(adata, spatial_graph_key, spatial_key, cluster_key, embed):
     return True
 
 
-def post_analysis(adata,
-                  test_id,
-                  methods,
-                  keys,
-                  spatial_graph_key='spatial_graph',
-                  spatial_key='X_spatial',
-                  n_spatial_neighbors=30,
-                  gene_key='velocity_genes',
-                  compute_metrics=False,
-                  plot_spatial=True,
-                  raw_count=False,
-                  genes=[],
-                  plot_type=['time', 'cell velocity'],
-                  cluster_key="clusters",
-                  cluster_edges=[],
-                  nplot=500,
-                  embed="umap",
-                  grid_size=(1, 1),
-                  cluster_plot_config={},
-                  phase_plot_config={},
-                  gene_plot_config={},
-                  time_plot_config={},
-                  stream_plot_config={},
-                  dpi=80,
-                  figure_path=None,
-                  save_anndata=None,
-                  **kwargs):
+def post_analysis(
+    adata,
+    test_id,
+    methods,
+    keys,
+    spatial_graph_key='spatial_graph',
+    spatial_key='X_spatial',
+    n_spatial_neighbors=30,
+    gene_key='velocity_genes',
+    compute_metrics=False,
+    raw_count=False,
+    genes=[],
+    plot_type=['time', 'cell velocity'],
+    cluster_key="clusters",
+    cluster_edges=[],
+    nplot=500,
+    embed="spatial",
+    plot_basis="spatial",
+    grid_size=(1, 1),
+    cluster_plot_config={},
+    phase_plot_config={},
+    gene_plot_config={},
+    time_plot_config={},
+    stream_plot_config={},
+    dpi=80,
+    figure_path=None,
+    save_anndata=None,
+    **kwargs
+):
     """Performs model evaluation and generates figures.
 
     Args:
@@ -553,32 +555,33 @@ def post_analysis(adata,
         keys (list[str]):
             List of keys for extracting model parameters.
         spatial_graph_key (str, optional):
-            Key for spatial graph. Defaults to None.
+            Key for spatial graph. Defaults to 'spatial_graph'.
         spatial_key (str, optional):
-            Key for spatial embedding. Defaults to None.
+            Key for spatial embedding. Defaults to 'X_spatial'.
         n_spatial_neighbors (int, optional):
             Number of spatial neighbors used for computing velocity graph in velocity stream plots. Defaults to 30.
         gene_key (str, optional):
             Key for filtering the genes. Defaults to 'velocity_genes'.
         compute_metrics (bool, optional):
-            Whether to compute performance metrics. Defaults to True.
+            Whether to compute performance metrics. Defaults to False.
         raw_count (bool, optional):
             Whether to use raw count for computing metrics. Defaults to False.
         genes (list[str], optional):
             List of gene names. Defaults to [].
         plot_type (list[str], optional):
-            List of plot types. Defaults to ['time', 'gene', 'stream'].
+            List of plot types. Defaults to ['time', 'cell velocity'].
         cluster_key (str, optional):
             Key for cell type annotation. Defaults to "clusters".
         cluster_edges (list[tuple[str]], optional):
             List of ground truth cell type transitions.
             Each transition is of the form (A, B) where A is a progenitor
-            cell type and B is a descendant type.
-            Defaults to [].
+            cell type and B is a descendant type. Defaults to [].
         nplot (int, optional):
             Number of cells to plot. Defaults to 500.
         embed (str, optional):
-            Low-dimensional embedding name. Defaults to 'umap'.
+            Low-dimensional embedding for evaluating velocity metrics. Defaults to 'spatial'.
+        plot_basis (str, optional):
+            Low-dimensional embedding for plotting. Defaults to 'spatial'.
         grid_size (tuple[int], optional):
             Grid size for plotting. Defaults to (1, 1).
         cluster_plot_config (dict, optional):
@@ -597,19 +600,19 @@ def post_analysis(adata,
             Path for saving figures. Defaults to None.
         save_anndata (str, optional):
             Filename for saving the AnnData object. Defaults to None.
+
     Returns:
-        tuple containing:
-        - :class:`pandas.DataFrame`: Performance metrics.
-        - :class:`pandas.DataFrame`: Performance metrics for each cell type transition.
-        - :class:`pandas.DataFrame`: Performance metrics for each time step.
-        - :class:`pandas.DataFrame`: Performance metrics for each cell type transition and each time step.
+        tuple: Contains:
+            - :class:`pandas.DataFrame`: Performance metrics.
+            - :class:`pandas.DataFrame`: Performance metrics for each cell type transition.
+            - :class:`pandas.DataFrame`: Performance metrics for each time step.
+            - :class:`pandas.DataFrame`: Performance metrics for each cell type transition and each time step.
     """
     # sanity check
     if not _sanity_check(adata, spatial_graph_key, spatial_key, cluster_key, embed):
         return None, None, None, None
     # Specify plotting basis
     sp_basis = spatial_key[2:]
-    plot_basis = sp_basis if plot_spatial else embed
     
     # set the random seed
     random_state = 42 if 'random_state' not in kwargs else kwargs['random_state']
@@ -786,7 +789,7 @@ def post_analysis(adata,
         plot_config = PlotConfig('cluster')
         plot_config.set_multiple(cluster_plot_config)
         if figure_path is not None:
-            plot_config.set('save', f"{figure_path}/{test_id}-{embed}.png")
+            plot_config.set('save', f"{figure_path}/{test_id}-{plot_basis}.png")
         else:
             plot_config.set('save', None)
         plot_cluster(
@@ -909,12 +912,12 @@ def post_analysis(adata,
                 key,
                 vkey,
                 cell_types_raw,
-                embed,
+                plot_basis,
                 cluster_key,
                 n_spatial_neighbors,
                 dpi,
                 save=(None if figure_path is None else
-                        f'{figure_path}/vel-{embed}-{test_id}-{keys[i]}.png'),
+                        f'{figure_path}/vel-{plot_basis}-{test_id}-{keys[i]}.png'),
                 stream_plot_config=stream_plot_config
             )
 
