@@ -68,7 +68,15 @@ class PerfLogger:
         col_mindex_3 = pd.MultiIndex.from_arrays([[], [], []], names=["Dataset", "Transition", "Step"])
         self.df_multi_type = pd.DataFrame(index=row_mindex, columns=col_mindex_3)
 
-    def insert(self, data_name, res, res_type, multi_res, multi_res_type):
+    def insert(
+        self,
+        data_name,
+        res,
+        res_type,
+        multi_res,
+        multi_res_type,
+        display=False
+    ):
         """Insert the performance evaluation results from topovelo.post_analysis
 
         Args:
@@ -88,6 +96,8 @@ class PerfLogger:
             multi_res_type (:class:`pandas.DataFrame`):
                 Similar to "res_type" except that the performance metrics are multi-dimensional.
                 Column index has 3 levels (method, transition pair and number of steps)
+            display (bool, optional):
+                Whether to display the inserted data. Defaults to False.
         """
         self.n_dataset += 1
         methods = res.columns.unique(0)
@@ -99,33 +109,66 @@ class PerfLogger:
 
         # Reshape the data in res_type to match the multi-row-index in self.df_type
         if res_type.shape[1] > 0:
-            res_reshape = pd.DataFrame(res_type.values.reshape(res_type.shape[0] * len(methods), -1),
-                                    index=pd.MultiIndex.from_product([res_type.index, methods]),
-                                    columns=pd.MultiIndex.from_product([[data_name], res_type.columns.unique(1)]))
-            self.df_type = pd.concat([self.df_type, res_reshape], axis=1)
+            res_reshape = pd.DataFrame(
+                res_type.values.reshape(res_type.shape[0] * len(methods), -1),
+                index=pd.MultiIndex.from_product([res_type.index, methods]),
+                columns=pd.MultiIndex.from_product([[data_name], res_type.columns.unique(1)])
+            )
+            for metric in res_type.index:
+                for method in methods:
+                    for transition in res_type.columns.unique(1):
+                        self.df_type.loc[(metric, method), (data_name, transition)] = res_reshape.loc[(metric, method), (data_name, transition)]
+            self.df_type.sort_index(level=0, inplace=True)
         else:
             print('Warning: no cell type transition pair found. Skipped insertion to df_type.')
 
         # Multi-dimensional metrics
-        res_reshape = pd.DataFrame(multi_res.values.reshape(multi_res.shape[0] * len(methods), -1),
-                                   index=pd.MultiIndex.from_product([multi_res.index, methods]),
-                                   columns=pd.MultiIndex.from_product([[data_name],
-                                                                       multi_res.columns.unique(1)]))
-        self.df_multi = pd.concat([self.df_multi, res_reshape], axis=1)
+        res_reshape = pd.DataFrame(
+            multi_res.values.reshape(multi_res.shape[0] * len(methods), -1),
+            index=pd.MultiIndex.from_product([multi_res.index, methods]),
+            columns=pd.MultiIndex.from_product(
+                [[data_name],
+                 multi_res.columns.unique(1)]
+            )
+        )
+        for metric in multi_res.index:
+            for method in methods:
+                for step in multi_res.columns.unique(1):
+                    self.df_multi.loc[(metric, method), (data_name, step)] = res_reshape.loc[(metric, method), (data_name, step)]
+        self.df_multi.sort_index(level=0, inplace=True)
 
         # Multi-dimensional metrics for each transition pair
         if multi_res_type.shape[1] > 0:
-            res_reshape = pd.DataFrame(multi_res_type.values.reshape(multi_res_type.shape[0] * len(methods), -1),
-                                       index=pd.MultiIndex.from_product([multi_res_type.index, methods]),
-                                       columns=pd.MultiIndex.from_product([[data_name],
-                                                                          multi_res_type.columns.unique(1),
-                                                                          multi_res_type.columns.unique(2)]))
-            self.df_multi_type = pd.concat([self.df_multi_type, res_reshape], axis=1)
+            res_reshape = pd.DataFrame(
+                multi_res_type.values.reshape(multi_res_type.shape[0] * len(methods), -1),
+                index=pd.MultiIndex.from_product([multi_res_type.index, methods]),
+                columns=pd.MultiIndex.from_product(
+                    [[data_name],
+                     multi_res_type.columns.unique(1),
+                     multi_res_type.columns.unique(2)]
+                )
+            )
+            for metric in multi_res_type.index:
+                for method in methods:
+                    for transition in multi_res_type.columns.unique(1):
+                        for step in multi_res_type.columns.unique(2):
+                            self.df_multi_type.loc[(metric, method), (data_name, transition, step)] = res_reshape.loc[(metric, method), (data_name, transition, step)]
+            self.df_multi_type.sort_index(level=0, inplace=True)
         else:
             print('Warning: no cell type transition pair found. Skipped insertion to df_multi_type.')
 
         # update number of models
         self.n_model = len(self.df.index.unique(1))
+        if display:
+            print(f"Inserted data for {data_name}")
+            print('---------------------- Scalar Metrics ----------------------')
+            print(self.df[data_name].to_string())
+            print('---------------------- Cell Type Transition Metrics ----------------------')
+            print(self.df_type[data_name].to_string())
+            print('---------------------- Multi-Dimensional Metrics ----------------------')
+            print(self.df_multi[data_name].to_string())
+            print('---------------------- Multi-Dimensional Metrics (Cell Type Transition) ----------------------')
+            print(self.df_multi_type[data_name].to_string())
 
         return
 
