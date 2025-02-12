@@ -71,7 +71,7 @@ def draw_poisson_event(n: int, lamb: float, t_max: float, geom_param: float = 0.
         n_par = n_par_next
     t = np.array(t)
     t = t / t.max() * t_max
-    assert len(t) == n
+    assert len(t) == n, f"Number of cells {len(t)} is not equal to {n}"
     return t
 
 

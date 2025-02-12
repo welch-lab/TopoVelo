@@ -111,6 +111,9 @@ def simulate_rna(t: np.ndarray,
         Tuple: simulation results
     """
     np.random.seed(seed)
+    # sanity check
+    if coords[:, 0].min() == coords[:, 0].max() or coords[:, 1].min() == coords[:, 1].max():
+        raise ValueError("The spatial coordinates are not valid.")
 
     rates = sample_rates(mu_param, cov_param, n_gene, seed)
     # Sample switch-on and switch-off time
