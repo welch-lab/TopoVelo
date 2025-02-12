@@ -2,7 +2,7 @@ import inspect
 import numpy as np
 import cProfile
 import pstats
-import memory_profiler
+from memory_profiler import memory_usage
 
 
 def get_arguments(func):
@@ -54,14 +54,19 @@ class ModelProfiler():
         self.prof_infer = None
         self.infer_stats = {}
         self.is_cuda = False
+        
+        self.elapsed_time_stats = None
+        self.max_memory = None
 
-    @memory_profiler.profile
     def profile_cpu_memory(self, *args, **kwargs):
         """Profile the CPU memory of the model
         """
         self.model = self.model_class(*self.args, **self.kwargs)
-        self.model.train(*args, **kwargs)
-        out, elbo = self.model.pred_all(self.model.cell_labels, "both")
+        mem = memory_usage(
+            (self.model.train, args, kwargs),
+            max_usage=True
+        )
+        self.max_memory = max(mem) / 1024 / 1024 # in MB
     
     def profile_elapsed_time(self, *args, **kwargs):
         """Get the elapsed time of the entire pipeline from model creation to training
