@@ -2,6 +2,7 @@ import scanpy
 import numpy as np
 from tqdm import tqdm
 from sklearn.neighbors import NearestNeighbors, BallTree
+from scanpy.pp import pca
 from scipy.spatial import Delaunay
 from scipy.sparse import csr_matrix, eye
 import pandas as pd
@@ -282,6 +283,9 @@ def preprocess(adata,
 
     # 2. KNN Averaging
     # remove_duplicate_cells(adata)
+    if 'X_pca' not in adata.obsm:
+        print("Run PCA.")
+        pca(adata, n_comps=npc)
     if spatial_smoothing:
         print('Spatial KNN smoothing.')
         moments(adata,
