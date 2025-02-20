@@ -66,7 +66,7 @@ class ModelProfiler():
             (self.model.train, args, kwargs),
             max_usage=True
         )
-        self.max_memory = max(mem) / 1024 / 1024 # in MB
+        self.max_memory = mem / 1024 / 1024 # in MB
     
     def profile_elapsed_time(self, *args, **kwargs):
         """Get the elapsed time of the entire pipeline from model creation to training
