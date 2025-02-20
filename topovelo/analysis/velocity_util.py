@@ -145,16 +145,6 @@ def velocity_stream(
                 nbs_info = adata.uns['neighbors']
                 del adata.uns['neighbors']
         neighbors(adata, n_neighbors=n_spatial_neighbors, use_rep=f'X_{basis}')
-    
-    # Use radius for spatial graph
-    if 'spatial_graph_params' in adata.uns and spatial_velocity_graph:
-        if 'radius' in adata.uns['spatial_graph_params']:
-            radius = adata.uns['spatial_graph_params']['radius']
-            if radius is not None:
-                adata.uns[f'{vkey}_graph'] = adata.uns[f'{vkey}_graph']\
-                    .multiply(adata.obsp['distances'] < radius)
-                adata.uns[f'{vkey}_graph_neg'] = adata.uns[f'{vkey}_graph_neg']\
-                    .multiply(adata.obsp['distances'] < radius)
 
     # Velocity graph
     xkey = 'Ms' if 'xkey' not in kwargs else kwargs['xkey']
@@ -167,6 +157,16 @@ def velocity_stream(
                 if 'n_jobs' in kwargs
                 else get_n_cpu(adata.n_obs))
     )
+    
+    # Use radius for spatial graph
+    if 'spatial_graph_params' in adata.uns and spatial_velocity_graph:
+        if 'radius' in adata.uns['spatial_graph_params']:
+            radius = adata.uns['spatial_graph_params']['radius']
+            if radius is not None:
+                adata.uns[f'{vkey}_graph'] = adata.uns[f'{vkey}_graph']\
+                    .multiply(adata.obsp['distances'] < radius)
+                adata.uns[f'{vkey}_graph_neg'] = adata.uns[f'{vkey}_graph_neg']\
+                    .multiply(adata.obsp['distances'] < radius)
     
     # Velocity embedding
     velocity_embedding(

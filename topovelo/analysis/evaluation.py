@@ -7,6 +7,7 @@ import pandas as pd
 from os import makedirs
 from scipy.stats import spearmanr
 from multiprocessing import cpu_count
+from scvelo.tl import velocity_graph, velocity_pseudotime
 from .evaluation_util import *
 from .velocity_util import *
 from .plot_config import PlotConfig
@@ -18,6 +19,10 @@ logger = logging.getLogger(__name__)
 def get_n_cpu(n_cell):
     # used for scVelo parallel jobs
     return int(min(cpu_count(), max(1, n_cell/2000)))
+
+
+def infers_time(method, adata, tkey):
+    return method not in ['STT'] and tkey in adata.obs
 
 
 def get_velocity_metric_placeholder(cluster_edges):
@@ -132,14 +137,14 @@ def get_velocity_metric(adata,
                                                                    cluster_key,
                                                                    vkey,
                                                                    cluster_edges,
-                                                                   spatial_graph_key,
+                                                                   None,
                                                                    x_emb=f"X_{embed}")
 
         cbdir, mean_cbdir = cross_boundary_correctness(adata,
                                                        cluster_key,
                                                        vkey,
                                                        cluster_edges,
-                                                       spatial_graph_key,
+                                                       None,
                                                        x_emb="Ms",
                                                        gene_mask=gene_mask)
 
@@ -148,7 +153,7 @@ def get_velocity_metric(adata,
                                                                            vkey,
                                                                            cluster_edges,
                                                                            tkey,
-                                                                           spatial_graph_key,
+                                                                           None,
                                                                            dir_test=False,
                                                                            x_emb=f"X_{embed}",
                                                                            gene_mask=gene_mask)
@@ -158,7 +163,7 @@ def get_velocity_metric(adata,
                                                                vkey,
                                                                cluster_edges,
                                                                tkey,
-                                                               spatial_graph_key,
+                                                               None,
                                                                dir_test=False,
                                                                x_emb="Ms",
                                                                gene_mask=gene_mask)
@@ -169,7 +174,7 @@ def get_velocity_metric(adata,
                                                                                 vkey,
                                                                                 cluster_edges,
                                                                                 tkey,
-                                                                                spatial_graph_key,
+                                                                                None,
                                                                                 x_emb=f"X_{embed}",
                                                                                 gene_mask=gene_mask)
 
@@ -179,7 +184,7 @@ def get_velocity_metric(adata,
                                                                     vkey,
                                                                     cluster_edges,
                                                                     tkey,
-                                                                    spatial_graph_key,
+                                                                    None,
                                                                     x_emb="Ms",
                                                                     gene_mask=gene_mask)
 
@@ -383,6 +388,21 @@ def get_metric(adata,
         gene_mask = adata.var[gene_key].to_numpy()
     else:
         gene_mask = None
+    
+    # Calculate velocity pseudotime if the method does not infer latent cell time
+    if tkey not in adata.obs:
+        velocity_graph(
+            adata,
+            vkey=vkey,
+            xkey='Ms',
+            gene_subset=None if gene_mask is None else adata.var_names[gene_mask],
+            n_jobs=n_jobs
+        )
+        velocity_pseudotime(
+            adata,
+            vkey=vkey
+        )
+        adata.obs[tkey] = adata.obs['velocity_pseudotime'].to_numpy()
 
     if method == 'scVelo':
         (mse_train, mse_test,
@@ -495,6 +515,7 @@ def get_metric(adata,
         mwtest=mwtest,
         mwtest_embed=mwtest_embed
     )
+
     return stats, stats_type, multi_stats, multi_stats_type
 
 
