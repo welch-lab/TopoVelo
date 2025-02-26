@@ -484,6 +484,7 @@ def build_spatial_graph(adata,
     elif method == 'BallTree':
         x_pos = adata.obsm[spatial_key]
         tree = BallTree(x_pos)
+        assert radius is not None, "Please provide a radius for BallTree."
         nbs = tree.query_radius(x_pos, r=radius)
         row_idx = np.concatenate([np.repeat(i, len(x)) for i, x in enumerate(nbs)])
         col_idx = np.concatenate(nbs)
