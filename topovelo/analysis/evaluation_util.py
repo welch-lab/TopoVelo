@@ -1165,11 +1165,11 @@ def remove_type(adata, nodes, target, k_cluster):
 
 
 def _knn_ind(adata):
-    k = adata.uns['neighbors']['params']['n_neighbors'] if 'params' in adata.uns['neighbors'] else 30
-    if 'indices' not in adata.uns['neighbors']:
-        print('Calculating KNN index for evaluation.')
-        knn = NearestNeighbors(n_neighbors=k, n_jobs=-1).fit(adata.obsm['X_pca'])
-        adata.uns['neighbors']['indices'] = knn.kneighbors(adata.obsm['X_pca'], return_distance=False)
+    if 'neighbors' not in adata.uns:
+        raise ValueError('Please run neighbors calculation first.')
+    elif 'indices' not in adata.uns['neighbors']:
+        raise ValueError('Please run neighbors calculation first.')
+    
     return adata.uns['neighbors']['indices']
 
 
@@ -1240,7 +1240,7 @@ def cross_boundary_correctness(
     if spatial_graph_key is None:
         knn_ind = _knn_ind(adata)
     np.random.seed(random_state)
-    n_fail = 0
+    count = 0
     for u, v in cluster_edges:
         sel = cell_labels == u
         if spatial_graph_key is None:
@@ -1260,6 +1260,7 @@ def cross_boundary_correctness(
             try:
                 dir_scores = cosine_similarity(position_dif, x_vel.reshape(1, -1)).flatten()
                 type_score.append(np.nanmean(dir_scores))
+                count += np.sum(~np.isnan(dir_scores))
             except ValueError:
                 pass
         if len(type_score) == 0:
@@ -1268,11 +1269,10 @@ def cross_boundary_correctness(
             scores[f'{u} -> {v}'] = np.nanmean(type_score)
             all_scores[f'{u} -> {v}'] = type_score
 
+    logger.info(f"Calculated {count} cell pairs.")
+
     if return_raw:
         return all_scores
-
-    if n_fail > 0:
-        logger.warning(f"Failed to compute CBDir for {n_fail} pairs of clusters.")
 
     return scores, np.mean([sc for sc in scores.values()])
 
@@ -1368,7 +1368,7 @@ def gen_cross_boundary_correctness(
     if spatial_graph_key is None:
         knn_ind = _knn_ind(adata)
     np.random.seed(random_state)
-    n_fail = 0
+    count = [0] * k_hop
     for u, v in cluster_edges:
         sel = cell_labels == u
         if spatial_graph_key is None:
@@ -1389,14 +1389,13 @@ def gen_cross_boundary_correctness(
         type_score_null = [[] for i in range(k_hop)]
         for x_pos, x_vel, nodes, t_i, all_nodes in zip(x_points, x_velocities, boundary_nodes, t_points, nbs):
             if len(nodes) == 0:
-                n_fail += 1
                 continue
             position_dif = x_emb[nodes] - x_pos
             dt = t[nodes] - t_i
             try:
                 dir_scores = _cos_sim_sample(x_vel, position_dif, dt)
             except ValueError:
-                dir_scores = [0]
+                dir_scores = []
 
             nodes_null = all_nodes if len(all_nodes) < n_prune else np.random.choice(all_nodes, n_prune)
             position_dif_null = x_emb[nodes_null] - x_pos
@@ -1404,11 +1403,12 @@ def gen_cross_boundary_correctness(
             try:
                 dir_scores_null = _cos_sim_sample(x_vel, position_dif_null, dt_null)
             except ValueError:
-                dir_scores_null = [0]
+                dir_scores_null = []
 
             # save 1-hop results
             type_score[0].append(np.nanmean(dir_scores))
             type_score_null[0].append(np.nanmean(dir_scores_null))
+            count[0] = np.sum(~np.isnan(dir_scores))
             # deal with k-hop neighbors when k > 1
             for k in range(k_hop-1):
                 if spatial_graph_key is None:
@@ -1432,10 +1432,9 @@ def gen_cross_boundary_correctness(
                         nodes = nodes[idx_sort[-n_prune:]]
                         dir_scores = dir_scores[idx_sort[-n_prune:]]
                     type_score[k+1].append(np.nanmean(dir_scores))
+                    count[k+1] = np.sum(~np.isnan(dir_scores))
                 except (TypeError, ValueError) as e:
-                    n_fail += 1
-                    type_score[k+1].append(0)
-                    break
+                    continue
 
             # Compute the same k-hop metric for neigbhors not in the descent v
             if dir_test and len(nodes_null) > 0:
@@ -1463,16 +1462,14 @@ def gen_cross_boundary_correctness(
                             dir_scores_null = dir_scores_null[idx_sort[-n_prune:]]
                         type_score_null[k+1].append(np.nanmean(dir_scores_null))
                     except (TypeError, ValueError) as e:
-                        type_score_null[k+1].append(0)
-                        break
+                        continue
 
         mean_type_score = np.array([np.nanmean(type_score[i]) for i in range(k_hop)])
         mean_type_score_null = np.array([np.nanmean(type_score_null[i]) for i in range(k_hop)])
         mean_type_score_null[np.isnan(mean_type_score_null)] = 0.0
         scores[f'{u} -> {v}'] = (mean_type_score - mean_type_score_null if dir_test else mean_type_score)
 
-    if n_fail > 0:
-        logger.warning(f'{n_fail} cells have no {k_hop}-step neighbors. Ignored.')
+    logger.info(f'Calculated K-CBDir over {count} cell pairs.')
 
     return scores, np.mean(np.stack([sc for sc in scores.values()]), 0)
 
@@ -1490,30 +1487,33 @@ def gen_cross_boundary_correctness_test(
     n_prune=30,
     random_state=2022
 ):
-    """Performs a Mann-Whitney U Test for RNA velocity across cluster boundaries.
+    """Perform a Mann-Whitney U Test for RNA velocity across cluster boundaries.
 
-    This function evaluates whether RNA velocity directions are consistent with expected transitions between 
-    specified clusters, using neighborhood-based approaches and statistical testing.
+    This function evaluates the alignment of RNA velocity directions with expected transitions between 
+    specified clusters using neighborhood-based methods and statistical testing.
 
     Args:
-        adata (anndata.AnnData): The annotated data matrix with observations/cells on rows.
-        k_cluster (str): The key to the cluster column in `adata.obs` indicating cell clusters.
+        adata (anndata.AnnData): The annotated data matrix with observations (cells) as rows.
+        k_cluster (str): The key in `adata.obs` that indicates cell clusters.
         k_velocity (str): The key to the RNA velocity matrix in `adata.obsm`.
-        cluster_edges (list[tuple[str]]): Pairs of clusters defining expected transition directions (e.g., A -> B).
+        cluster_edges (list[tuple[str]]): Pairs of clusters indicating expected transition directions (e.g., ('A', 'B')).
         tkey (str): The key for cell time information in `adata.obs`.
-        spatial_graph_key (str, optional): The key for the spatial graph data in `adata.obsm`, used to determine neighbors. Defaults to None.
+        spatial_graph_key (str, optional): The key for spatial graph data in `adata.obsp`, used to determine neighbors.
+            Defaults to None.
         k_hop (int, optional): The number of hop steps for neighborhood expansion. Defaults to 5.
-        x_emb (str, optional): The key for low-dimensional embeddings in `adata.obsm` or a layer for the original count matrix. Defaults to "X_umap".
-        gene_mask (numpy.ndarray, optional): A boolean array to filter out non-velocity genes. Defaults to None.
-        n_prune (int, optional): The maximum number of neighbors retained to prevent exponential growth. Defaults to 30.
-        random_state (int, optional): Seed for random sampling, ensuring reproducibility. Defaults to 2022.
+        x_emb (str, optional): The key for low-dimensional embeddings in `adata.obsm`,
+            or a layer for the original count matrix. Defaults to "X_umap".
+        gene_mask (numpy.ndarray, optional): A boolean array to filter non-velocity genes. Defaults to None.
+        n_prune (int, optional): The maximum number of neighbors retained to prevent exponential growth.
+            Defaults to 30.
+        random_state (int, optional): Seed for random sampling to ensure reproducibility. Defaults to 2022.
 
     Returns:
-        tuple: A tuple containing the following elements:
-            - dict: Proportion of cells with correct velocity flow (velocity accuracy), keyed by `cluster_edges`.
-            - numpy.ndarray: Average velocity accuracy over all cells for each step number.
-            - dict: Mann-Whitney U test statistics, keyed by `cluster_edges`.
-            - numpy.ndarray: Average Mann-Whitney U test statistics over all cells for each step number.
+        tuple: A tuple containing:
+            - dict: Proportion of cells with correct velocity flow (velocity accuracy) for each `cluster_edge`.
+            - numpy.ndarray: Average velocity accuracy over all cells at each step.
+            - dict: Mann-Whitney U test statistics for each `cluster_edge`.
+            - numpy.ndarray: Average Mann-Whitney U test statistics over all cells at each step.
     """
     logger = logging.getLogger(__name__)
     # Use k-hop neighbors
@@ -1540,7 +1540,7 @@ def gen_cross_boundary_correctness_test(
         knn_ind = _knn_ind(adata)
 
     np.random.seed(random_state)
-    n_fail = 0
+    count = [0] * k_hop
     for u, v in cluster_edges:
         sel = cell_labels == u
         if spatial_graph_key is None:
@@ -1561,14 +1561,13 @@ def gen_cross_boundary_correctness_test(
         type_pval = [[] for i in range(k_hop)]
         for x_pos, x_vel, nodes, t_i, all_nodes in zip(x_points, x_velocities, boundary_nodes, t_points, nbs):
             if len(nodes) < 2:
-                n_fail += 1
                 continue
             position_dif = x_emb[nodes] - x_pos
             dt = t[nodes] - t_i
             try:
                 dir_scores = _cos_sim_sample(x_vel, position_dif, dt)
             except ValueError:
-                dir_scores = [0]
+                dir_scores = []
 
             nodes_null = all_nodes if len(all_nodes) < n_prune else np.random.choice(all_nodes, n_prune)
             position_dif_null = x_emb[nodes_null] - x_pos
@@ -1576,12 +1575,13 @@ def gen_cross_boundary_correctness_test(
             try:
                 dir_scores_null = _cos_sim_sample(x_vel, position_dif_null, dt_null)
             except ValueError:
-                dir_scores_null = [0]
+                dir_scores_null = []
 
             # Perform Mann-Whitney U test
             res = mannwhitneyu(dir_scores, dir_scores_null, alternative='greater')
             type_stats[0].append(res[0])
             type_pval[0].append(res[1])
+            count[0] += len(dir_scores)
             # deal with k-hop neighbors when k > 1
             for k in range(k_hop-1):
                 if spatial_graph_key is None:
@@ -1595,15 +1595,13 @@ def gen_cross_boundary_correctness_test(
                     nodes = keep_type(adata, nodes, v, k_cluster)
                     nodes = np.unique(nodes)
                     if len(nodes) < 2:
-                        n_fail += 1
                         continue
                     
                     position_dif = x_emb[nodes] - x_pos
                     dt = t[nodes] - t_i
                     dir_scores = _cos_sim_sample(x_vel, position_dif, dt)
                 except (TypeError, ValueError) as e:
-                    n_fail += 1
-                    break
+                    continue
 
                 # Compute the same k-hop metric for neigbhors not in the descent v
                 # nodes_null = np.random.choice(random_pool, min(len(random_pool), n_prune), replace=False)
@@ -1623,7 +1621,7 @@ def gen_cross_boundary_correctness_test(
                     dt_null = t[nodes_null] - t_i
                     dir_scores_null = _cos_sim_sample(x_vel, position_dif_null, dt_null)
                 except (TypeError, ValueError) as e:
-                    break
+                    continue
 
                 if len(nodes) > n_prune:
                     idx_sort = np.argsort(dir_scores)
@@ -1639,12 +1637,13 @@ def gen_cross_boundary_correctness_test(
                 res = mannwhitneyu(dir_scores, dir_scores_null, alternative='greater')
                 type_stats[k+1].append(res[0])
                 type_pval[k+1].append(res[1])
+                count[k+1] += len(dir_scores)
 
         test_stats[f'{u} -> {v}'] = [np.nanmean(type_stats[k]) for k in range(k_hop)]
         # check whether p values are less than 0.05
         accuracy[f'{u} -> {v}'] = [np.nanmean(np.array(type_pval[k]) < 0.05) for k in range(k_hop)]
-    if n_fail > 0:
-        logger.warning(f'{n_fail} cells have no {k_hop}-step neighbors. Ignored.')
+    
+    logger.info(f'Tested over {count} cell pairs.')
     return (accuracy, np.nanmean(np.stack([p for p in accuracy.values()]), 0),
             test_stats, np.nanmean(np.stack([sc for sc in test_stats.values()]), 0))
 

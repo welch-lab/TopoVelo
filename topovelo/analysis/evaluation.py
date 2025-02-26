@@ -8,6 +8,7 @@ from os import makedirs
 from scipy.stats import spearmanr
 from multiprocessing import cpu_count
 from scvelo.tl import velocity_graph, velocity_pseudotime
+from sklearn.neighbors import NearestNeighbors
 from .evaluation_util import *
 from .velocity_util import *
 from .plot_config import PlotConfig
@@ -55,96 +56,154 @@ def get_velocity_metric_placeholder(cluster_edges):
             np.nan)
 
 
+def _spatial_velocity_graph(
+    adata,
+    spatial_key,
+    vkey,
+    embed,
+    gene_mask,
+    n_velocity_neighbors,
+    n_jobs
+):
+    try:
+        from scvelo.tl import velocity_graph, velocity_embedding
+        n_jobs = get_n_cpu(adata.n_obs) if n_jobs is None else n_jobs
+        gene_subset = adata.var_names if gene_mask is None else adata.var_names[gene_mask]
+
+        print('Recalculate velocity graph for evaluating (K)CBDir...')
+        neighbors(adata, n_neighbors=n_velocity_neighbors, use_rep=spatial_key)
+        velocity_graph(adata, vkey=vkey, gene_subset=gene_subset, n_jobs=n_jobs)
+        velocity_embedding(adata, vkey=vkey, basis=embed)
+
+        # Build a spatial graph to evaluate CBDir
+        connectivities, distances = None, None
+        nbs_info = None
+        if 'connectivities' in adata.obsp or 'neighbors' in adata.uns:
+            connectivities = adata.obsp['connectivities']
+            distances = adata.obsp['distances']
+            del adata.obsp['connectivities'], adata.obsp['distances']
+            if neighbors in adata.uns:
+                nbs_info = adata.uns['neighbors']
+                del adata.uns['neighbors']
+        adata.uns['neighbors'] = {
+            'connectivities_key': 'connectivities',
+            'distances_key': 'distances',
+            'params': {
+                'method': 'spatial',
+                'metric': 'euclidean',
+                'n_neighbors': n_velocity_neighbors,
+            }
+        }
+        print(f'Build a spatial KNN graph with k={n_velocity_neighbors} for evaluating (K)CBDir...')
+        knn = NearestNeighbors(n_neighbors=n_velocity_neighbors, n_jobs=n_jobs).fit(adata.obsm[spatial_key])
+        adata.uns['neighbors']['indices'] = knn.kneighbors(adata.obsm[spatial_key], return_distance=False)
+        
+
+        
+    except ImportError:
+        logger.warning("Please install scVelo to compute velocity embedding.\n"
+                        "Skipping metrics 'Cross-Boundary Direction Correctness'.")
+    assert 'indices' in adata.uns['neighbors']
+    return connectivities, distances, nbs_info
+
+
 def get_velocity_metric(adata,
                         key,
                         vkey,
                         tkey,
                         cluster_key,
                         cluster_edges,
+                        spatial_key='X_spatial',
+                        n_velocity_neighbors=50,
                         spatial_graph_key=None,
                         gene_mask=None,
-                        embed='umap',
+                        embed='spatial',
                         n_jobs=None):
     """
-    Computes Cross-Boundary Direction Correctness and other performance metrics for RNA or cell velocity.
-    The function calls scvelo.tl.velocity_graph.
+    Computes Cross-Boundary Direction Correctness (CBDC) and other performance metrics for RNA or cell velocity analysis.
+    This function internally calls `scvelo.tl.velocity_graph`.
 
     Args:
-        adata (:class:`anndata.AnnData`):
-            AnnData object.
+        adata (anndata.AnnData):
+            The AnnData object containing the single-cell data.
         key (str):
-            Key for cell time in the form of f'{key}_time'.
+            Identifier for cell time, formatted as `{key}_time`.
         vkey (str):
-            Key for velocity in adata.obsm.
+            Key for accessing velocity data in `adata.obsm`.
         tkey (str):
-            Key for latent time in adata.obs.
+            Key for accessing latent time information in `adata.obs`.
         cluster_key (str):
-            Key for cell type annotations.
+            Key for cell type annotations within the data.
         cluster_edges (list[tuple[str]]):
-            List of ground truth cell type transitions.
-            Each transition is of the form (A, B) where A is a progenitor
-            cell type and B is a descendant type.
+            List specifying the ground truth cell type transitions.
+            Each transition is a tuple (A, B), where A is a progenitor cell type and B is a descendant type.
+        spatial_key (str, optional):
+            Key for spatial coordinates. Defaults to 'X_spatial'.
+        n_velocity_neighbors (int, optional):
+            Number of neighbors used for computing velocity graph and evaluate velocity metrics. 
+            Defaults to 50.
         spatial_graph_key (str, optional):
-            Key for spatial graph.
-        gene_mask (:class:`np.ndarray`, optional):
-            Boolean array to filter out velocity genes. Defaults to None.
+            Key for the spatial graph, if applicable. Defaults to None.
+        gene_mask (np.ndarray, optional):
+            Boolean array used to filter velocity genes. Defaults to None.
         embed (str, optional):
-            Low-dimensional embedding. Defaults to 'umap'.
-        n_jobs (_type_, optional):
-            Number of parallel jobs. Defaults to None.
+            Specifies the low-dimensional embedding method. Defaults to 'umap'.
+        n_jobs (int, optional):
+            Number of parallel jobs to run. Defaults to None (uses single thread).
 
     Returns:
-        tuple
+        tuple: A tuple containing several performance metrics:
 
-            - **cbdir_embed** (:class:`dict`): Cross-Boundary Direction Correctness in embedding space.
-            - **mean_cbdir_embed** (_type_): Mean Cross-Boundary Direction Correctness in embedding space.
-            - **cbdir** (:class:`dict`): Cross-Boundary Direction Correctness in gene space.
-            - **mean_cbdir** (_type_): Mean Cross-Boundary Direction Correctness in gene space.
-            - **k_cbdir_embed** (:class:`dict`): K-step Cross-Boundary Direction Correctness in embedding space.
-            - **mean_k_cbdir_embed** (_type_): Mean K-step Cross-Boundary Direction Correctness in embedding space.
-            - **k_cbdir** (:class:`dict`): K-step Cross-Boundary Direction Correctness in gene space.
-            - **mean_k_cbdir** (_type_): Mean K-step Cross-Boundary Direction Correctness in gene space.
-            - **acc_embed** (:class:`dict`): Mann-Whitney U test in embedding space.
-            - **mean_acc_embed** (_type_): Mean Mann-Whitney U test in embedding space.
-            - **acc** (:class:`dict`): Mann-Whitney U test in gene space.
-            - **mean_acc** (_type_): Mean Mann-Whitney U test in gene space.
-            - **umtest_embed** (:class:`dict`): Mann-Whitney U test statistics in embedding space.
-            - **mean_umtest_embed** (_type_): Mean Mann-Whitney U test statistics in embedding space.
-            - **umtest** (:class:`dict`): Mann-Whitney U test statistics in gene space.
-            - **mean_umtest** (_type_): Mean Mann-Whitney U test statistics in gene space.
-            - **tscore** (:class:`dict`): Time score.
-            - **mean_tscore** (_type_): Mean time score.
-            - **mean_consistency_score** (_type_): Mean velocity consistency score.
-            - **mean_sp_vel_consistency** (_type_): Mean spatial velocity consistency score.
+            - cbdir_embed (dict): CBDC in embedding space.
+            - mean_cbdir_embed (float): Mean CBDC in embedding space.
+            - cbdir (dict): CBDC in gene space.
+            - mean_cbdir (float): Mean CBDC in gene space.
+            - k_cbdir_embed (dict): K-step CBDC in embedding space.
+            - mean_k_cbdir_embed (float): Mean K-step CBDC in embedding space.
+            - k_cbdir (dict): K-step CBDC in gene space.
+            - mean_k_cbdir (float): Mean K-step CBDC in gene space.
+            - acc_embed (dict): Accuracy derived from the Mann-Whitney U test in embedding space.
+            - mean_acc_embed (float): Mean accuracy from the Mann-Whitney U test in embedding space.
+            - acc (dict): Accuracy derived from the Mann-Whitney U test in gene space.
+            - mean_acc (float): Mean accuracy from the Mann-Whitney U test in gene space.
+            - umtest_embed (dict): Mann-Whitney U test statistics in embedding space.
+            - mean_umtest_embed (float): Mean U test statistics in embedding space.
+            - umtest (dict): Mann-Whitney U test statistics in gene space.
+            - mean_umtest (float): Mean U test statistics in gene space.
+            - tscore (dict): Time score assessing temporal ordering.
+            - mean_tscore (float): Mean time score.
+            - mean_consistency_score (float): Mean score for velocity consistency.
+            - mean_sp_vel_consistency (float): Mean score for spatial velocity consistency.
     """
+    connectivities, distances, nbs_info = _spatial_velocity_graph(
+        adata,
+        spatial_key,
+        vkey,
+        embed,
+        gene_mask,
+        n_velocity_neighbors,
+        n_jobs
+    )
+
     mean_consistency_score = velocity_consistency(adata, vkey, gene_mask)
     mean_sp_vel_consistency = np.nan
     if spatial_graph_key is not None:
         mean_sp_vel_consistency = spatial_velocity_consistency(adata, vkey, spatial_graph_key, gene_mask)
 
     if len(cluster_edges) > 0:
-        try:
-            from scvelo.tl import velocity_graph, velocity_embedding
-            n_jobs = get_n_cpu(adata.n_obs) if n_jobs is None else n_jobs
-            gene_subset = adata.var_names if gene_mask is None else adata.var_names[gene_mask]
-            velocity_graph(adata, vkey=vkey, gene_subset=gene_subset, n_jobs=n_jobs)
-            velocity_embedding(adata, vkey=vkey, basis=embed)
-        except ImportError:
-            logger.warning("Please install scVelo to compute velocity embedding.\n"
-                           "Skipping metrics 'Cross-Boundary Direction Correctness'.")
-
         cbdir_embed, mean_cbdir_embed = cross_boundary_correctness(adata,
                                                                    cluster_key,
                                                                    vkey,
                                                                    cluster_edges,
-                                                                   None,
-                                                                   x_emb=f"X_{embed}")
+                                                                   spatial_graph_key=None,
+                                                                   x_emb=f"X_{embed}",
+                                                                   gene_mask=gene_mask)
 
         cbdir, mean_cbdir = cross_boundary_correctness(adata,
                                                        cluster_key,
                                                        vkey,
                                                        cluster_edges,
-                                                       None,
+                                                       spatial_graph_key=None,
                                                        x_emb="Ms",
                                                        gene_mask=gene_mask)
 
@@ -153,7 +212,7 @@ def get_velocity_metric(adata,
                                                                            vkey,
                                                                            cluster_edges,
                                                                            tkey,
-                                                                           None,
+                                                                           spatial_graph_key=None,
                                                                            dir_test=False,
                                                                            x_emb=f"X_{embed}",
                                                                            gene_mask=gene_mask)
@@ -163,7 +222,7 @@ def get_velocity_metric(adata,
                                                                vkey,
                                                                cluster_edges,
                                                                tkey,
-                                                               None,
+                                                               spatial_graph_key=None,
                                                                dir_test=False,
                                                                x_emb="Ms",
                                                                gene_mask=gene_mask)
@@ -174,7 +233,7 @@ def get_velocity_metric(adata,
                                                                                 vkey,
                                                                                 cluster_edges,
                                                                                 tkey,
-                                                                                None,
+                                                                                spatial_graph_key=None,
                                                                                 x_emb=f"X_{embed}",
                                                                                 gene_mask=gene_mask)
 
@@ -184,11 +243,11 @@ def get_velocity_metric(adata,
                                                                     vkey,
                                                                     cluster_edges,
                                                                     tkey,
-                                                                    None,
+                                                                    spatial_graph_key=None,
                                                                     x_emb="Ms",
                                                                     gene_mask=gene_mask)
 
-        if not f'{key}_time' in adata.obs:
+        if f'{key}_time' not in adata.obs:
             tscore, mean_tscore = time_score(adata, 'latent_time', cluster_key, cluster_edges)
         else:
             try:
@@ -216,6 +275,14 @@ def get_velocity_metric(adata,
         umtest_embed = dict.fromkeys([])
         umtest = dict.fromkeys([])
         tscore = dict.fromkeys([])
+    
+    # Recover the original KNN graph
+    if connectivities is not None:
+        adata.obsp['connectivities'] = connectivities
+    if distances is not None:
+        adata.obsp['distances'] = distances
+    if nbs_info is not None:
+        adata.uns['neighbors'] = nbs_info
 
     return (cbdir_embed, mean_cbdir_embed,
             cbdir, mean_cbdir,
@@ -343,46 +410,43 @@ def get_metric(adata,
                vkey,
                tkey,
                spatial_graph_key,
+               spatial_key,
+               n_velocity_neighbors=50,
                cluster_key="clusters",
                gene_key='velocity_genes',
                cluster_edges=None,
-               embed='umap',
+               embed='spatial',
                n_jobs=None):
     """
-    Get performance metrics given a method.
+    Compute performance metrics for a specified RNA velocity method.
 
     Args:
-        adata (:class:`anndata.AnnData`):
-            AnnData object.
+        adata (anndata.AnnData):
+            The AnnData object containing the single-cell data.
         method (str):
-            Model name. The velovae package also provides evaluation for other RNA velocity methods.
+            The name of the model being evaluated. The velovae package supports evaluation for various RNA velocity methods.
         key (str):
-            Key in .var or .varm for extracting the ODE parameters learned by the model.
+            The key in `.var` or `.varm` used to extract ODE parameters learned by the model.
         vkey (str):
-            Key in .layers for extracting rna velocity.
+            The key in `.layers` used to extract RNA velocity values.
         tkey (str):
-            Key in .obs for extracting latent time
+            The key in `.obs` used to extract latent time information.
         spatial_graph_key (str):
-            Key in .obsp for extracting the spatial graph
+            The key in `.obsp` to extract the spatial graph.
         cluster_key (str, optional):
-            Key in .obs for extracting cell type annotation. Defaults to "clusters".
+            The key in `.obs` for extracting cell type annotations. Defaults to 'clusters'.
         gene_key (str, optional):
-            Key for filtering the genes.. Defaults to 'velocity_genes'.
+            The key used for filtering genes. Defaults to 'velocity_genes'.
         cluster_edges (list[tuple[str]], optional):
-            List of ground truth cell type transitions.
-            Each transition is of the form (A, B) where A is a progenitor
-            cell type and B is a descendant type.
-            Defaults to None.
+            A list of tuples representing ground truth cell type transitions. Each tuple is of the form (A, B), where A is a progenitor cell type and B is a descendant type. Defaults to None.
         embed (str, optional):
-            Low-dimensional embedding name.. Defaults to 'umap'.
+            The name of the low-dimensional embedding used, such as 'umap'. Defaults to 'umap'.
         n_jobs (int, optional):
-            Number of parallel jobs. Used in scVelo velocity graph computation.
-            By default, it is automatically determined based on dataset size.
-            Defaults to None.
+            The number of parallel jobs to use in scVelo's velocity graph computation. If not specified, it is determined automatically based on the dataset size. Defaults to None.
 
     Returns:
-        stats (:class:`pandas.DataFrame`):
-            Stores the performance metrics. Rows are metric names and columns are method names.
+        pandas.DataFrame:
+            A DataFrame containing performance metrics. Rows correspond to metric names and columns correspond to method names.
     """
     if gene_key is not None and gene_key in adata.var:
         gene_mask = adata.var[gene_key].to_numpy()
@@ -476,6 +540,8 @@ def get_metric(adata,
                                                     tkey,
                                                     cluster_key,
                                                     cluster_edges,
+                                                    spatial_key,
+                                                    n_velocity_neighbors,
                                                     spatial_graph_key,
                                                     gene_mask,
                                                     embed,
@@ -542,8 +608,8 @@ def post_analysis(
     keys,
     spatial_graph_key='spatial_graph',
     spatial_key='X_spatial',
-    n_spatial_neighbors=30,
-    gene_key='velocity_genes',
+    n_spatial_neighbors=50,
+    gene_key=None,
     compute_metrics=False,
     raw_count=False,
     genes=[],
@@ -713,6 +779,8 @@ def post_analysis(
                     vkeys[i],
                     tkeys[i],
                     spatial_graph_key,
+                    spatial_key,
+                    n_spatial_neighbors,
                     cluster_key,
                     gene_key,
                     cluster_edges,
