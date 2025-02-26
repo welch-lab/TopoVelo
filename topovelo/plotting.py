@@ -460,7 +460,7 @@ def plot_cluster(x_embed,
     """
     cell_types = np.unique(cell_labels)
     if figsize is None:
-        figsize = _set_figsize(x_embed, real_aspect_ratio)
+        figsize = _set_figsize(x_embed, real_aspect_ratio=real_aspect_ratio)
     fig, ax = plt.subplots(figsize=figsize, facecolor='white')
     x = x_embed[:, 0]
     y = x_embed[:, 1]
@@ -694,7 +694,7 @@ def cellwise_vel_embedding(adata,
     neighbors = np.where((A[idx] > 0) | (A_neg[idx] < 0))[0]
     t = adata.obs[f'{key}_time'].to_numpy()
 
-    figsize = _set_figsize(x_embed, real_aspect_ratio)
+    figsize = _set_figsize(x_embed, real_aspect_ratio=real_aspect_ratio)
     fig, ax = plt.subplots(1, 2, figsize=figsize, facecolor='white')
     ax[0].plot(x_embed_1, x_embed_2, '.', color='grey', alpha=0.25)
     tmask = t[neighbors] > t[idx]
@@ -1150,7 +1150,7 @@ def plot_velocity(x_embed,
             Figure name for saving (including path). Defaults to None.
     """
     umap1, umap2 = x_embed[:, 0], x_embed[:, 1]
-    figsize = _set_figsize(x_embed, real_aspect_ratio, width, height, fix=fix)
+    figsize = _set_figsize(x_embed, width, height, real_aspect_ratio, fix=fix)
     fig, ax = plt.subplots(figsize=figsize)
     v = np.sqrt(vx**2+vy**2)
     vmax, vmin = np.quantile(v, 0.95), np.quantile(v, 0.05)
@@ -1442,7 +1442,7 @@ def plot_heatmap(vals,
         save (str, optional):
             Figure name for saving (including path). Defaults to None.
     """
-    figsize = _set_figsize(x_embed, real_aspect_ratio, width, height, fix)
+    figsize = _set_figsize(x_embed, width, height, real_aspect_ratio, fix)
     fig, ax = plt.subplots(figsize=figsize)
     ax = _plot_heatmap(ax,
                        vals,
@@ -1607,7 +1607,7 @@ def plot_heat_density(vals,
     vals_grid = np.array([np.mean(vals[nbs]) for nbs in spatial_nbs])
     labels_grid = np.array([_find_mode(cell_labels[nbs]) for nbs in spatial_nbs])
     
-    figsize = _set_figsize(x_embed, real_aspect_ratio, width, height, fix)
+    figsize = _set_figsize(x_embed, width, height, real_aspect_ratio, fix)
     fig, ax = plt.subplots(figsize=figsize)
     
     # Heatmap
@@ -1887,7 +1887,7 @@ def plot_time(t_latent,
         save (str, optional):
             Figure name for saving (including path). Defaults to None.
     """
-    figsize = _set_figsize(x_embed, real_aspect_ratio, width, height, fix)
+    figsize = _set_figsize(x_embed, width, height, real_aspect_ratio, fix)
     fig, ax = plt.subplots(figsize=figsize)
     _plot_heatmap(ax,
                   t_latent,
@@ -1975,7 +1975,7 @@ def plot_time_var(std_t,
     if hist_eq:
         diff_entropy = histeq(diff_entropy, Nbin=len(diff_entropy)//50)
 
-    figsize = _set_figsize(x_embed, real_aspect_ratio, width, height, fix)
+    figsize = _set_figsize(x_embed, width, height, real_aspect_ratio, fix)
     fig, ax = plt.subplots(figsize=figsize)
     ax = _plot_heatmap(ax,
                        diff_entropy,
@@ -2063,7 +2063,7 @@ def plot_state_var(std_z,
     if hist_eq:
         diff_entropy = histeq(diff_entropy, Nbin=len(diff_entropy)//50)
 
-    figsize = _set_figsize(x_embed, real_aspect_ratio, width, height, fix)
+    figsize = _set_figsize(x_embed, width, height, real_aspect_ratio, fix)
     fig, ax = plt.subplots(figsize=figsize)
     ax = _plot_heatmap(ax,
                        diff_entropy,
