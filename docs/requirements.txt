@@ -7,7 +7,7 @@ anndata>=0.8.0
 hnswlib>=0.6.2
 memory_profiler
 numba>=0.41.0
-numpy>=1.17
+numpy>=1.17, <2.0.0
 pandas>=0.23, <=1.5.3
 pynndescent>=0.5.7
 scanpy>=1.5
