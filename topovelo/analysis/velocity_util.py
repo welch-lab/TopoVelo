@@ -141,9 +141,10 @@ def velocity_stream(
             distances = adata.obsp['distances']
             del adata.obsp['connectivities'], adata.obsp['distances']
             nbs_info = None
-            if neighbors in adata.uns:
-                nbs_info = adata.uns['neighbors']
+            if 'neighbors' in adata.uns:
+                nbs_info = adata.uns['neighbors'].copy()
                 del adata.uns['neighbors']
+                assert nbs_info is not None
         neighbors(adata, n_neighbors=n_spatial_neighbors, use_rep=f'X_{basis}')
 
     # Velocity graph
@@ -203,6 +204,7 @@ def velocity_stream(
         adata.obsp['connectivities'] = connectivities
         adata.obsp['distances'] = distances
         if nbs_info is not None:
+            print('Recovering the original KNN graph from .uns')
             adata.uns['neighbors'] = nbs_info
 
 
