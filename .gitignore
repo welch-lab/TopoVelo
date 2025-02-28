@@ -9,5 +9,8 @@ __pycache__/
 
 # Keep these files
 !.gitignore
+!docs/source
+!docs/make.bat
+!docs/Makefile
 !notebooks/training
 !notebooks/plots
