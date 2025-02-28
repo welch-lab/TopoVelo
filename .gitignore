@@ -6,3 +6,8 @@ topovelo.egg-info/
 topovelo/*/__pycache__
 __pycache__/
 .*
+
+# Keep these files
+!.gitignore
+!notebooks/training
+!notebooks/plots
