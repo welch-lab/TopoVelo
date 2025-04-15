@@ -27,7 +27,7 @@ setup(
         'pynndescent>=0.5.7',
         'scanpy>=1.5.0',
         'scikit-learn>=0.20.0',
-        'scipy>=1.13.0',
+        'scipy>=1.13.0, <=1.13.1',
         'scvelo>=0.2.3, <=0.2.5',
         'seaborn>=0.10.0',
         'torch>=1.8.0',
